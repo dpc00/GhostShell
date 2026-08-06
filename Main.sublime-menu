@@ -1,0 +1,167 @@
+[
+    {
+        "id": "tools",
+        "children":
+        [
+            {
+                "caption": "Ai Terminal",
+                "mnemonic": "A",
+                "id": "ai-terminal",
+                "children":
+                [
+                    {
+                        "caption": "Launch Agent…",
+                        "command": "ai_terminal_launcher"
+                    },
+                    {
+                        "caption": "Recent Sessions…",
+                        "command": "ai_terminal_recent_sessions"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Open Profile…",
+                        "command": "ai_terminal_select_profile"
+                    },
+                    {
+                        "caption": "Default Profile",
+                        "command": "ai_terminal_open_here"
+                    },
+                    {
+                        "caption": "Refresh Usage & Quota",
+                        "command": "ai_terminal_refresh_usage"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Shells",
+                        "children":
+                        [
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Bash" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "PowerShell" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Dos Console" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "WSL Bash" }
+                            }
+                        ]
+                    },
+                    {
+                        "caption": "Claude",
+                        "children":
+                        [
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Claude" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Claude --chrome" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Claude →⇢⇨ Ollama" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Claude →⇢⇨ Ollama --chrome" }
+                            }
+                        ]
+                    },
+                    {
+                        "caption": "OpenCode",
+                        "children":
+                        [
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "OpenCode" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "OpenCode --mini" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "OpenCode →⇢⇨ Ollama" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "OpenCode →⇢⇨ Ollama --mini" }
+                            }
+                        ]
+                    },
+                    {
+                        "caption": "Codex",
+                        "children":
+                        [
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Codex" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Codex →⇢⇨ Ollama" }
+                            }
+                        ]
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Antigravity" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Gemini" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Grok Build" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Junie" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Kimi" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Kiro" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Mimo" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Qwen" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Qwen →⇢⇨ Ollama" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Vibe" }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": { "profile": "Testing Agent" }
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Nuke Ai Terminal",
+                        "command": "ai_terminal_nuke"
+                    }
+                ]
+            }
+        ]
+    }
+]
