@@ -3,4 +3,4 @@ __pycache__/
 .pytest_cache/
 
 # Built binary artifact -- keep on disk (required at runtime) but don't track in git.
-ai/terminal/bin/*.dll
+*.dll
