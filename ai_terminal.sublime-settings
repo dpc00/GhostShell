@@ -208,6 +208,19 @@
             "mouse_handling": true,
             "force_main_screen": false
         },
+        "Pybackup Go TUI": {
+            // gotui.exe spawns `python ui/app.py` itself and talks to it over
+            // HTTP -- see ui/gotui/backend.go. Same alt-screen/mouse needs as
+            // the Textual profile above.
+            "launch_command": [
+                "C:\\Users\\donal\\projects\\pybackup\\ui\\gotui\\gotui.exe"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            },
+            "mouse_handling": true,
+            "force_main_screen": false
+        },
         "Gemini": {
             "launch_command": [
                 "gemini.cmd"
