@@ -707,7 +707,7 @@ def _repair_scheme_rules(scheme_data):
 def _init_dynamic_color_scheme():
     global _SCHEME_PATH, _REGISTERED_SCOPES
     try:
-        _SCHEME_PATH = os.path.join(sublime.packages_path(), "User", "ai_terminal.sublime-color-scheme")
+        _SCHEME_PATH = os.path.join(sublime.packages_path(), "GhostShell", "ai_terminal.sublime-color-scheme")
         if os.path.exists(_SCHEME_PATH):
             size = os.path.getsize(_SCHEME_PATH)
             # If the file size is very large (e.g. the old precompiled 8.9MB static matrix), shrink it to the base scheme.
@@ -764,28 +764,22 @@ def _scheme_disk_paths():
     """All on-disk scheme paths we may read/write (never rely only on _SCHEME_PATH).
 
     Hot-reload resets module globals so _SCHEME_PATH can be None while the
-    User scheme file still exists. Flush used to treat that as 'no file' and
+    GhostShell scheme file still exists. Flush used to treat that as 'no file' and
     rewrite BASE+pending only — wiping thousands of rules (peak was 5275).
+
+    Single source of truth: Packages/GhostShell (junction-linked repo). No
+    dual-write to Packages/User — that was leaking stale/duplicate copies
+    into the SText backup repo with no benefit.
     """
     paths = []
     if _SCHEME_PATH:
         paths.append(_SCHEME_PATH)
     try:
-        user_path = os.path.join(
-            sublime.packages_path(), "User", "ai_terminal.sublime-color-scheme"
+        gs_path = os.path.join(
+            sublime.packages_path(), "GhostShell", "ai_terminal.sublime-color-scheme"
         )
-        if user_path not in paths:
-            paths.append(user_path)
-    except Exception:
-        pass
-    # Repo backup copy (SText) when running in a known layout
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        # .../Packages/User/ai/ai_terminal.py -> .../Packages/User/
-        user_dir = os.path.dirname(here)
-        repo_guess = os.path.join(user_dir, "ai_terminal.sublime-color-scheme")
-        if os.path.isfile(repo_guess) and repo_guess not in paths:
-            paths.append(repo_guess)
+        if gs_path not in paths:
+            paths.append(gs_path)
     except Exception:
         pass
     return paths
@@ -954,7 +948,7 @@ def _flush_pending_rules():
     # Always re-resolve path (survives importlib.reload clearing globals).
     try:
         _SCHEME_PATH = os.path.join(
-            sublime.packages_path(), "User", "ai_terminal.sublime-color-scheme"
+            sublime.packages_path(), "GhostShell", "ai_terminal.sublime-color-scheme"
         )
     except Exception:
         pass
@@ -2273,17 +2267,17 @@ def _terminal_view(window, name=None):
     # Dedicated colour scheme: defines the ai.fg/bg/fb.* scopes the renderer
     # maps cells to (see gen_color_scheme.py). Scoped to this view only, so the
     # rest of the editor keeps the user's theme. find_resources (plural) returns
-    # the installed path; fall back to the canonical Packages/User path.
+    # the installed path; fall back to the canonical Packages/GhostShell path.
     try:
         hits = sublime.find_resources("ai_terminal.sublime-color-scheme")
         if hits:
             v.settings().set("color_scheme", hits[0])
         else:
             v.settings().set("color_scheme",
-                             "Packages/User/ai_terminal.sublime-color-scheme")
+                             "Packages/GhostShell/ai_terminal.sublime-color-scheme")
     except Exception:
         v.settings().set("color_scheme",
-                         "Packages/User/ai_terminal.sublime-color-scheme")
+                         "Packages/GhostShell/ai_terminal.sublime-color-scheme")
     # NOT read-only: on_text_command swallows insert/left_delete/right_delete/
     # move and forwards them to the PTY. Making the view read-only suppresses
     # keyboard `insert` before the listener fires, so real typing would do
