@@ -1,6 +1,6 @@
 [
 	{"caption": "Ai Terminal: Launch Agent…", "command": "ai_terminal_launcher"},
-	{"caption": "Ai Terminal: Recent Sessions…", "command": "ai_terminal_recent_sessions"},
+	{"caption": "Ai Terminal: All Agent History…", "command": "ai_terminal_history"},
 	{"caption": "Ai Terminal: Refresh Usage & Quota", "command": "ai_terminal_refresh_usage"},
 	{"caption": "Ai Terminal: Open Here", "command": "ai_terminal_open_here"},
 	{"caption": "Ai Terminal: Open in Editor", "command": "ai_terminal_open_in_editor"},

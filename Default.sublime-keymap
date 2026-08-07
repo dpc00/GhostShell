@@ -1,7 +1,7 @@
 [
-	// Launcher: agent picker, then directory picker. Both frecency-ranked.
+	// Launcher: agent picker, then directory picker.
 	{"keys": ["ctrl+alt+n"], "command": "ai_terminal_launcher"},
-	{"keys": ["ctrl+alt+h"], "command": "ai_terminal_recent_sessions"},
+	{"keys": ["ctrl+alt+h"], "command": "ai_terminal_history"},
 	{"keys": ["ctrl+alt+k"], "command": "ai_terminal_nuke", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},
 
 	// ── ai_terminal: forward physical keys to the Claude TUI PTY ──
