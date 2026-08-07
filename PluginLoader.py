@@ -14,7 +14,7 @@ from GhostShell.ai.ai_terminal import (
     AiTerminalOpenInEditorCommand,
     AiTerminalSelectProfileCommand,
     AiTerminalLauncherCommand,
-    AiTerminalRecentSessionsCommand,
+    AiTerminalHistoryCommand,
     AiTerminalRefreshUsageCommand,
     AiTerminalSendStringCommand,
     AiTerminalSendStringWindowCommand,

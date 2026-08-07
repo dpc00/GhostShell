@@ -87,7 +87,7 @@ def test_launcher_commands_are_registered():
     imported = loader_imports()
     for name in (
         "AiTerminalLauncherCommand",
-        "AiTerminalRecentSessionsCommand",
+        "AiTerminalHistoryCommand",
         "AiTerminalRefreshUsageCommand",
     ):
         assert name in imported, "%s not imported in PluginLoader.py" % name
@@ -117,7 +117,7 @@ def test_command_names_referenced_by_keymap_exist():
 
 LAUNCHER_CHORDS = {
     "ctrl+alt+n": "ai_terminal_launcher",
-    "ctrl+alt+h": "ai_terminal_recent_sessions",
+    "ctrl+alt+h": "ai_terminal_history",
 }
 
 

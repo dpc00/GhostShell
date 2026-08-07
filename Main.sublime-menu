@@ -14,8 +14,8 @@
                         "command": "ai_terminal_launcher"
                     },
                     {
-                        "caption": "Recent Sessions…",
-                        "command": "ai_terminal_recent_sessions"
+                        "caption": "All Agent History…",
+                        "command": "ai_terminal_history"
                     },
                     { "caption": "-" },
                     {

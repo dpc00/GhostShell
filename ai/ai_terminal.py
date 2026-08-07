@@ -483,6 +483,7 @@ try:
         provider_for_profile as _provider_for_profile,
     )
     from .terminal import launcher as _launcher
+    from .terminal import history_scan as _history_scan
     from .terminal.render import (
         HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
         build_text_and_regions as _build_text_and_regions_pure,
@@ -557,6 +558,7 @@ except ImportError as _term_imp_err:
             provider_for_profile as _provider_for_profile,
         )
         from ai.terminal import launcher as _launcher
+        from ai.terminal import history_scan as _history_scan
         from ai.terminal.render import (
             HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
             build_text_and_regions as _build_text_and_regions_pure,
@@ -2807,9 +2809,6 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             term._watcher = None
         with _term_lock():
             _term_registry().pop(self.view.id(), None)
-        # Stamp the session end so the "Recent Sessions" list can show how long
-        # it ran, and stop reporting it as live.
-        _record_close_history(self.view.id())
         threading.Thread(target=term.kill, daemon=True).start()
 
     # ─── pre-empt ST's internal view.show on focus/hover ───────────────────
@@ -3340,63 +3339,6 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
         return None
 
 
-# ─── launcher history (frecency + session log) ───────────────────────────────
-#
-# The pure model lives in terminal/launcher.py; this layer owns the on-disk
-# location, an in-process cache, and the write-through on every launch/close.
-# State is kept in the User package (next to the settings file) rather than the
-# repo so a public checkout never carries a record of local project paths.
-
-_LAUNCH_STORE_NAME = "ai_terminal_history.json"
-_launch_store = None
-
-
-def _launch_store_path():
-    try:
-        base = sublime.packages_path()
-    except Exception:
-        base = os.path.join(os.path.expanduser("~"), ".ai_terminal")
-    return os.path.join(base, "User", _LAUNCH_STORE_NAME)
-
-
-def _get_launch_store():
-    """Cached launcher history; read from disk once per plugin load."""
-    global _launch_store
-    if _launch_store is None:
-        _launch_store = _launcher.load_store(_launch_store_path())
-    return _launch_store
-
-
-def _save_launch_store():
-    if _launch_store is not None:
-        _launcher.save_store(_launch_store_path(), _launch_store)
-
-
-def _record_launch_history(profile, path, session_id=None, tab=None):
-    """Persist one launch. Never raises — history must not break launching."""
-    try:
-        _launcher.record_launch(
-            _get_launch_store(),
-            profile or (_settings or sublime.load_settings(_SETTINGS_NAME)).get(
-                "default_profile"
-            ),
-            path,
-            session_id=session_id,
-            tab=tab,
-        )
-        _save_launch_store()
-    except Exception as e:
-        print("[ai_terminal] launch history write failed: %s" % e)
-
-
-def _record_close_history(session_id):
-    try:
-        _launcher.record_close(_get_launch_store(), session_id)
-        _save_launch_store()
-    except Exception as e:
-        print("[ai_terminal] close history write failed: %s" % e)
-
-
 def _quick_panel_item(trigger, details, annotation, kind):
     """sublime.QuickPanelItem when available, else a plain [trigger, detail] row.
 
@@ -3773,11 +3715,6 @@ def _spawn(window, path, profile=None):
     with _term_lock():
         _term_registry()[view.id()] = term
     term.start()
-    # Log the launch only once the PTY is actually live, so a failed spawn
-    # (missing exe, bad backend) never pollutes the frecency ranking or the
-    # session list with a session that never existed. The view id doubles as
-    # the session id: on_close can then stamp the end time without extra state.
-    _record_launch_history(profile_name, path, session_id=view.id(), tab=tab_name)
 
 
 class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
@@ -3888,78 +3825,43 @@ class AiTerminalRefreshUsageCommand(sublime_plugin.WindowCommand):
 
 
 def _profile_items(names, s, context_dir=None):
-    """Rich quick-panel rows for profiles, ordered by frecency for context_dir.
-
-    Ranking beats alphabetical here: the agent you reach for in *this* repo
-    should be row 0, so the common case is Enter with no reading. Unavailable
-    profiles are not hidden (hiding breaks muscle memory and hides the reason)
-    but are pushed down and marked.
+    """Quick-panel rows for profiles, alphabetical. Unavailable profiles are
+    not hidden (hiding breaks muscle memory and hides the reason) but are
+    marked via their kind glyph.
     """
-    store = _get_launch_store()
-    ordered = _launcher.rank_profiles(names, store, path=context_dir)
-    rows = []
-    for name in ordered:
-        stats = _launcher.profile_stats(store, name)
-        bits = []
-        if stats.get("count"):
-            bits.append(
-                "%d launch%s" % (stats["count"], "" if stats["count"] == 1 else "es")
-            )
-        if stats.get("last"):
-            bits.append(_launcher.relative_age(stats["last"]))
-        if stats.get("last_dir"):
-            bits.append(_launcher.shorten_path(stats["last_dir"]))
-        rows.append(
-            _quick_panel_item(
+    ordered = sorted(names, key=lambda n: n.lower())
+    rows = [
+        _quick_panel_item(
+            name,
+            "",
+            _usage_annotation(name, s),
+            _launcher.profile_kind(
                 name,
-                " · ".join(bits) or "never launched",
-                _usage_annotation(name, s),
-                _launcher.profile_kind(
-                    name,
-                    available=_profile_is_available(name, s),
-                    exhausted=_profile_is_exhausted(name),
-                ),
-            )
+                available=_profile_is_available(name, s),
+                exhausted=_profile_is_exhausted(name),
+            ),
         )
+        for name in ordered
+    ]
     return ordered, rows
 
 
 def _dir_items(window, context_profile=None):
-    """Rich quick-panel rows for directories: frecent history ∪ sidebar folders.
-
-    History first (that is the whole point — stop re-navigating), then any open
-    project folder not already present, then a Browse… escape hatch so the
-    picker is never a dead end.
+    """Quick-panel rows for directories: open sidebar folders, then a Browse…
+    escape hatch so the picker is never a dead end.
     """
-    store = _get_launch_store()
     folders = list(window.folders() or []) if window else []
-    candidates = _launcher.dir_candidates(store, extra=folders)
-    ranked = _launcher.rank_dirs(candidates, store, profile=context_profile)
-    rows = []
-    for path in ranked:
-        stats = _launcher.dir_stats(store, path)
-        bits = []
-        if stats.get("count"):
-            bits.append("%d×" % stats["count"])
-        if stats.get("last"):
-            bits.append(_launcher.relative_age(stats["last"]))
-        if stats.get("last_profile"):
-            bits.append(stats["last_profile"])
-        if not bits:
-            bits.append("open folder")
-        rows.append(
-            _quick_panel_item(
-                os.path.basename(path.rstrip("\\/")) or path,
-                _launcher.shorten_path(path),
-                " · ".join(bits),
-                _launcher.dir_kind(
-                    is_recent=bool(stats.get("count")),
-                    is_git=os.path.isdir(os.path.join(path, ".git")),
-                ),
-            )
+    rows = [
+        _quick_panel_item(
+            os.path.basename(path.rstrip("\\/")) or path,
+            _launcher.shorten_path(path),
+            "",
+            _launcher.dir_kind(is_git=os.path.isdir(os.path.join(path, ".git"))),
         )
+        for path in folders
+    ]
     rows.append(_quick_panel_item("Browse…", "Pick any folder", "", _launcher.BROWSE_KIND))
-    return ranked, rows
+    return folders, rows
 
 
 class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
@@ -4028,8 +3930,7 @@ class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
 
     def _browse(self, profile):
         """Free-text path entry; ST has no native folder dialog for plugins."""
-        store = _get_launch_store()
-        initial = (_launcher.recent_dirs(store, limit=1) or [os.path.expanduser("~")])[0]
+        initial = os.path.expanduser("~")
 
         def on_done(text):
             path = os.path.expanduser((text or "").strip().strip('"'))
@@ -4048,31 +3949,49 @@ class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
         )
 
 
-class AiTerminalRecentSessionsCommand(sublime_plugin.WindowCommand):
-    """List recent agent sessions (agent, folder, when, how long) and reopen one.
+def _ollama_chat_transcript(db_path, chat_id):
+    """Best-effort plain-text dump of one Ollama chat's messages, newest last."""
+    import sqlite3
 
-    Command palette: "Ai: Recent Sessions…". Live sessions focus their existing
-    view instead of spawning a duplicate; finished ones relaunch the same agent
-    in the same folder. Sessions whose folder has since vanished are shown
-    greyed rather than silently dropped, so a moved repo is visible not magic.
+    conn = sqlite3.connect(
+        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
+    )
+    try:
+        rows = conn.execute(
+            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at",
+            (chat_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    lines = []
+    for role, content in rows:
+        if content:
+            lines.append("--- %s ---\n%s\n" % (role or "?", content))
+    return "\n".join(lines) or "(no message content stored for this chat)"
+
+
+class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
+    """Sweep every local AI agent's history and let you open one.
+
+    Command palette: "Ai Terminal: All Agent History…". This reads live off
+    disk on every invoke (Claude Code's ~/.claude/projects/*.jsonl, Codex's
+    ~/.codex/sessions/**/*.jsonl, Gemini/Antigravity's conversation dbs,
+    Ollama's local chat db) — nothing is cached or written back, so there is
+    no persisted record for this command itself to leak.
     """
 
     def run(self):
-        store = _get_launch_store()
-        live = set()
-        with _term_lock():
-            live = set(_term_registry().keys())
-        sessions = _launcher.recent_sessions(store, live_ids=live, limit=40)
+        sessions = _history_scan.scan_all()
         if not sessions:
-            sublime.status_message("Ai terminal: no sessions yet")
+            sublime.status_message("Ai terminal: no agent history found")
             return
 
         rows = [
             _quick_panel_item(
-                _launcher.session_title(sess),
-                _launcher.session_detail(sess),
-                _launcher.session_annotation(sess),
-                _launcher.session_kind(sess),
+                "%s — %s" % (sess["agent"], sess["title"]),
+                sess.get("detail", ""),
+                _launcher.relative_age(sess.get("mtime")),
+                (_launcher.KIND_ID_NAVIGATION, "H", sess["agent"]),
             )
             for sess in sessions
         ]
@@ -4080,26 +3999,33 @@ class AiTerminalRecentSessionsCommand(sublime_plugin.WindowCommand):
         def on_done(idx):
             if idx < 0:
                 return
-            sess = sessions[idx]
-            if sess.get("live"):
-                for w in sublime.windows():
-                    v = w.find_view_by_id(sess.get("id"))
-                    if v is not None:
-                        w.focus_view(v)
-                        return
-            if sess.get("missing"):
-                sublime.error_message(
-                    "ai_terminal: folder no longer exists:\n%s" % sess.get("path", "")
-                )
-                return
-            self.window.run_command(
-                "ai_terminal_open_here",
-                {"profile": sess.get("profile"), "paths": [sess.get("path")]},
-            )
+            self._open(sessions[idx])
 
         self.window.show_quick_panel(
-            rows, on_done, placeholder="Recent sessions", selected_index=0
+            rows, on_done, placeholder="Agent history (all agents)", selected_index=0
         )
+
+    def _open(self, sess):
+        if sess["kind"] == "text":
+            self.window.open_file(sess["path"])
+            return
+        if sess["agent"] == "Ollama":
+            try:
+                text = _ollama_chat_transcript(sess["path"], sess["detail"])
+            except Exception as e:
+                sublime.error_message("ai_terminal: could not read Ollama chat:\n%s" % e)
+                return
+        else:
+            text = (
+                "%s\n\n%s is a SQLite database; ai_terminal does not know its "
+                "schema, so this just points at the file on disk.\n\nPath: %s"
+                % (sess["title"], sess["agent"], sess["path"])
+            )
+        view = self.window.new_file()
+        view.set_scratch(True)
+        view.set_name("%s — %s" % (sess["agent"], sess["title"]))
+        view.run_command("append", {"characters": text})
+        view.set_read_only(True)
 
 
 class AiTerminalSelectProfileCommand(sublime_plugin.WindowCommand):
