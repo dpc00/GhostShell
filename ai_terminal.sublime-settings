@@ -202,17 +202,16 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             },
-            // mouse_handling forwards row/toolbar clicks to the PTY. The
-            // wheel/pin flags opt this profile OUT of the combined
-            // click+wheel behavior: gotui streams real scrollback (log
-            // lines via tea.Println) instead of owning its own scroll
-            // region, so the wheel should move ST's native scrollback, not
-            // get swallowed and pinned. Cost: mouse wheel no longer scrolls
-            // inside gotui's own inspect/predict/help modals (PgUp/PgDn
-            // still does).
-            "mouse_handling": true,
-            "wheel_to_pty": false,
-            "pin_viewport": false,
+            // gotui streams real scrollback (log lines via tea.Println)
+            // instead of owning its own scroll/click region, and this host
+            // can't tell gotui's clickable footer rows apart from plain log
+            // rows sharing the same screen height -- mouse click routing
+            // for it isn't built (see git history around 2026-08-07).
+            // mouse_handling off => fully native ST scroll/select/Home/End
+            // everywhere, keyboard-only for gotui itself (s r a i o ? q).
+            // For real mouse interactivity, run gotui directly in a real
+            // terminal (Windows Terminal) instead of through this profile.
+            "mouse_handling": false,
             "force_main_screen": false
         },
         "Gemini": {
