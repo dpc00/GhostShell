@@ -4361,6 +4361,20 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             if any(not s.empty() for s in self.view.sel()):
                 self.view.run_command("copy" if key == "c" else "cut")
                 return
+        # Profiles that opted out of wheel-to-PTY (real scrollback, e.g.
+        # gotui) get native ST paging/navigation for these keys too, instead
+        # of the raw key code going to the PTY -- mirrors _wheel_to_pty_enabled's
+        # reasoning: an app with genuine scrollback wants ST's own Home/End/
+        # PageUp/PageDown, not synthetic PTY keys it may not even handle for
+        # this row range.
+        if not alt and key in ("home", "end", "pageup", "pagedown") and not _wheel_to_pty_enabled(term):
+            if key == "home":
+                self.view.run_command("move_to", {"to": "bof" if ctrl else "bol", "extend": shift})
+            elif key == "end":
+                self.view.run_command("move_to", {"to": "eof" if ctrl else "eol", "extend": shift})
+            else:
+                self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
+            return
         # Win32-input-mode (DEC 9001): apps that enable it (confirmed: Qwen
         # Code) ignore plain xterm sequences entirely -- every key including
         # plain letters/backspace/arrows silently does nothing once it's on.
