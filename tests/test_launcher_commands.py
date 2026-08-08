@@ -52,3 +52,45 @@ def test_history_scan_call_shape(tmp_path, monkeypatch):
         assert isinstance(sess["title"], str)
         assert isinstance(launcher.relative_age(sess["mtime"]), str)
         assert sess["kind"] in ("text", "sqlite")
+
+
+def test_parse_iso_to_epoch_handles_t3s_formats():
+    # 't' variant Sublime Text ships (3.8) has no datetime.fromisoformat('Z' suffix)
+    # support, which is why history_scan rolls its own parser for T3's timestamps.
+    assert history_scan._parse_iso_to_epoch("2026-08-07T21:25:38.197Z") > 0
+    assert history_scan._parse_iso_to_epoch("2026-08-07T21:25:38Z") > 0
+    assert history_scan._parse_iso_to_epoch("2026-08-07 21:25:34") > 0
+    assert history_scan._parse_iso_to_epoch("") == 0.0
+    assert history_scan._parse_iso_to_epoch(None, fallback=5.0) == 5.0
+    assert history_scan._parse_iso_to_epoch("garbage", fallback=5.0) == 5.0
+
+
+def test_scan_t3_reads_threads_joined_with_provider(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "home" / ".t3" / "userdata" / "state.sqlite"
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE projection_threads (thread_id TEXT, title TEXT, "
+        "updated_at TEXT, deleted_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE projection_thread_sessions (thread_id TEXT, provider_name TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO projection_threads VALUES ('t1', 'Fix the bug', "
+        "'2026-08-07T21:25:38.197Z', NULL)"
+    )
+    conn.execute(
+        "INSERT INTO projection_thread_sessions VALUES ('t1', 'claude')"
+    )
+    conn.commit()
+    conn.close()
+
+    sessions = history_scan.scan_t3(str(tmp_path / "home"))
+    assert len(sessions) == 1
+    assert sessions[0]["agent"] == "T3 (claude)"
+    assert sessions[0]["title"] == "Fix the bug"
+    assert sessions[0]["kind"] == "sqlite"
+    assert sessions[0]["mtime"] > 0

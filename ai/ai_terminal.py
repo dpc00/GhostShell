@@ -3569,15 +3569,44 @@ def _resolve_here_path(window, paths):
     return _sole_auto_cwd(folders or [])
 
 
-def _pick_cwd_then(window, on_path):
-    """Resolve cwd or show a quick panel of project candidates, then call on_path.
+# Sticky per-window cwd override, set explicitly via the sidebar's "Set Ai
+# Terminal Working Directory" command (TermMate/GeminiCLI convention: pick
+# once, reuse silently after that — never re-ask). In-memory only, keyed by
+# window id; resets on restart rather than persisting like the old launch
+# history did, since this is one explicit choice, not a passive log.
+_working_dirs = {}
 
-    Tools → Ai Terminal → profile (e.g. Grok Build) lands here with no sidebar
-    paths. Do **not** auto-spawn from the active file's nearest root — that
-    skips the usual directory picker and often lands on umbrella maps
-    (~/projects via CLAUDE.md, ~ via AGENTS.md) when the user only had a
-    settings file focused. Auto only when the cwd is truly unambiguous.
+
+def _get_working_dir(window):
+    path = _working_dirs.get(window.id()) if window else None
+    return path if path and os.path.isdir(path) else None
+
+
+def _set_working_dir(window, path):
+    _working_dirs[window.id()] = path
+    sublime.status_message("Ai terminal: working directory set to %s" % path)
+
+
+def _clear_working_dir(window):
+    if _working_dirs.pop(window.id(), None):
+        sublime.status_message("Ai terminal: working directory cleared")
+
+
+def _pick_cwd_then(window, on_path):
+    """Resolve cwd without ever prompting, then call on_path.
+
+    Priority: an explicitly set working directory always wins. Otherwise fall
+    back to automatic resolution (sole window folder, active file's project
+    root). Tools → Ai Terminal → profile (e.g. Grok Build) lands here with no
+    sidebar paths — do **not** auto-spawn from an umbrella map (~/projects via
+    CLAUDE.md, ~ via AGENTS.md); if nothing is unambiguous, tell the user to
+    set a working directory instead of showing a picker.
     """
+    sticky = _get_working_dir(window)
+    if sticky:
+        on_path(sticky)
+        return
+
     folders = list(window.folders() or []) if window else []
     sole = _sole_auto_cwd(folders)
     if sole:
@@ -3597,35 +3626,53 @@ def _pick_cwd_then(window, on_path):
         on_path(candidates[0])
         return
 
-    labels = []
-    for c in candidates:
-        base = os.path.basename(c.rstrip("\\/")) or c
-        labels.append([base, c])
+    sublime.status_message(
+        "Ai terminal: multiple project folders open — right-click one in the "
+        "sidebar and choose 'Set Ai Terminal Working Directory'"
+    )
 
-    # Pre-highlight the active file's project when it is in the list (still
-    # require an explicit pick — selected_index alone does not auto-confirm).
-    selected = 0
-    try:
-        view = window.active_view() if window else None
-        fn = view.file_name() if view else None
-        if fn:
-            boundary = _containing_window_folder(window, fn)
-            hint = _nearest_project_root(fn, stop_at=boundary)
-            if hint:
-                hint_n = _norm_path(hint)
-                for i, c in enumerate(candidates):
-                    if _norm_path(c) == hint_n:
-                        selected = i
-                        break
-    except Exception:
-        selected = 0
 
-    def on_done(idx):
-        if idx < 0:
+class AiTerminalSetWorkingDirectoryCommand(sublime_plugin.WindowCommand):
+    """Sidebar: pin one folder as this window's Ai Terminal cwd.
+
+    Command palette / sidebar right-click: "Set Ai Terminal Working
+    Directory". Every subsequent launch that would otherwise need to guess or
+    ask uses this folder silently, until cleared or reset to a different one.
+    """
+
+    def run(self, paths=None):
+        if paths:
+            path = paths[0]
+            if not os.path.isdir(path):
+                path = os.path.dirname(path)
+        else:
+            # Command Palette invocation: no sidebar selection to go on, so
+            # fall back to the same unambiguous auto-resolve everything else
+            # uses (active file's project root, else the sole window folder)
+            # — never a picker, matching the point of this command.
+            path = _resolve_here_path(self.window, [])
+        if not path:
+            sublime.status_message(
+                "Ai terminal: no folder resolved — right-click a folder in "
+                "the sidebar and use Set Ai Terminal Working Directory instead"
+            )
             return
-        on_path(candidates[idx])
+        _set_working_dir(self.window, path)
 
-    window.show_quick_panel(labels, on_done, 0, selected)
+    def is_visible(self, paths=None):
+        # None means "no paths arg at all" (Command Palette) vs. [] (sidebar
+        # right-click with nothing usable selected) — only the latter hides.
+        return True if paths is None else bool(paths)
+
+
+class AiTerminalClearWorkingDirectoryCommand(sublime_plugin.WindowCommand):
+    """Sidebar: forget this window's pinned Ai Terminal working directory."""
+
+    def run(self):
+        _clear_working_dir(self.window)
+
+    def is_visible(self):
+        return _get_working_dir(self.window) is not None
 
 
 def _spawn(window, path, profile=None):
@@ -3970,14 +4017,46 @@ def _ollama_chat_transcript(db_path, chat_id):
     return "\n".join(lines) or "(no message content stored for this chat)"
 
 
+def _t3_thread_transcript(db_path, thread_id):
+    """Best-effort plain-text dump of one T3 Code thread's messages."""
+    import sqlite3
+
+    conn = sqlite3.connect(
+        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
+    )
+    try:
+        rows = conn.execute(
+            "SELECT role, text FROM projection_thread_messages "
+            "WHERE thread_id = ? ORDER BY created_at",
+            (thread_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    lines = []
+    for role, text in rows:
+        if text:
+            lines.append("--- %s ---\n%s\n" % (role or "?", text))
+    return "\n".join(lines) or "(no message content stored for this thread)"
+
+
+# Agent-prefix -> transcript reader, for sqlite sources that ai_terminal knows
+# how to read. Anything not listed here (an unrecognized sqlite db, e.g. a
+# Gemini conversation) falls back to a generic "here's the file" message.
+_TRANSCRIPT_READERS = {
+    "Ollama": _ollama_chat_transcript,
+    "T3": _t3_thread_transcript,
+}
+
+
 class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
     """Sweep every local AI agent's history and let you open one.
 
     Command palette: "Ai Terminal: All Agent History…". This reads live off
     disk on every invoke (Claude Code's ~/.claude/projects/*.jsonl, Codex's
     ~/.codex/sessions/**/*.jsonl, Gemini/Antigravity's conversation dbs,
-    Ollama's local chat db) — nothing is cached or written back, so there is
-    no persisted record for this command itself to leak.
+    Ollama's local chat db, T3 Code's state.sqlite) — nothing is cached or
+    written back, so there is no persisted record for this command itself
+    to leak.
     """
 
     def run(self):
@@ -4009,11 +4088,18 @@ class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
         if sess["kind"] == "text":
             self.window.open_file(sess["path"])
             return
-        if sess["agent"] == "Ollama":
+        reader = next(
+            (fn for prefix, fn in _TRANSCRIPT_READERS.items()
+             if sess["agent"].startswith(prefix)),
+            None,
+        )
+        if reader is not None:
             try:
-                text = _ollama_chat_transcript(sess["path"], sess["detail"])
+                text = reader(sess["path"], sess["detail"])
             except Exception as e:
-                sublime.error_message("ai_terminal: could not read Ollama chat:\n%s" % e)
+                sublime.error_message(
+                    "ai_terminal: could not read %s history:\n%s" % (sess["agent"], e)
+                )
                 return
         else:
             text = (

@@ -48,3 +48,8 @@ def test_dir_kind_states():
     assert launcher.dir_kind(is_recent=True)[2] == "Recent"
     assert launcher.dir_kind(is_git=True)[2] == "Repository"
     assert launcher.dir_kind()[2] == "Folder"
+
+
+def test_browse_kind_is_distinct_from_dir_kinds():
+    assert launcher.BROWSE_KIND != launcher.dir_kind(is_recent=True)
+    assert launcher.BROWSE_KIND != launcher.dir_kind()

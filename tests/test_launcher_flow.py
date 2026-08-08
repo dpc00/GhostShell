@@ -1,4 +1,4 @@
-"""End-to-end flow tests: actually run the launcher commands.
+"""End-to-end flow tests: actually run the launcher/history commands.
 
 Everything else in the suite tests the *pure* model or static structure. This
 file executes the real command bodies from ``ai_terminal.py`` against a stub
@@ -10,6 +10,10 @@ none of it is reachable from the pure tests.
 
 Stubs are installed into ``sys.modules`` before importing ``ai_terminal``,
 which cannot be imported outside Sublime otherwise.
+
+Neither the launcher (agent/directory picker) nor the history command persist
+anything to disk: the picker rows are unranked (alphabetical / sidebar-folder
+order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 """
 
 import os
@@ -80,12 +84,19 @@ class FakeView:
 class FakeWindow:
     """Records show_quick_panel / show_input_panel / run_command calls."""
 
+    _next_id = [1]
+
     def __init__(self, folders=(), active_view=None):
         self._folders = list(folders)
         self._active_view = active_view
         self.panels = []          # [(items, on_done, kwargs)]
         self.input_panels = []    # [(caption, initial, on_done)]
         self.commands = []        # [(name, args)]
+        self._id = FakeWindow._next_id[0]
+        FakeWindow._next_id[0] += 1
+
+    def id(self):
+        return self._id
 
     def folders(self):
         return list(self._folders)
@@ -107,6 +118,13 @@ class FakeWindow:
 
     def focus_view(self, view):
         self.commands.append(("focus_view", {"id": view.id()}))
+
+    def new_file(self):
+        return FakeView(vid=999)
+
+    def open_file(self, path):
+        self.commands.append(("open_file", {"path": path}))
+        return FakeView(vid=998, file_name=path)
 
 
 def _install_stubs():
@@ -177,7 +195,6 @@ _messages = []
 _install_stubs()
 
 from ai import ai_terminal  # noqa: E402
-from ai.terminal import launcher  # noqa: E402
 
 
 PROFILES = {
@@ -191,14 +208,9 @@ BETA = os.path.join(REPO, "tests")
 
 
 @pytest.fixture(autouse=True)
-def clean_state(tmp_path, monkeypatch):
-    """Fresh in-memory history and settings per test; never touch real state."""
+def clean_state(monkeypatch):
+    """Fresh settings per test; never touch real state."""
     del _messages[:]
-    store = launcher.empty_store()
-    monkeypatch.setattr(ai_terminal, "_launch_store", store, raising=False)
-    monkeypatch.setattr(
-        ai_terminal, "_launch_store_path", lambda: str(tmp_path / "hist.json")
-    )
     settings = Settings()
     settings.update({"profiles": PROFILES, "default_profile": "Claude"})
     monkeypatch.setattr(ai_terminal, "_settings", settings, raising=False)
@@ -208,7 +220,8 @@ def clean_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ai_terminal, "_profile_availability_label", lambda n, s=None: "80% remaining"
     )
-    yield store
+    ai_terminal._working_dirs.clear()
+    yield settings
 
 
 def _launcher_cmd(window):
@@ -229,6 +242,12 @@ def test_launcher_shows_all_profiles_first():
     assert sorted(_triggers(win.panels[0][0])) == ["Bash", "Claude", "Codex"]
 
 
+def test_profiles_are_listed_alphabetically():
+    win = FakeWindow(folders=[ALPHA])
+    _launcher_cmd(win).run()
+    assert _triggers(win.panels[0][0]) == ["Bash", "Claude", "Codex"]
+
+
 def test_picking_an_agent_opens_the_directory_step():
     win = FakeWindow(folders=[ALPHA, BETA])
     _launcher_cmd(win).run()
@@ -239,6 +258,14 @@ def test_picking_an_agent_opens_the_directory_step():
     dir_items = _triggers(win.panels[1][0])
     assert "Browse…" in dir_items
     assert os.path.basename(ALPHA) in dir_items
+
+
+def test_directory_step_lists_sidebar_folders_in_order():
+    win = FakeWindow(folders=[BETA, ALPHA])
+    _launcher_cmd(win).run()
+    win.panels[0][1](0)
+    dir_items = _triggers(win.panels[1][0])
+    assert dir_items == [os.path.basename(BETA), os.path.basename(ALPHA), "Browse…"]
 
 
 def test_full_flow_spawns_the_chosen_agent_in_the_chosen_folder():
@@ -324,27 +351,6 @@ def test_no_profiles_falls_back_to_default_terminal(monkeypatch):
     assert win.commands[-1][0] == "ai_terminal_open_here"
 
 
-# ─── ranking actually reaches the UI ─────────────────────────────────────────
-
-
-def test_history_puts_the_usual_agent_first(clean_state):
-    for _ in range(3):
-        launcher.record_launch(clean_state, "Codex", ALPHA)
-    win = FakeWindow(folders=[ALPHA])
-    _launcher_cmd(win).run()
-    assert _triggers(win.panels[0][0])[0] == "Codex"
-
-
-def test_history_puts_the_usual_folder_first(clean_state):
-    for _ in range(3):
-        launcher.record_launch(clean_state, "Claude", BETA)
-    win = FakeWindow(folders=[ALPHA, BETA])
-    _launcher_cmd(win).run()
-    items, on_profile, _ = win.panels[0]
-    on_profile(_triggers(items).index("Claude"))
-    assert _triggers(win.panels[1][0])[0] == os.path.basename(BETA)
-
-
 def test_rows_carry_usage_annotation_and_a_kind():
     win = FakeWindow(folders=[ALPHA])
     _launcher_cmd(win).run()
@@ -364,74 +370,57 @@ def test_unavailable_profile_is_listed_but_marked(monkeypatch):
     assert rows["Codex"].kind[1] == "x"
 
 
-# ─── recent sessions ─────────────────────────────────────────────────────────
+# ─── cross-agent history (live sweep, nothing persisted) ─────────────────────
 
 
-def test_recent_sessions_relaunches_a_finished_session(clean_state, monkeypatch):
-    launcher.record_launch(clean_state, "Codex", BETA, session_id=42)
-    launcher.record_close(clean_state, 42)
-    monkeypatch.setattr(ai_terminal, "_term_registry", lambda: {})
+def _history_cmd(window):
+    return ai_terminal.AiTerminalHistoryCommand(window)
 
+
+def test_history_lists_sessions_from_the_live_scan(monkeypatch):
+    monkeypatch.setattr(
+        ai_terminal._history_scan,
+        "scan_all",
+        lambda: [
+            {
+                "agent": "Claude Code",
+                "title": "SText",
+                "detail": "abc123",
+                "path": os.path.join(BETA, "abc123.jsonl"),
+                "mtime": 1_800_000_000.0,
+                "kind": "text",
+            }
+        ],
+    )
     win = FakeWindow()
-    ai_terminal.AiTerminalRecentSessionsCommand(win).run()
-    items, on_done, _ = win.panels[0]
-    assert "Codex" in items[0].trigger
-
-    on_done(0)
-    name, args = win.commands[-1]
-    assert name == "ai_terminal_open_here"
-    assert args["profile"] == "Codex" and args["paths"] == [BETA]
+    _history_cmd(win).run()
+    assert len(win.panels) == 1
+    row = win.panels[0][0][0]
+    assert "Claude Code" in row.trigger and "SText" in row.trigger
 
 
-def test_recent_sessions_reports_empty_history(monkeypatch):
-    monkeypatch.setattr(ai_terminal, "_term_registry", lambda: {})
+def test_history_reports_when_nothing_is_found(monkeypatch):
+    monkeypatch.setattr(ai_terminal._history_scan, "scan_all", lambda: [])
     win = FakeWindow()
-    ai_terminal.AiTerminalRecentSessionsCommand(win).run()
+    _history_cmd(win).run()
     assert not win.panels
     assert any(kind == "status" for kind, _ in _messages)
 
 
-def test_recent_sessions_refuses_a_vanished_folder(clean_state, monkeypatch):
-    gone = os.path.join(REPO, "no-such-folder-here")
-    launcher.record_launch(clean_state, "Claude", gone, session_id=7)
-    launcher.record_close(clean_state, 7)
-    monkeypatch.setattr(ai_terminal, "_term_registry", lambda: {})
-
+def test_history_opens_text_sessions_as_a_file(monkeypatch):
+    path = os.path.join(BETA, "abc123.jsonl")
+    monkeypatch.setattr(
+        ai_terminal._history_scan,
+        "scan_all",
+        lambda: [{
+            "agent": "Claude Code", "title": "SText", "detail": "abc123",
+            "path": path, "mtime": 1_800_000_000.0, "kind": "text",
+        }],
+    )
     win = FakeWindow()
-    ai_terminal.AiTerminalRecentSessionsCommand(win).run()
+    _history_cmd(win).run()
     win.panels[0][1](0)
-    assert any(kind == "error" for kind, _ in _messages)
-    assert not win.commands, "must not relaunch into a missing folder"
-
-
-def test_recent_sessions_marks_a_live_session(clean_state, monkeypatch):
-    launcher.record_launch(clean_state, "Claude", ALPHA, session_id=99)
-    monkeypatch.setattr(ai_terminal, "_term_registry", lambda: {99: object()})
-    win = FakeWindow()
-    ai_terminal.AiTerminalRecentSessionsCommand(win).run()
-    assert "live" in win.panels[0][0][0].annotation
-
-
-# ─── launch history is recorded ──────────────────────────────────────────────
-
-
-def test_launch_is_recorded_for_next_time(clean_state):
-    ai_terminal._record_launch_history("Codex", BETA, session_id=5, tab="Ai 1")
-    assert launcher.profile_stats(clean_state, "Codex")["count"] == 1
-    rows = launcher.recent_sessions(clean_state, live_ids={5})
-    assert rows[0]["profile"] == "Codex" and rows[0]["live"] is True
-
-    ai_terminal._record_close_history(5)
-    assert launcher.recent_sessions(clean_state, live_ids=set())[0]["live"] is False
-
-
-def test_history_failure_never_breaks_launching(monkeypatch):
-    """A broken history store must not stop a terminal from opening."""
-    def boom():
-        raise IOError("disk on fire")
-
-    monkeypatch.setattr(ai_terminal, "_get_launch_store", boom)
-    ai_terminal._record_launch_history("Claude", ALPHA, session_id=1)  # must not raise
+    assert win.commands[-1] == ("open_file", {"path": path})
 
 
 # ─── usage refresh command ───────────────────────────────────────────────────
@@ -444,3 +433,69 @@ def test_refresh_usage_forces_a_sweep(monkeypatch):
     )
     ai_terminal.AiTerminalRefreshUsageCommand(FakeWindow()).run()
     assert calls == [True]
+
+
+# ─── sticky working directory (no picker, TermMate/GeminiCLI convention) ─────
+
+
+def test_set_working_directory_from_sidebar_folder():
+    win = FakeWindow()
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[BETA])
+    assert ai_terminal._get_working_dir(win) == BETA
+
+
+def test_set_working_directory_from_a_file_uses_its_folder():
+    win = FakeWindow()
+    a_file = os.path.join(BETA, "test_launcher_flow.py")
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[a_file])
+    assert ai_terminal._get_working_dir(win) == BETA
+
+
+def test_set_working_directory_visibility():
+    cmd = ai_terminal.AiTerminalSetWorkingDirectoryCommand(FakeWindow())
+    assert cmd.is_visible(paths=[BETA]) is True
+    # Command Palette passes no paths arg at all (None) -> always visible.
+    assert cmd.is_visible(paths=None) is True
+    # Sidebar right-click with nothing usable selected -> hidden.
+    assert cmd.is_visible(paths=[]) is False
+
+
+def test_set_working_directory_from_command_palette_uses_sole_folder():
+    """No sidebar selection (palette invocation): fall back like everything
+    else does, never show a picker."""
+    win = FakeWindow(folders=[ALPHA])
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=None)
+    assert ai_terminal._get_working_dir(win) == ALPHA
+
+
+def test_clear_working_directory_removes_it():
+    win = FakeWindow()
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[BETA])
+    ai_terminal.AiTerminalClearWorkingDirectoryCommand(win).run()
+    assert ai_terminal._get_working_dir(win) is None
+
+
+def test_clear_working_directory_only_visible_when_one_is_set():
+    win = FakeWindow()
+    cmd = ai_terminal.AiTerminalClearWorkingDirectoryCommand(win)
+    assert cmd.is_visible() is False
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[BETA])
+    assert cmd.is_visible() is True
+
+
+def test_pick_cwd_then_uses_sticky_dir_without_prompting():
+    win = FakeWindow(folders=[ALPHA, BETA])  # would otherwise be ambiguous
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[BETA])
+    picked = []
+    ai_terminal._pick_cwd_then(win, picked.append)
+    assert picked == [BETA]
+    assert not win.panels, "a sticky directory must never open a picker"
+
+
+def test_pick_cwd_then_reports_ambiguity_instead_of_a_picker():
+    win = FakeWindow(folders=[ALPHA, BETA])
+    picked = []
+    ai_terminal._pick_cwd_then(win, picked.append)
+    assert not picked, "must not silently guess between two ambiguous folders"
+    assert not win.panels, "the picker must be gone entirely"
+    assert any(kind == "status" for kind, _ in _messages)

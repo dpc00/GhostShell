@@ -129,6 +129,8 @@ def main():
         "AiTerminalSelectProfileCommand",
         "AiTerminalLauncherCommand",
         "AiTerminalHistoryCommand",
+        "AiTerminalSetWorkingDirectoryCommand",
+        "AiTerminalClearWorkingDirectoryCommand",
         "AiTerminalRefreshUsageCommand",
         "AiTerminalSendStringCommand",
         "AiTerminalKeypressCommand",
