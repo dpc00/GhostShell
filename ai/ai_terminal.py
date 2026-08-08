@@ -1074,6 +1074,57 @@ def _mouse_handling_enabled(term):
     return _MOUSE_HANDLING_ENABLED
 
 
+def _pin_viewport_enabled(term):
+    """Whether mouse-tracking alone should hard-pin the viewport (the
+    _tui_like path below). Defaults to True -- unchanged behavior for every
+    profile that doesn't set this.
+
+    The mouse_tracking heuristic assumes the app owns its scroll region and
+    never emits a real ANSI scroll (Qwen/Vibe: Screen.history never
+    populates). A profile whose app streams genuine scrollback content
+    despite wanting mouse tracking (for example gotui after its no-alt-
+    screen redesign: table/toolbar clicks still forwarded via
+    mouse_handling, but log lines are real tea.Println output) can set
+    "pin_viewport": false to opt out of the hard pin and let real ST
+    scrollback move normally.
+    """
+    if term is not None:
+        s = _settings or sublime.load_settings(_SETTINGS_NAME)
+        profiles = s.get("profiles", {})
+        profile = (
+            profiles.get(term.profile_name)
+            if isinstance(profiles, dict) and term.profile_name
+            else None
+        )
+        if isinstance(profile, dict) and "pin_viewport" in profile:
+            return bool(profile["pin_viewport"])
+    return True
+
+
+def _wheel_to_pty_enabled(term):
+    """Whether mouse-wheel scroll_lines/scroll_horizontally should be
+    swallowed and forwarded to the PTY. Defaults to the profile's
+    mouse_handling setting (today's combined behavior).
+
+    Click/drag forwarding (drag_select) and wheel forwarding were always the
+    same flag; a profile can now decouple them with "wheel_to_pty": false to
+    keep row/toolbar clicks going to the PTY while giving the wheel back to
+    ST's native scroll -- for apps like gotui that want clicks but have real
+    scrollback content for the wheel to move through.
+    """
+    if term is not None:
+        s = _settings or sublime.load_settings(_SETTINGS_NAME)
+        profiles = s.get("profiles", {})
+        profile = (
+            profiles.get(term.profile_name)
+            if isinstance(profiles, dict) and term.profile_name
+            else None
+        )
+        if isinstance(profile, dict) and "wheel_to_pty" in profile:
+            return bool(profile["wheel_to_pty"])
+    return _mouse_handling_enabled(term)
+
+
 def _tui_like(term):
     """True when the view should be treated as an app-owned fullscreen TUI
     (pin viewport to rest, never let it scroll away on its own).
@@ -1095,7 +1146,11 @@ def _tui_like(term):
         return False
     if term.screen.alt_screen:
         return True
-    return bool(term.screen.mouse_tracking) and _mouse_handling_enabled(term)
+    return (
+        bool(term.screen.mouse_tracking)
+        and _mouse_handling_enabled(term)
+        and _pin_viewport_enabled(term)
+    )
 _DEFAULT_LAUNCH_COMMAND = ["cmd.exe"] if os.name == "nt" else [
     os.environ.get("SHELL") or "/bin/bash"
 ]
@@ -3314,7 +3369,7 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
         # snaps it back — the "tab jumps then restores" glitch.
         # Always forward vertical scroll to the PTY (wheel if mouse tracking,
         # else PageUp/Down) and pin the viewport so the tab never visibly pans.
-        if command_name in ("scroll_lines", "scroll_horizontally") and not _mouse_handling_enabled(term):
+        if command_name in ("scroll_lines", "scroll_horizontally") and not _wheel_to_pty_enabled(term):
             return None
         if command_name in ("scroll_lines", "scroll_horizontally"):
             args = args or {}
@@ -4600,7 +4655,7 @@ class AiTerminalTrackpadScrollCommand(sublime_plugin.TextCommand):
             return
 
         term = _Terminal.from_id(view.id())
-        if term is None or not _mouse_handling_enabled(term):
+        if term is None or not _wheel_to_pty_enabled(term):
             view.run_command("scroll_lines", {"amount": signed})
             return
 

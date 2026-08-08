@@ -193,32 +193,26 @@
             ],
             "spawn_env": {}
         },
-        "Pybackup Textual TUI": {
-            // Direct python + absolute script. tui.py chdirs to the repo root
-            // itself, so we avoid cmd /c bat (extra shell layer under ConPTY).
-            // Textual needs mouse_handling + real alt-screen (force_main_screen
-            // false) — same class of issues as the Vibe profile.
-            "launch_command": [
-                "C:\\Users\\donal\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-                "C:\\Users\\donal\\projects\\pybackup\\ui\\tui.py"
-            ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
-            "mouse_handling": true,
-            "force_main_screen": false
-        },
         "Pybackup Go TUI": {
             // gotui.exe spawns `python ui/app.py` itself and talks to it over
-            // HTTP -- see ui/gotui/backend.go. Same alt-screen/mouse needs as
-            // the Textual profile above.
+            // HTTP -- see ui/gotui/backend.go.
             "launch_command": [
                 "C:\\Users\\donal\\projects\\pybackup\\ui\\gotui\\gotui.exe"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             },
+            // mouse_handling forwards row/toolbar clicks to the PTY. The
+            // wheel/pin flags opt this profile OUT of the combined
+            // click+wheel behavior: gotui streams real scrollback (log
+            // lines via tea.Println) instead of owning its own scroll
+            // region, so the wheel should move ST's native scrollback, not
+            // get swallowed and pinned. Cost: mouse wheel no longer scrolls
+            // inside gotui's own inspect/predict/help modals (PgUp/PgDn
+            // still does).
             "mouse_handling": true,
+            "wheel_to_pty": false,
+            "pin_viewport": false,
             "force_main_screen": false
         },
         "Gemini": {
