@@ -4,3 +4,4 @@ __pycache__/
 
 # Built binary artifact -- keep on disk (required at runtime) but don't track in git.
 *.dll
+*.sublime-color-scheme
