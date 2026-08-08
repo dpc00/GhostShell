@@ -12,5 +12,17 @@
         "args": {
             "paths": []
         }
+    },
+    { "caption": "-" },
+    {
+        "caption": "Set Ai Terminal Working Directory",
+        "command": "ai_terminal_set_working_directory",
+        "args": {
+            "paths": []
+        }
+    },
+    {
+        "caption": "Clear Ai Terminal Working Directory",
+        "command": "ai_terminal_clear_working_directory"
     }
 ]
