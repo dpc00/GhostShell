@@ -207,11 +207,14 @@
             // can't tell gotui's clickable footer rows apart from plain log
             // rows sharing the same screen height -- mouse click routing
             // for it isn't built (see git history around 2026-08-07).
-            // mouse_handling off => fully native ST scroll/select/Home/End
+            // mouse_handling off => fully native ST scroll/select
             // everywhere, keyboard-only for gotui itself (s r a i o ? q).
+            // home_end_native opts in separately (see _home_end_native_enabled
+            // in ai_terminal.py) since it's no longer tied to mouse_handling.
             // For real mouse interactivity, run gotui directly in a real
             // terminal (Windows Terminal) instead of through this profile.
             "mouse_handling": false,
+            "home_end_native": true,
             "force_main_screen": false
         },
         "Gemini": {
@@ -241,6 +244,15 @@
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
+        "jcode": {
+            "launch_command": [
+                "jcode"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1",
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
             }
         },
         "Kimi": {
