@@ -473,11 +473,13 @@ try:
     )
     from .terminal.pty_env import sanitize_pty_env as _sanitize_pty_env
     from .terminal.profile_availability import (
+        command_exists as _command_exists,
         menu_caption as _menu_caption_pure,
         profile_is_available as _profile_is_available_pure,
         reset_update_from_text as _reset_update_from_text,
         usage_update_from_text as _usage_update_from_text,
     )
+    from .terminal.agent_catalog import CATALOG as _AGENT_CATALOG
     from .terminal.usage_scan import (
         gather_usage as _gather_usage,
         provider_for_profile as _provider_for_profile,
@@ -548,11 +550,13 @@ except ImportError as _term_imp_err:
         )
         from ai.terminal.pty_env import sanitize_pty_env as _sanitize_pty_env
         from ai.terminal.profile_availability import (
+            command_exists as _command_exists,
             menu_caption as _menu_caption_pure,
             profile_is_available as _profile_is_available_pure,
             reset_update_from_text as _reset_update_from_text,
             usage_update_from_text as _usage_update_from_text,
         )
+        from ai.terminal.agent_catalog import CATALOG as _AGENT_CATALOG
         from ai.terminal.usage_scan import (
             gather_usage as _gather_usage,
             provider_for_profile as _provider_for_profile,
@@ -1041,6 +1045,38 @@ def _scope_for(attr):
 _SETTINGS_NAME = "ai_terminal.sublime-settings"
 _settings = None  # sublime.Settings; (re)bound in plugin_loaded
 
+# Fully machine-generated, never hand-edited: rewritten wholesale by
+# "Ai Terminal: Sync Detected Agent Profiles" (AiTerminalSyncAgentProfilesCommand)
+# from agent_catalog.CATALOG + local PATH detection. Kept separate from
+# ai_terminal.sublime-settings so a sync can never clobber a hand-tuned
+# profile or the settings file's extensive comments (Settings.save() would
+# silently drop them). See _all_profiles() below for the merge order.
+_GENERATED_SETTINGS_NAME = "ai_terminal_agents.sublime-settings"
+_generated_settings = None  # sublime.Settings; (re)bound in plugin_loaded, same as _settings
+
+
+def _all_profiles(s):
+    """Merge auto-detected catalog profiles under hand-tuned ones.
+
+    Anything explicitly configured in ai_terminal.sublime-settings -- including
+    a profile sharing a name with a generated one -- always wins, so a sync
+    (or a re-sync after a CLI updates) never clobbers manual customization
+    (a full shim path, extra spawn_env, mouse_handling overrides, etc).
+
+    Uses the cached _generated_settings global rather than calling
+    sublime.load_settings() here directly -- this runs on every keypress/
+    render/mouse-event path via _mouse_handling_enabled and friends, and
+    hitting the Settings API uncached on every call (potentially off the
+    main thread) is what took the plugin down before this was cached.
+    """
+    generated = (_generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)).get(
+        "profiles", {}
+    ) or {}
+    explicit = s.get("profiles", {}) or {}
+    merged = dict(generated)
+    merged.update(explicit)
+    return merged
+
 _DEFAULT_SCROLLBACK = 300
 _DEFAULT_MIN_COLS = 20
 _DEFAULT_MIN_ROWS = 1
@@ -1063,7 +1099,7 @@ def _mouse_handling_enabled(term):
     the global kill switch above when the profile doesn't set one."""
     if term is not None:
         s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = s.get("profiles", {})
+        profiles = _all_profiles(s)
         profile = (
             profiles.get(term.profile_name)
             if isinstance(profiles, dict) and term.profile_name
@@ -1090,7 +1126,7 @@ def _pin_viewport_enabled(term):
     """
     if term is not None:
         s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = s.get("profiles", {})
+        profiles = _all_profiles(s)
         profile = (
             profiles.get(term.profile_name)
             if isinstance(profiles, dict) and term.profile_name
@@ -1114,7 +1150,7 @@ def _wheel_to_pty_enabled(term):
     """
     if term is not None:
         s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = s.get("profiles", {})
+        profiles = _all_profiles(s)
         profile = (
             profiles.get(term.profile_name)
             if isinstance(profiles, dict) and term.profile_name
@@ -1141,7 +1177,7 @@ def _home_end_native_enabled(term):
     """
     if term is not None:
         s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = s.get("profiles", {})
+        profiles = _all_profiles(s)
         profile = (
             profiles.get(term.profile_name)
             if isinstance(profiles, dict) and term.profile_name
@@ -1204,7 +1240,7 @@ def _force_main_screen(profile_name=None):
     """
     s = _settings or sublime.load_settings(_SETTINGS_NAME)
     if profile_name:
-        profiles = s.get("profiles", {})
+        profiles = _all_profiles(s)
         profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
         if isinstance(profile, dict) and "force_main_screen" in profile:
             return bool(profile["force_main_screen"])
@@ -1476,7 +1512,7 @@ def _profile_is_available(profile_name, settings=None):
     launching, while actual terminal output can mark any profile exhausted.
     """
     s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = s.get("profiles", {})
+    profiles = _all_profiles(s)
     if not profile_name:
         profile_name = s.get("default_profile")
     profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
@@ -1584,7 +1620,7 @@ def _scanned_usage_for_profile(profile_name, settings=None):
     if not isinstance(scan, dict) or not scan:
         return None
     s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = s.get("profiles", {})
+    profiles = _all_profiles(s)
     profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
     provider = _provider_for_profile(profile)
     return scan.get(provider) if provider else None
@@ -3436,7 +3472,7 @@ def _quick_panel_item(trigger, details, annotation, kind):
 
 def _profile_names(settings=None):
     s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = s.get("profiles", {})
+    profiles = _all_profiles(s)
     return list(profiles.keys()) if isinstance(profiles, dict) else []
 
 
@@ -3763,7 +3799,7 @@ def _spawn(window, path, profile=None):
         return
 
     s = sublime.load_settings(_SETTINGS_NAME)
-    profiles = s.get("profiles", {})
+    profiles = _all_profiles(s)
     
     profile_name = profile
     if not profile_name:
@@ -3951,6 +3987,40 @@ class AiTerminalRefreshUsageCommand(sublime_plugin.WindowCommand):
     def run(self):
         _ensure_usage_scanner(force=True)
         sublime.status_message("Ai terminal: refreshing usage…")
+
+
+class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
+    """Clear and rebuild the auto-detected agent profiles from scratch.
+
+    Command palette: "Ai: Sync Detected Agent Profiles". Re-runs local PATH
+    detection against agent_catalog.CATALOG and overwrites
+    ai_terminal_agents.sublime-settings wholesale with what it finds --
+    nothing else is touched. A profile in ai_terminal.sublime-settings with
+    the same name always overrides its generated counterpart (see
+    _all_profiles), so hand customization (a full shim path, extra
+    spawn_env, mouse_handling) survives a re-sync even if the bare command
+    momentarily fails detection (e.g. a shim not yet on PATH).
+    """
+
+    def run(self):
+        detected = {}
+        for entry in _AGENT_CATALOG.values():
+            if not _command_exists(entry["launch_command"]):
+                continue
+            profile = {
+                "launch_command": entry["launch_command"],
+                "spawn_env": dict(entry["spawn_env"]),
+            }
+            if "mouse_handling" in entry:
+                profile["mouse_handling"] = entry["mouse_handling"]
+            detected[entry["display_name"]] = profile
+
+        gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
+        gs.set("profiles", detected)
+        sublime.save_settings(_GENERATED_SETTINGS_NAME)
+        sublime.status_message(
+            "Ai terminal: synced %d detected agent profile(s)" % len(detected)
+        )
 
 
 def _profile_items(names, s, context_dir=None):
@@ -5020,12 +5090,18 @@ def _clamp_vp_loop():
 def plugin_loaded():
     if not _PTY_OK:
         print("[ai_terminal] no PTY backend available; commands will report the error.")
-    global _clamp_token, _settings
+    global _clamp_token, _settings, _generated_settings
     _init_dynamic_color_scheme()
     # Bind the settings object and live-apply edits (the callback fires on the
     # main thread right after a settings file write).
     _settings = sublime.load_settings(_SETTINGS_NAME)
     _settings.add_on_change("ai_terminal", _on_settings_change)
+    # Same caching as _settings above -- _all_profiles() is on hot paths
+    # (every keypress/mouse-event via _mouse_handling_enabled), so this must
+    # not call sublime.load_settings() itself. AiTerminalSyncAgentProfilesCommand
+    # writes through this same cached object (Settings objects are singletons
+    # per base name), so a re-sync is visible immediately without a reload.
+    _generated_settings = sublime.load_settings(_GENERATED_SETTINGS_NAME)
     # The registry deliberately survives module reloads so active ConPTY
     # sessions are not killed. Upgrade those objects to this generation of the
     # class as well; otherwise an existing tab keeps the old synchronous
