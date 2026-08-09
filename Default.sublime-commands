@@ -2,6 +2,7 @@
 	{"caption": "Ai Terminal: Launch Agent…", "command": "ai_terminal_launcher"},
 	{"caption": "Ai Terminal: All Agent History…", "command": "ai_terminal_history"},
 	{"caption": "Ai Terminal: Refresh Usage & Quota", "command": "ai_terminal_refresh_usage"},
+	{"caption": "Ai Terminal: Sync Detected Agent Profiles", "command": "ai_terminal_sync_agent_profiles"},
 	{"caption": "Ai Terminal: Open Here", "command": "ai_terminal_open_here"},
 	{"caption": "Ai Terminal: Open in Editor", "command": "ai_terminal_open_in_editor"},
 	{"caption": "Ai Terminal: Open Profile...", "command": "ai_terminal_select_profile"},
