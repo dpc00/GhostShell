@@ -386,7 +386,8 @@
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
+                "LOG_LEVEL":"DEBUG"
             },
             // Vibe (Textual) manages its own scroll region and never emits a
             // real ANSI scroll, so the history deque stays empty and PageUp/
