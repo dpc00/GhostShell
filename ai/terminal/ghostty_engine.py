@@ -6,13 +6,13 @@ and Screen's grid/attrs/x/y/history/private_modes/cursor_visible surface, not
 on this module's internals. See ghostty_vt.py for the ctypes binding layer
 and DLL location.
 """
-import re
-
 import ctypes
+import re
 
 from . import ghostty_vt as gvt
 from .colors import pack_attr, quantize256, BOLD, REVERSE, FAINT, XTERM256_RGB
 from .screen import BLANK
+
 
 # libghostty-vt implements real primary/alternate screen buffer swapping.
 # That means "force_main_screen" -- the user setting that keeps showing the
@@ -102,7 +102,101 @@ class GhosttyParser:
         self._last_scrollback_rows = -1
         self._sync()
 
-    # -- internals --
+    def encode_key(self, key, ctrl=False, alt=False, shift=False):
+        """Encode a key event through libghostty-vt's key encoder.
+
+        Syncs the encoder from the live terminal state on every call so that
+        app-cursor mode, Kitty keyboard protocol flags, modifyOtherKeys, and
+        alt-escape prefix are always current.
+
+        Args:
+            key: Sublime Text key name (lowercase), e.g. "a", "enter", "up".
+            ctrl / alt / shift: modifier state booleans.
+
+        Returns:
+            bytes  — the encoded escape sequence (may be empty bytes if the key
+                     generates no output, e.g. an unmodified modifier key press).
+            None   — the key is not recognised (caller should fall back to
+                     _translate_key / _encode_win32_key).
+        """
+        # Lazy encoder + event creation (per-GhosttyParser instance).
+        if not hasattr(self, "_key_encoder"):
+            enc = gvt.GhosttyKeyEncoder()
+            rc = self._g.key_encoder_new(None, ctypes.byref(enc))
+            if rc != gvt.SUCCESS:
+                self._key_encoder = None
+                self._key_event = None
+            else:
+                evt = gvt.GhosttyKeyEvent()
+                rc2 = self._g.key_event_new(None, ctypes.byref(evt))
+                if rc2 != gvt.SUCCESS:
+                    self._g.key_encoder_free(enc)
+                    self._key_encoder = None
+                    self._key_event = None
+                else:
+                    self._key_encoder = enc
+                    self._key_event = evt
+
+        enc = self._key_encoder
+        evt = self._key_event
+        if enc is None or evt is None:
+            return None
+
+        # Resolve the key to a GhosttyKey int.  Single printable chars that
+        # aren't in the named map are passed with key=0 (UNIDENTIFIED) and
+        # the character itself via set_utf8 — the encoder uses the text field
+        # for printable keys, and the logical key for everything else.
+        kl = key.lower()
+        gkey = gvt.ST_KEY_TO_GHOSTTY.get(kl)
+
+        if gkey is None:
+            if len(key) == 1:
+                gkey = 0  # GHOSTTY_KEY_UNIDENTIFIED; text carries it
+            else:
+                return None  # Unknown named key → let legacy path handle it
+
+        # Sync encoder options from the live terminal state.  This picks up:
+        #   • cursor-key application mode (DEC 1)
+        #   • keypad application mode (DEC 66)
+        #   • Kitty keyboard protocol flags
+        #   • modifyOtherKeys mode 2 (DEC 1036 / xterm)
+        #   • alt-escape prefix (DEC 1036)
+        self._g.key_encoder_setopt_from_terminal(enc, self._term)
+
+        # Populate the event.
+        self._g.key_event_set_key(evt, gkey)
+        self._g.key_event_set_mods(evt, gvt.st_mods_to_ghostty(ctrl, alt, shift))
+        self._g.key_event_set_action(evt, gvt.KEY_ACTION_PRESS)
+
+        if len(key) == 1:
+            # Pass the raw unshifted character so the encoder can derive the
+            # correct Ctrl/Alt sequences from the logical key + mods pair.
+            # event.h: "Must contain the unmodified character before any
+            # Ctrl/Meta transformations. Do not pass C0 control characters."
+            # This applies even for letters/digits/punctuation that also
+            # have a logical GhosttyKey entry (gkey set above) -- the encoder
+            # needs the utf8 text to produce output for a plain unmodified
+            # press; a logical key with no text yields empty bytes for any
+            # key that isn't itself a special escape sequence.
+            ch = key if not shift else key.lower()
+            self._g.key_event_set_utf8(evt, ch.encode("utf-8"), len(ch.encode("utf-8")))
+            self._g.key_event_set_unshifted_codepoint(evt, ord(ch.lower()))
+        else:
+            # Named key: no utf8 text, encoder works from the logical key.
+            self._g.key_event_set_utf8(evt, None, 0)
+            self._g.key_event_set_unshifted_codepoint(evt, 0)
+
+        # Encode into a fixed 128-byte buffer (sufficient for all standard
+        # sequences; encoder returns OUT_OF_SPACE if not, in which case we
+        # fall back to the legacy path rather than allocating dynamically).
+        buf = ctypes.create_string_buffer(128)
+        written = ctypes.c_size_t(0)
+        rc = self._g.key_encoder_encode(enc, evt, buf, len(buf), ctypes.byref(written))
+        if rc == gvt.SUCCESS:
+            return bytes(buf.raw[: written.value])
+        # OUT_OF_SPACE (oversized sequence) or other error: signal fallback.
+        return None
+
 
     def _get_u16(self, data_id):
         v = ctypes.c_uint16()

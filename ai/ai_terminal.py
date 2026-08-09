@@ -1125,6 +1125,33 @@ def _wheel_to_pty_enabled(term):
     return _mouse_handling_enabled(term)
 
 
+def _home_end_native_enabled(term):
+    """Whether Home/End/PageUp/PageDown should go to native ST navigation
+    instead of the PTY. Defaults to False -- most profiles run interactive
+    readline-style apps (Claude, Codex, shells) that need these keys to
+    reach the PTY and move the app's own input-line cursor. Only scrollback-
+    viewer profiles with no real line-editing (e.g. "Pybackup Go TUI", which
+    is keyboard-only aside from these) should opt in with
+    "home_end_native": true.
+
+    Deliberately NOT tied to wheel_to_pty/mouse_handling: those default to
+    False globally for an unrelated reason (avoiding a click/mouse-tracking
+    bug in Qwen), and piggybacking Home/End on that default silently broke
+    Home/End for every profile that didn't explicitly set mouse_handling.
+    """
+    if term is not None:
+        s = _settings or sublime.load_settings(_SETTINGS_NAME)
+        profiles = s.get("profiles", {})
+        profile = (
+            profiles.get(term.profile_name)
+            if isinstance(profiles, dict) and term.profile_name
+            else None
+        )
+        if isinstance(profile, dict) and "home_end_native" in profile:
+            return bool(profile["home_end_native"])
+    return False
+
+
 def _tui_like(term):
     """True when the view should be treated as an app-owned fullscreen TUI
     (pin viewport to rest, never let it scroll away on its own).
@@ -4361,13 +4388,11 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             if any(not s.empty() for s in self.view.sel()):
                 self.view.run_command("copy" if key == "c" else "cut")
                 return
-        # Profiles that opted out of wheel-to-PTY (real scrollback, e.g.
-        # gotui) get native ST paging/navigation for these keys too, instead
-        # of the raw key code going to the PTY -- mirrors _wheel_to_pty_enabled's
-        # reasoning: an app with genuine scrollback wants ST's own Home/End/
-        # PageUp/PageDown, not synthetic PTY keys it may not even handle for
-        # this row range.
-        if not alt and key in ("home", "end", "pageup", "pagedown") and not _wheel_to_pty_enabled(term):
+        # Profiles that explicitly opt in (real scrollback, no line-editing,
+        # e.g. gotui) get native ST paging/navigation for these keys instead
+        # of the raw key code going to the PTY. Everyone else forwards to
+        # the PTY so the app's own input-line cursor moves normally.
+        if not alt and key in ("home", "end", "pageup", "pagedown") and _home_end_native_enabled(term):
             if key == "home":
                 self.view.run_command("move_to", {"to": "bof" if ctrl else "bol", "extend": shift})
             elif key == "end":
@@ -4381,13 +4406,37 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         if 9001 in term.screen.private_modes:
             code = _encode_win32_key(key, ctrl=ctrl, alt=alt, shift=shift)
         else:
-            code = _translate_key(
-                key,
-                ctrl=ctrl,
-                alt=alt,
-                shift=shift,
-                application_mode=1 in term.screen.private_modes,
-            )
+            # Try the libghostty-vt key encoder first. It syncs the live
+            # terminal state (app-cursor mode, Kitty keyboard protocol flags,
+            # modifyOtherKeys, alt-escape prefix) on every call, so it
+            # automatically produces the correct sequence regardless of what
+            # mode the child app has negotiated — something the static
+            # _translate_key table cannot do.
+            #
+            # encode_key() returns:
+            #   bytes  — success (may be b"" if the key has no output)
+            #   None   — key not recognised; fall back to legacy table
+            parser = term.parser if hasattr(term, "parser") else None
+            ghostty_result = None
+            if parser is not None and hasattr(parser, "encode_key"):
+                try:
+                    ghostty_result = parser.encode_key(
+                        key, ctrl=ctrl, alt=alt, shift=shift
+                    )
+                except Exception:
+                    ghostty_result = None
+
+            if ghostty_result is not None:
+                code = ghostty_result.decode("utf-8", "surrogateescape") if ghostty_result else ""
+            else:
+                # Legacy fallback: static escape-sequence tables.
+                code = _translate_key(
+                    key,
+                    ctrl=ctrl,
+                    alt=alt,
+                    shift=shift,
+                    application_mode=1 in term.screen.private_modes,
+                )
         if code:
             # Viewport writes (scroll_to_bottom) must NOT run on keys that only
             # move within the TUI or scrollback. set_viewport_position on
