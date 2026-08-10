@@ -4057,9 +4057,15 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
     """
 
     def run(self):
+        # Same reasoning as _spawn: a long-lived ST process inherited PATH at
+        # launch, so a CLI installed since then (setx / installer PATH edit)
+        # is invisible to os.environ until refreshed from the registry --
+        # otherwise a sync run right after installing an agent still misses it.
+        refreshed = _refresh_path_env(dict(os.environ))
+        path = refreshed.get("Path") or refreshed.get("PATH")
         detected = {}
         for entry in _AGENT_CATALOG.values():
-            if not _command_exists(entry["launch_command"]):
+            if not _command_exists(entry["launch_command"], path=path):
                 continue
             profile = {
                 "launch_command": entry["launch_command"],
