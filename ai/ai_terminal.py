@@ -1081,6 +1081,15 @@ _DEFAULT_SCROLLBACK = 300
 _DEFAULT_MIN_COLS = 20
 _DEFAULT_MIN_ROWS = 1
 
+# TODO(feature): no clickable-URL support -- URLs printed to the terminal
+# (plain text or OSC 8 hyperlinks) are inert; clicking/ctrl-clicking one does
+# nothing. Most terminal emulators either detect bare URL regex spans and
+# open them on click, or honor OSC 8 (\x1b]8;;URL\x1b\\text\x1b]8;;\x1b\\) and
+# make the wrapped text clickable. Neither is implemented here. Would need:
+# a URL-span scan over rendered rows (or OSC 8 parsing in the ANSI parser),
+# a click handler that checks the clicked cell against detected spans, and
+# webbrowser.open() (or os.startfile on Windows) to launch it.
+
 # Kill switch per user directive: mouse handling (DEC mouse-tracking click/
 # drag forwarding to the PTY, and the always-swallow wheel-scroll routing)
 # judged buggy and disabled outright. False = ST's native mouse/selection/
@@ -3418,6 +3427,7 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
                         return ("ai_terminal_noop", {})
                 else:
                     _cancel_copyfirst_tap(term)
+                    _arm_st_select_guard(term)
                 return None
             # Mouse-first: Shift/Ctrl-drag select; plain drag → PTY when tracking.
             if modified:
