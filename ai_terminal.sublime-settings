@@ -379,7 +379,7 @@
         "Testing Agent": {
             "launch_command": [
                 "python",
-                "C:\\Users\\donal\\projects\\SText\\tests\\mock_agent_cli.py"
+                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
