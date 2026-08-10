@@ -73,21 +73,6 @@ class MockAgent:
         # Use primary-screen clear: ESC[2J then home, no alt-screen switching.
         self._write("\x1b[2J\x1b[H")
 
-    def _word_wrap(self, text, width=None):
-        width = width or self.cols
-        words = text.split()
-        lines = []
-        cur = ""
-        for w in words:
-            if cur and len(cur) + 1 + len(w) > width:
-                lines.append(cur)
-                cur = w
-            else:
-                cur = (cur + " " + w) if cur else w
-        if cur:
-            lines.append(cur)
-        return lines
-
     def _make_paragraph(self, n):
         # Long paragraph designed to wrap multiple times and push scrollback.
         filler = (
@@ -124,14 +109,14 @@ class MockAgent:
     def _spew(self):
         self.turn += 1
         para = self._make_paragraph(self.turn)
-        # Wrap at current cols so the PTY does the wrapping, not ST soft-wrap.
-        wrapped = self._word_wrap(para, self.cols)
-        # Prepend a colored speaker header.
+        # No embedded newlines: emit one long logical line per paragraph so
+        # the terminal's own soft-wrap does the wrapping (and re-wrapping on
+        # resize), matching how a real agent CLI streams text.
         header = f"\x1b[1;{colors[self.turn % len(colors)]}mTurn {self.turn}:\x1b[0m"
-        wrapped[0] = header + " " + wrapped[0]
-        self.lines.extend(wrapped)
-        # Keep only enough to fill a few screens; old lines roll into scrollback.
-        self.lines = self.lines[-(self.rows * 5) :]
+        self.lines.append(header + " " + para)
+        # Keep only enough paragraphs to fill a few screens; old ones roll
+        # into scrollback.
+        self.lines = self.lines[-20:]
         self._redraw(reason="spew")
 
     def _on_resize(self, signum=None, frame=None):
