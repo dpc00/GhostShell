@@ -39,6 +39,17 @@
     // Set false to disable recording globally. Legacy per-profile
     // AI_TERMINAL_LOG_LINES values remain supported.
     "record_asciicast": true,
+    // Keep a plain-text, agent-readable transcript of every ai_terminal
+    // session under ~/data/logs/ai_terminal_session_text_logs -- one line
+    // appended the instant it permanently scrolls out of the live viewport
+    // (never a duplicate, no ANSI), plus whatever's still on-screen flushed
+    // when the tab closes. Point an agent at this file to review what
+    // happened in a past session, regardless of what CLI/agent was running
+    // in that tab -- this operates below the application layer, so it works
+    // identically for cmd, bash, PowerShell, or any of the agent profiles.
+    // Set false to disable globally. A profile can set "log_tab_text": false
+    // to opt a specific one out.
+    "log_tab_text": true,
     // How often (minutes) to re-poll each provider's usage/quota endpoint so
     // the figures in the launcher and menus do not go stale mid-session. The
     // sweep uses the OAuth tokens the CLIs already persisted and spends no
