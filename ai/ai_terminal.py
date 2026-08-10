@@ -1073,6 +1073,10 @@ def _all_profiles(s):
         "profiles", {}
     ) or {}
     explicit = s.get("profiles", {}) or {}
+    if not isinstance(generated, dict):
+        generated = {}
+    if not isinstance(explicit, dict):
+        explicit = {}
     merged = dict(generated)
     merged.update(explicit)
     return merged
