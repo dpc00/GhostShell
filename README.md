@@ -27,6 +27,9 @@ tools/                  -- check_import.py (import sanity check), stale-scheme c
 tests/                  -- unit tests for ai/terminal/*, no Sublime required
 ```
 
+See [COMMANDS.md](COMMANDS.md) for every registered command: ST command name,
+command palette entry, menu location(s), and keybinding.
+
 ## Installing
 
 Symlink this repo into your Sublime Text `Packages/` directory:
