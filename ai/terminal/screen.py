@@ -22,6 +22,15 @@ class Screen:
         # Cap is a user setting (scrollback_history_size); does NOT auto-size
         # on window resize. Stored as rstripped [(ch, attr), ...] cell-lists.
         self.history = collections.deque(maxlen=history_cap)
+        # Optional callback(text: str), fired exactly once per line the
+        # instant it permanently retires from the live viewport into
+        # history -- i.e. it will never be redrawn or changed again. Callers
+        # that push new lines into history MUST go through _retire_line()
+        # (never self.history.append() directly), or this notification is
+        # silently skipped. Rebuild paths that re-add already-seen entries
+        # (resize reflow, set_history_cap) intentionally bypass this -- they
+        # are not new content and must not be re-notified.
+        self.on_retire_line = None
         self.saved = (0, 0)
         self.alt_screen = False
         # DECTCEM (mode 25): whether the app wants its real terminal cursor
@@ -110,9 +119,38 @@ class Screen:
             return
         self.history = collections.deque(self.history, maxlen=cap)
 
+    def _retire_line(self, raw_cells):
+        """Choke point for pushing a genuinely new line into scrollback.
+
+        rstrips, appends to history, and fires on_retire_line with the
+        plain text exactly once. Both VT engines' scroll paths (this
+        module's own _scroll_up, and ghostty_engine's _sync_scrollback)
+        must call this instead of self.history.append() directly.
+        """
+        line = rstrip_cells(raw_cells)
+        self.history.append(line)
+        if self.on_retire_line is not None:
+            try:
+                self.on_retire_line("".join(ch for ch, _attr in line))
+            except Exception:
+                pass  # logging must never break rendering
+        return line
+
+    def live_lines_text(self):
+        """Plain-text snapshot of every row still in the live viewport (not
+        yet retired into history). Used to flush the final, never-scrolled
+        screen of a session to a log on close."""
+        out = []
+        for i in range(self.rows):
+            srow = self.grid[i]
+            arow = self.attrs[i]
+            cells = rstrip_cells([(srow[c], arow[c]) for c in range(self.cols)])
+            out.append("".join(ch for ch, _attr in cells))
+        return out
+
     def _scroll_up(self):
         popped = [(self.grid[0][c], self.attrs[0][c]) for c in range(self.cols)]
-        self.history.append(rstrip_cells(popped))
+        self._retire_line(popped)
         self.grid.pop(0)
         self.attrs.pop(0)
         self.grid.append([BLANK] * self.cols)

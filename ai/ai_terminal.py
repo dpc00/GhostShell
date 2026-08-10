@@ -1282,6 +1282,24 @@ def _close_tab_on_exit(profile_name=None):
     return bool(s.get("close_tab_on_exit", True))
 
 
+def _log_tab_text(profile_name=None):
+    """Whether a plain-text, agent-readable transcript of this tab should be
+    kept alongside the .cast recording -- one line appended the instant it
+    permanently retires from the live viewport (never a duplicate, never a
+    raw ANSI byte), plus whatever's still on-screen flushed on close. Meant
+    to answer "what happened in that session" without needing to understand
+    ANSI or any per-agent transcript format. Default true, same posture as
+    record_asciicast. A profile may set ``"log_tab_text": false`` to opt out.
+    """
+    s = _settings or sublime.load_settings(_SETTINGS_NAME)
+    if profile_name:
+        profiles = _all_profiles(s)
+        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
+        if isinstance(profile, dict) and "log_tab_text" in profile:
+            return bool(profile["log_tab_text"])
+    return bool(s.get("log_tab_text", True))
+
+
 def _make_parser(screen, force_main_screen):
     """libghostty-vt is the sole VT engine. See ai/terminal/ghostty_engine.py."""
     return _GhosttyParser(screen, force_main_screen=force_main_screen)
@@ -1965,6 +1983,7 @@ class _Terminal:
         self._cast_lock = threading.Lock()
         self._cast_t0 = 0.0       # session start (epoch seconds)
         self._cast_last = 0.0     # timestamp of the previous event
+        self._text_log_file = None  # see _log_tab_text() / _on_retire_line
         # Geometry watcher for standard terminal resize behavior.
         self._watcher = _LayoutWatcher(self)
 
@@ -2024,9 +2043,55 @@ class _Terminal:
             except Exception as e:
                 print(f"[ai_terminal] cast open failed: {e}")
                 self._cast_file = None
+        self._text_log_file = None
+        if _log_tab_text(self.profile_name):
+            try:
+                os.makedirs(_TEXT_LOG_DIR, exist_ok=True)
+                fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.log"
+                path = os.path.join(_TEXT_LOG_DIR, fname)
+                self._text_log_file = open(path, "a", encoding="utf-8", newline="\n")
+                self.screen.on_retire_line = self._on_retire_line
+            except Exception as e:
+                print(f"[ai_terminal] text log open failed: {e}")
+                self._text_log_file = None
         self._ensure_writer()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+
+    def _on_retire_line(self, text):
+        """Screen.on_retire_line callback: one scrollback line just became
+        permanent. Append-and-flush so a crash loses at most the current
+        in-flight write, not the session."""
+        f = self._text_log_file
+        if f is None:
+            return
+        try:
+            f.write(text + "\n")
+            f.flush()
+        except Exception as e:
+            print(f"[ai_terminal] text log write failed: {e}")
+
+    def _close_text_log(self):
+        """Flush whatever never scrolled off (the final live screen) and
+        close. Safe to call more than once or before start()."""
+        f = getattr(self, "_text_log_file", None)
+        if f is None:
+            return
+        try:
+            with self._lock:
+                lines = self.screen.live_lines_text()
+            for line in lines:
+                if line:
+                    f.write(line + "\n")
+            f.flush()
+        except Exception as e:
+            print(f"[ai_terminal] text log final flush failed: {e}")
+        finally:
+            try:
+                f.close()
+            except Exception:
+                pass
+            self._text_log_file = None
 
     def _ensure_writer(self):
         """Create the ordered PTY writer, including for hot-reloaded terminals."""
@@ -2103,6 +2168,7 @@ class _Terminal:
         except Exception as e:
             print(f"[ai_terminal] reader error: {e}")
         finally:
+            self._close_text_log()
             sublime.set_timeout(lambda: _vwrite(self.view, "\n[process exited]\n"), 0)
             # _close_tab_on_exit() reads Settings (via _all_profiles), which is
             # main-thread-only in the Sublime API -- this finally block still
@@ -2210,6 +2276,7 @@ class _Terminal:
                 except Exception:
                     pass
             self._cast_file = None
+        self._close_text_log()
         try:
             self.pty.kill()
         except Exception as e:
@@ -2861,6 +2928,10 @@ _debug_lock = threading.Lock()
 # NOT a top-level setting key; it lives in spawn_env where the user put it.
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
 _CAST_DIR = r"C:\Users\donal\data\logs\ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+# Plain-text, agent-readable counterpart to the .cast recordings above --
+# see _log_tab_text(). Same timestamped-per-session naming so a .cast and
+# its .log pair up, but content is clean rendered text, not raw ANSI events.
+_TEXT_LOG_DIR = r"C:\Users\donal\data\logs\ai_terminal_session_text_logs"
 
 
 def _debug_log(data):

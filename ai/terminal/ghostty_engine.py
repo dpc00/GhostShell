@@ -10,7 +10,7 @@ import ctypes
 import re
 
 from . import ghostty_vt as gvt
-from .colors import pack_attr, quantize256, BOLD, REVERSE, FAINT, XTERM256_RGB
+from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, XTERM256_RGB
 from .screen import BLANK
 
 
@@ -389,11 +389,19 @@ class GhosttyParser:
         # single line that scrolls. Any other transition (first sync, reset,
         # resize-triggered reflow/shrink) can't be trusted as a pure
         # append, so fall back to a full rebuild.
+        #
+        # A full rebuild replays rows already seen in a prior sync (reflowed
+        # or not), so it must NOT re-fire on_retire_line for them -- only the
+        # incremental-append path below notifies genuinely new lines. This
+        # mirrors Screen.resize()'s own scrollback-clip path, which rebuilds
+        # s.history by appending directly rather than through _retire_line.
         if 0 <= last < scrollback_rows:
             start = last
+            notify = True
         else:
             s.history.clear()
             start = 0
+            notify = False
 
         for y in range(start, scrollback_rows):
             cells = []
@@ -405,7 +413,10 @@ class GhosttyParser:
                     cells.append((" ", 0))
                     continue
                 cells.append(self._cell_from_grid_ref(ref, palette))
-            s.history.append(_rstrip(cells))
+            if notify:
+                s._retire_line(cells)
+            else:
+                s.history.append(rstrip_cells(cells))
 
         self._last_scrollback_rows = scrollback_rows
         s.dirty = True
@@ -414,10 +425,3 @@ class GhosttyParser:
         self._sync_grid()
         self._sync_scrollback()
         self.s.dirty = True
-
-
-def _rstrip(cells):
-    end = len(cells)
-    while end > 0 and cells[end - 1] == (" ", 0):
-        end -= 1
-    return cells[:end]
