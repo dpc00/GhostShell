@@ -135,6 +135,8 @@ if os.name == "nt":
         _k32.GetExitCodeProcess.restype = BOOL
         _k32.TerminateProcess.argtypes = [HANDLE, DWORD]
         _k32.TerminateProcess.restype = BOOL
+        _k32.WaitForSingleObject.argtypes = [HANDLE, DWORD]
+        _k32.WaitForSingleObject.restype = DWORD
         _k32.CloseHandle.argtypes = [HANDLE]
         _k32.CloseHandle.restype = BOOL
         _k32.GetProcessHeap.restype = ctypes.c_void_p
@@ -144,6 +146,7 @@ if os.name == "nt":
         _k32.HeapFree.restype = BOOL
 
         _STILL_ACTIVE = 259
+        _INFINITE = 0xFFFFFFFF
         _PTY_OK = True
     except Exception as _e:  # pragma: no cover
         print(f"[ai_terminal] ctypes ConPTY binding failed: {_e}")
@@ -170,6 +173,8 @@ class _Pty:
         self._attr_list = None
         self._heap_buf = None
         self._alive = True
+        self._pc_lock = threading.Lock()
+        self._exit_watcher = None
         # list2cmdline quotes paths with spaces; plain " ".join does not and
         # also cannot launch npm .cmd shims without prior _resolve_launch_argv.
         self._cmdline = subprocess.list2cmdline(self.argv)
@@ -248,6 +253,36 @@ class _Pty:
         self.pid = pi.dwProcessId
         self._hInWrite = hInWrite
         self._hOutRead = hOutRead
+        self._exit_watcher = threading.Thread(target=self._watch_process_exit, daemon=True)
+        self._exit_watcher.start()
+
+    def _watch_process_exit(self):
+        """Unblock the reader thread the moment the child exits on its own.
+
+        ReadFile on hOutRead does not return EOF just because every process
+        attached to the console exited -- conhost only flushes the final
+        frame and closes the pipe once ClosePseudoConsole is called (kill()
+        already relied on this, see its comment). kill() only calls it on an
+        explicit tab-close, so a natural exit (typing `exit`/`/exit`, a
+        crash) left the reader parked in ReadFile forever and the
+        close-on-exit timer in _Terminal never fired. Waiting on the process
+        handle here closes the pseudoconsole as soon as it exits, for either
+        exit path.
+        """
+        h = self._hProcess
+        if h is None:
+            return
+        try:
+            _k32.WaitForSingleObject(h, _INFINITE)
+        except Exception:
+            return
+        self._close_pc()
+
+    def _close_pc(self):
+        with self._pc_lock:
+            if self._hPC is not None:
+                _k32.ClosePseudoConsole(self._hPC)
+                self._hPC = None
 
     def read(self, on_data):
         """Blocking reader loop; calls on_data(bytes) until EOF. Run on a daemon thread."""
@@ -287,10 +322,9 @@ class _Pty:
             return
         self._alive = False
         # ClosePseudoConsole emits a final frame to hOutRead; the reader drains it
-        # then sees EOF. Order matters -- see plan's ConPTY pitfalls.
-        if self._hPC is not None:
-            _k32.ClosePseudoConsole(self._hPC)
-            self._hPC = None
+        # then sees EOF. Order matters -- see plan's ConPTY pitfalls. Routed
+        # through _close_pc() so this can't race the exit watcher double-closing.
+        self._close_pc()
         if self._hProcess is not None:
             _k32.TerminateProcess(self._hProcess, 0)
         self._close_handles()
