@@ -10,7 +10,7 @@ import ctypes
 import re
 
 from . import ghostty_vt as gvt
-from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, XTERM256_RGB
+from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, ITALIC, UNDERLINE, XTERM256_RGB
 from .screen import BLANK
 
 
@@ -37,6 +37,14 @@ def _color_id(result, rgb):
     if result != gvt.SUCCESS:
         return 0
     return quantize256(rgb.r, rgb.g, rgb.b) + 1
+
+
+_CURSOR_SHAPE_NAMES = {
+    gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_BAR: "bar",
+    gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK: "block",
+    gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE: "underline",
+    gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: "hollow",
+}
 
 
 class GhosttyParser:
@@ -226,6 +234,12 @@ class GhosttyParser:
             flags |= REVERSE
         if style.faint:
             flags |= FAINT
+        if style.italic:
+            flags |= ITALIC
+        if style.underline:
+            # underline is a style enum (none/single/double/curly/...), not a
+            # bool; any non-zero value means "draw some underline".
+            flags |= UNDERLINE
         return flags
 
     def _finish_cell(self, text, fg, bg, flags):
@@ -355,6 +369,12 @@ class GhosttyParser:
         # cell around the screen on every redraw.
         s.cursor_visible = self._get_bool(gvt.TERMINAL_DATA_CURSOR_VISIBLE)
 
+        cursor_style = ctypes.c_int()
+        rc = self._g.render_state_get(
+            self._render_state, gvt.RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, ctypes.byref(cursor_style)
+        )
+        s.cursor_shape = _CURSOR_SHAPE_NAMES.get(cursor_style.value, "block") if rc == gvt.SUCCESS else "block"
+
         active_screen = ctypes.c_int()
         self._g.terminal_get(self._term, gvt.TERMINAL_DATA_ACTIVE_SCREEN, ctypes.byref(active_screen))
         s.alt_screen = active_screen.value == gvt.SCREEN_ALTERNATE
@@ -424,4 +444,21 @@ class GhosttyParser:
     def _sync(self):
         self._sync_grid()
         self._sync_scrollback()
+        self._sync_title()
         self.s.dirty = True
+
+    def _sync_title(self):
+        # GhosttyString is a borrowed pointer valid only until the next
+        # terminal_vt_write()/reset() -- must decode to a Python str here,
+        # inside _sync(), not hold onto the struct for later.
+        s = gvt.GhosttyString()
+        rc = self._g.terminal_get(self._term, gvt.TERMINAL_DATA_TITLE, ctypes.byref(s))
+        if rc != gvt.SUCCESS:
+            return
+        # len=0 means "no title set" per the API -- it does not distinguish
+        # "never set" from "explicitly cleared", so both map to None here.
+        self._title = ctypes.string_at(s.ptr, s.len).decode("utf-8", "replace") if s.len else None
+
+    def get_title(self):
+        """Current OSC 0/2 window title, or None if the app never set one."""
+        return getattr(self, "_title", None)

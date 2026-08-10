@@ -40,6 +40,12 @@ class Screen:
         # must not synthesize a cursor block when this is False, or it chases
         # pyte's raw last-write position around the screen on every redraw.
         self.cursor_visible = True
+        # DECSCUSR shape: "block" (default), "bar", "underline", or "hollow".
+        # Only affects the host-synthesized blank-cell cursor glyph
+        # (paint_host_cursor) -- a real character under the cursor is always
+        # shown via colour-reversal, which has no shape to swap (see
+        # render.py).
+        self.cursor_shape = "block"
         self.dirty = True
         # Last hardware cursor column while on the `>` prompt row. Used by
         # adjust_display_caret when Claude parks the cursor on the status bar
@@ -81,6 +87,7 @@ class Screen:
         self.private_modes.clear()
         self.input_caret_x = None
         self.cursor_visible = True
+        self.cursor_shape = "block"
         self.dirty = True
 
     def set_private_mode(self, mode, enable):

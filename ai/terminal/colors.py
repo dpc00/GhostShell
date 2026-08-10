@@ -48,6 +48,12 @@ ATTR_BG_MASK = 0x1FF << BG_SHIFT
 BOLD = 1 << 18
 REVERSE = 1 << 19
 FAINT = 1 << 20
+ITALIC = 1 << 21
+UNDERLINE = 1 << 22
+# Strikethrough is intentionally not tracked here: Sublime Text's
+# .sublime-color-scheme font_style has no strikethrough value (only bold,
+# italic, glow, underline, stippled_underline, squiggly_underline), so there
+# is no way to render it via scope styling.
 
 
 def pack_attr(fg=0, bg=0, flags=0):
@@ -168,7 +174,33 @@ def scope_name_for(attr):
         fg = quantize256(r // 2, g // 2, b // 2) + 1
     if fg == 0 and bg == 0:
         return None
-    return f"ai.fb.{fg}.{bg}"
+    style_id = style_id_for(attr)
+    if style_id == 0:
+        return f"ai.fb.{fg}.{bg}"
+    return f"ai.fb.{fg}.{bg}.s{style_id}"
+
+
+# Compact 3-bit style id embedded in the scope name (ai.fb.<fg>.<bg>.s<id>),
+# independent of the packed-attr bit positions so the scope stays short.
+_STYLE_BOLD, _STYLE_ITALIC, _STYLE_UNDERLINE = 1, 2, 4
+FONT_STYLE_NAMES = {_STYLE_BOLD: "bold", _STYLE_ITALIC: "italic", _STYLE_UNDERLINE: "underline"}
+
+
+def style_id_for(attr):
+    """Map packed cell attr -> compact 0..7 style id (bold|italic|underline)."""
+    style_id = 0
+    if attr & BOLD:
+        style_id |= _STYLE_BOLD
+    if attr & ITALIC:
+        style_id |= _STYLE_ITALIC
+    if attr & UNDERLINE:
+        style_id |= _STYLE_UNDERLINE
+    return style_id
+
+
+def font_style_for(style_id):
+    """Compact style id -> Sublime font_style string (e.g. 'bold italic')."""
+    return " ".join(name for bit, name in FONT_STYLE_NAMES.items() if style_id & bit)
 
 
 def rstrip_cells(cells):

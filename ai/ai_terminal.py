@@ -483,6 +483,7 @@ try:
         xterm_hex as _xterm_hex,
         HEX as _HEX,
         scope_name_for as _scope_name_for,
+        font_style_for as _font_style_for,
         rstrip_cells as _rstrip_cells,
         scheme_colors_for as _scheme_colors_for,
         ensure_contrast as _ensure_contrast,
@@ -560,6 +561,7 @@ except ImportError as _term_imp_err:
             xterm_hex as _xterm_hex,
             HEX as _HEX,
             scope_name_for as _scope_name_for,
+            font_style_for as _font_style_for,
             rstrip_cells as _rstrip_cells,
             scheme_colors_for as _scheme_colors_for,
             ensure_contrast as _ensure_contrast,
@@ -624,6 +626,14 @@ except ImportError as _term_imp_err:
 _SCHEME_LOCK = threading.Lock()
 _REGISTERED_SCOPES = set()
 _SCHEME_PATH = None  # Safely initialized inside _init_dynamic_color_scheme using sublime.packages_path()
+# ST caret colour, always visible: user must always be able to see and
+# control the cursor like in any normal editor buffer, including in
+# scrollback where there is no PTY-app cursor to double up with -- explicit
+# user requirement, overriding the older "match background = invisible"
+# design (see AiTerminalRenderCommand for the matching caret-control fix:
+# the render loop no longer auto-repositions the caret once the user has
+# moved it away from the PTY's own cursor position).
+_HOST_CARET_HEX = "#FFCC00"
 # Permanent high-contrast block for host-synthesized cursors (Grok --minimal,
 # plain shells). Must not depend on dynamic ai.fb.* registration.
 # Foreground must be LIGHT: the host cell is a full-block glyph (█) painted by
@@ -641,10 +651,13 @@ _BASE_SCHEME = {
     "globals": {
         "background": "#000000",
         "foreground": "#FFFFFF",
-        # Host caret must be invisible: Claude/ratatui draw the cursor with
-        # reverse fg/bg on a cell. A visible ST caret is a second cursor and
-        # looks like an off-by-one (Terminus keeps the host caret hidden).
-        "caret": "#000000",
+        # Always-visible ST caret, by explicit user request: they need to
+        # see and control the cursor like in any normal editor buffer,
+        # including in scrollback where there is no PTY-app cursor to
+        # double up with. Previously matched background (invisible) to
+        # avoid looking doubled next to the PTY app's own reverse-video
+        # cursor at the live typing position -- that tradeoff was rejected.
+        "caret": _HOST_CARET_HEX,
         "selection": "#444444",
         "line_highlight": "#0a0a0a",
         "gutter": "#000000",
@@ -692,10 +705,15 @@ def _ensure_host_cursor_rule(scheme_data):
     return True
 
 
-def _make_fb_rule(fg, bg):
+def _make_fb_rule(fg, bg, style_id=0):
     """Build one ai.fb.* colour-scheme rule with readable contrast."""
     fh, bh = _scheme_colors_for(fg, bg)
-    return {"scope": f"ai.fb.{fg}.{bg}", "background": bh, "foreground": fh}
+    scope = f"ai.fb.{fg}.{bg}" if not style_id else f"ai.fb.{fg}.{bg}.s{style_id}"
+    rule = {"scope": scope, "background": bh, "foreground": fh}
+    font_style = _font_style_for(style_id) if style_id else ""
+    if font_style:
+        rule["font_style"] = font_style
+    return rule
 
 
 def _repair_scheme_rules(scheme_data):
@@ -765,13 +783,15 @@ def _init_dynamic_color_scheme():
                         if "scope" in r:
                             _REGISTERED_SCOPES.add(r["scope"])
                 dirty = False
-                # Keep host caret invisible even on schemes written before this rule.
+                # Repair a stale invisible caret from schemes written before
+                # this was made always-visible (caret used to be forced to
+                # match background).
                 g = data.setdefault("globals", {})
                 bg = g.get("background", "#000000")
-                if g.get("caret") != bg:
-                    g["caret"] = bg
+                if g.get("caret") in (None, bg):
+                    g["caret"] = _HOST_CARET_HEX
                     dirty = True
-                    _color_scheme_log(f"[init] Forced host caret invisible (matched bg {bg}).")
+                    _color_scheme_log(f"[init] Repaired invisible host caret -> {_HOST_CARET_HEX}.")
                 if _ensure_host_cursor_rule(data):
                     dirty = True
                     _color_scheme_log("[init] Ensured ai.terminal.host_cursor rule.")
@@ -952,10 +972,10 @@ def _ensure_scopes_hydrated_from_disk():
         )
 
 
-def _register_scope_async(fg, bg):
+def _register_scope_async(fg, bg, style_id=0):
     global _WRITE_PENDING
-    scope = f"ai.fb.{fg}.{bg}"
-    
+    scope = f"ai.fb.{fg}.{bg}" if not style_id else f"ai.fb.{fg}.{bg}.s{style_id}"
+
     with _SCHEME_LOCK:
         _ensure_scopes_hydrated_from_disk()
         if scope in _REGISTERED_SCOPES:
@@ -966,7 +986,7 @@ def _register_scope_async(fg, bg):
             f"(Memory registered count: {len(_REGISTERED_SCOPES)})"
         )
         # Always set fg+bg with minimum contrast (ST bg-only rules hide text).
-        _PENDING_RULES.append(_make_fb_rule(fg, bg))
+        _PENDING_RULES.append(_make_fb_rule(fg, bg, style_id))
         
         if _WRITE_PENDING:
             return
@@ -1023,10 +1043,9 @@ def _flush_pending_rules():
         if sc:
             by_scope[sc] = r
     scheme_data["rules"] = list(by_scope.values())
-    # Keep host caret invisible
+    # Always-visible caret (see _HOST_CARET_HEX).
     g = scheme_data.setdefault("globals", {})
-    bg = g.get("background", "#000000")
-    g["caret"] = bg
+    g["caret"] = _HOST_CARET_HEX
     _ensure_host_cursor_rule(scheme_data)
     n_fix = _repair_scheme_rules(scheme_data)
     if n_fix:
@@ -1057,15 +1076,16 @@ def _scope_for(attr):
     scope = _pure_scope(attr)
     if scope is None:
         return None
-    # Register dynamic scheme rule if needed (ai.fb.<fg>.<bg>).
+    # Register dynamic scheme rule if needed (ai.fb.<fg>.<bg>[.s<style_id>]).
     try:
-        # "ai.fb.1.16" -> fg=1, bg=16
+        # "ai.fb.1.16" -> fg=1, bg=16; "ai.fb.1.16.s3" -> style_id=3 (bold+italic)
         parts = scope.split(".")
         fg, bg = int(parts[2]), int(parts[3])
+        style_id = int(parts[4][1:]) if len(parts) > 4 else 0
     except (IndexError, ValueError):
         return scope
     if scope not in _REGISTERED_SCOPES:
-        _register_scope_async(fg, bg)
+        _register_scope_async(fg, bg, style_id)
     return scope
 
 
@@ -1184,6 +1204,25 @@ def _pin_viewport_enabled(term):
     return True
 
 
+def _osc_title_enabled(term):
+    """Whether OSC 0/2 title changes (ssh, vim, npm scripts, ...) should
+    rename the ST tab. Defaults to False: existing profile-name-based tab
+    titling is relied upon and must not change unless opted into, per-profile
+    ("osc_title_updates_tab": true) or globally via the same settings key.
+    """
+    s = _settings or sublime.load_settings(_SETTINGS_NAME)
+    if term is not None:
+        profiles = _all_profiles(s)
+        profile = (
+            profiles.get(term.profile_name)
+            if isinstance(profiles, dict) and term.profile_name
+            else None
+        )
+        if isinstance(profile, dict) and "osc_title_updates_tab" in profile:
+            return bool(profile["osc_title_updates_tab"])
+    return bool(s.get("osc_title_updates_tab", False))
+
+
 def _wheel_to_pty_enabled(term):
     """Whether mouse-wheel scroll_lines/scroll_horizontally should be
     swallowed and forwarded to the PTY. Defaults to the profile's
@@ -1209,13 +1248,15 @@ def _wheel_to_pty_enabled(term):
 
 
 def _home_end_native_enabled(term):
-    """Whether Home/End/PageUp/PageDown should go to native ST navigation
-    instead of the PTY. Defaults to False -- most profiles run interactive
-    readline-style apps (Claude, Codex, shells) that need these keys to
-    reach the PTY and move the app's own input-line cursor. Only scrollback-
-    viewer profiles with no real line-editing (e.g. "Pybackup Go TUI", which
-    is keyboard-only aside from these) should opt in with
-    "home_end_native": true.
+    """Whether Home/End should go to native ST navigation instead of the PTY
+    (PageUp/PageDown have their own always-on native-scroll path above this
+    function's call site and normally never reach here -- see the
+    _tui_like() check in AiTerminalKeypressCommand.run). Defaults to False --
+    most profiles run interactive readline-style apps (Claude, Codex, shells)
+    that need these keys to reach the PTY and move the app's own input-line
+    cursor. Only scrollback-viewer profiles with no real line-editing (e.g.
+    "Pybackup Go TUI", which is keyboard-only aside from these) should opt in
+    with "home_end_native": true.
 
     Deliberately NOT tied to wheel_to_pty/mouse_handling: those default to
     False globally for an unrelated reason (avoiding a click/mouse-tracking
@@ -1984,6 +2025,9 @@ class _Terminal:
         self._last_rows = screen.rows
         self._spawn_env = spawn_env or {}
         self.profile_name = profile_name
+        # Last OSC 0/2 title applied to the ST tab (osc_title_updates_tab
+        # setting). None means "no app-set title" (never set, or cleared).
+        self._applied_osc_title = None
         # Auto-follow model (Terminus-style): scroll to the bottom to show new
         # Claude output whenever _auto_follow is True. It starts True, flips
         # False when the user scrolls up to read scrollback (detected in the
@@ -2490,9 +2534,11 @@ def _terminal_view(window, name=None):
     # nonzero margin shows up as a horizontal scrollbar. Terminals don't need
     # text padding anyway. See _measure for the width calc.
     v.settings().set("margin", 0)
-    # Host caret OFF — the TUI paints the cursor via reverse video (SGR 7).
-    # Never enable block_caret here; a visible ST caret doubles the TUI cursor
-    # and reads as wrong position / off-by-one. Terminus does the same.
+    # Thin bar caret, not block: the ST caret is always visible now (see
+    # _HOST_CARET_HEX) and under the user's own control, same as editing any
+    # normal document -- a thin bar reads as a normal editing caret rather
+    # than competing visually with the synthesized/reverse-video TUI cursor
+    # glyph at the PTY's own live position.
     v.settings().set("block_caret", False)
     v.settings().set("caret_extra_width", 0)
     try:
@@ -2774,6 +2820,24 @@ def _arm_st_select_guard(term, seconds=1.25):
         term._st_select_guard_until = until
 
 
+def _maybe_apply_osc_title(term):
+    """Rename the ST tab to the app's OSC 0/2 title, if opted in.
+
+    Runs every render tick (main thread, already-throttled by
+    _schedule_render) rather than per PTY chunk on the reader thread --
+    view.set_name() is main-thread-only Sublime API.
+    """
+    get_title = getattr(term.parser, "get_title", None)
+    if get_title is None:
+        return
+    title = get_title()
+    if title == term._applied_osc_title:
+        return
+    term._applied_osc_title = title
+    if title and _osc_title_enabled(term):
+        term.view.set_name(title)
+
+
 def _do_render(term):
     view = term.view
     if not view or not view.is_valid():
@@ -2785,6 +2849,7 @@ def _do_render(term):
         sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
         return  # leave _render_pending True so _schedule_render doesn't double-arm
     term._render_pending = False
+    _maybe_apply_osc_title(term)
     if not term.screen.dirty:
         return
     # Host cursor: ST caret stays invisible when the app paints reverse-video
@@ -2801,7 +2866,7 @@ def _do_render(term):
         term.screen.dirty = False
     plain_sig = _plain_cells_signature(rows)
     if term.screen.cursor_visible:
-        rows, _host_painted = _paint_host_cursor(rows, cy, cx)
+        rows, _host_painted = _paint_host_cursor(rows, cy, cx, shape=term.screen.cursor_shape)
     else:
         # App hid the real cursor (DECTCEM off, ESC[?25l) -- fullscreen TUIs
         # (Textual, ratatui, curses) do this and draw their own focus/
@@ -3521,10 +3586,16 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
         if command_name == "paste":  # Ctrl+V -> forward clipboard
             text = sublime.get_clipboard()
             if text:
-                # Wrap in bracketed-paste markers so the TUI inserts the whole
-                # block as one paste event; without them each newline becomes
-                # an Enter and a multi-line paste auto-submits on the first line.
-                term.send_string("\x1b[200~" + text + "\x1b[201~")
+                # Only wrap in bracketed-paste markers when the running
+                # program actually opted in (DECSET ?2004h). Wrapping
+                # unconditionally sends literal "~200~"/"~201~" garbage into
+                # anything that never asked for it -- cmd.exe, PowerShell, a
+                # plain REPL. When the mode IS on, the wrapper still matters:
+                # it makes a multi-line paste land as one paste event instead
+                # of each newline acting as Enter (auto-submitting early).
+                if 2004 in term.screen.private_modes:
+                    text = "\x1b[200~" + text + "\x1b[201~"
+                term.send_string(text)
             return ("ai_terminal_noop", {})
         # ── Xterm mouse tracking (Grok / fullscreen TUIs) ──────────────────
         # Apps enable via CSI ?1000/1002/1003 h (+ usually ?1006 h SGR).
@@ -4623,6 +4694,45 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             if any(not s.empty() for s in self.view.sel()):
                 self.view.run_command("copy" if key == "c" else "cut")
                 return
+        # Shift+Arrow always extends the ST selection natively -- never
+        # forwarded to the PTY, unconditionally (including while positioned
+        # over the live command line). Plain arrows (no shift) are untouched
+        # below and keep going to the PTY so editing a typed command still
+        # works. Terminus itself never had this (it forwarded shift+arrow to
+        # the PTY too, relying on mouse-drag as the only way to select) --
+        # this is a deliberate improvement over that, not parity with it.
+        # Trade-off: a fullscreen TUI that binds its own meaning to
+        # shift+arrow (e.g. a text widget's own select mode) will not see it
+        # anymore -- unconditional per explicit request rather than gated on
+        # _tui_like().
+        if not alt and not ctrl and shift and key in ("left", "right", "up", "down"):
+            by = "characters" if key in ("left", "right") else "lines"
+            self.view.run_command(
+                "move", {"by": by, "forward": key in ("right", "down"), "extend": True}
+            )
+            return
+        # Ctrl+Shift+Home/End always extends the ST selection to the start/
+        # end of the buffer natively -- same unconditional treatment as
+        # Shift+Arrow above, for the same reason (selecting must always
+        # work). Plain Home/End and Shift+Home/Shift+End (no Ctrl) are NOT
+        # covered here -- those still default to reaching the PTY (see
+        # _home_end_native_enabled below) since a readline-style CLI has a
+        # real use for them (jump to start/end of the typed command).
+        if not alt and ctrl and shift and key in ("home", "end"):
+            self.view.run_command(
+                "move_to", {"to": "bof" if key == "home" else "eof", "extend": True}
+            )
+            return
+        # PageUp/PageDown: scroll ST's real scrollback like an ordinary
+        # terminal emulator (same motion as dragging the minimap) -- unlike
+        # Home/End, no primary-screen readline-style CLI has a legitimate use
+        # for PageUp/PageDown reaching its own input line, so this is correct
+        # default behavior, not an opt-in. The one exception is a fullscreen
+        # alt-screen app (vim, less, htop) that owns its own pagination and
+        # must receive the raw sequence instead of having ST steal it.
+        if not alt and key in ("pageup", "pagedown") and not _tui_like(term):
+            self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
+            return
         # Profiles that explicitly opt in (real scrollback, no line-editing,
         # e.g. gotui) get native ST paging/navigation for these keys instead
         # of the raw key code going to the PTY. Everyone else forwards to
@@ -4839,10 +4949,20 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # the block highlight and the next keystroke stays in place.
         pad = _HOST_SCROLL_PAD_LINES
         sel = view.sel()
-        # Never clobber an active ST text selection (copy/cut). Streaming
-        # response paints used to sel.clear() every frame and kill drags
-        # outside quiet regions (thinking blocks).
-        keep_selection = any(not s.empty() for s in sel)
+        # User cursor control is the default: the render loop only auto-
+        # positions the caret at the PTY's cursor (cursor_offset/cursor) the
+        # very first frame, or on any later frame where the live caret still
+        # sits exactly where WE last put it. The moment the user moves the
+        # caret away by any means (click, shift-select, native ST nav), it
+        # is treated as user-owned and never auto-repositioned again -- a
+        # CLI's own idea of where the cursor belongs must never override
+        # what the user actually did. This also covers the pre-existing
+        # active-selection case (a real selection can never equal our
+        # single collapsed auto-caret region, so it always reads as
+        # user-owned).
+        cur_regions = [(s.a, s.b) for s in sel]
+        last_auto = getattr(term, "_last_auto_caret_pos", None) if term is not None else None
+        keep_selection = last_auto is not None and cur_regions != [(last_auto, last_auto)]
         if keep_selection:
             if tui_owns_scroll:
                 _pin_viewport_rest(view, rest, term)
@@ -4854,6 +4974,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             pos = min(int(cursor_offset), view.size())
             sel.clear()
             sel.add(sublime.Region(pos, pos))
+            if term is not None:
+                term._last_auto_caret_pos = pos
             if tui_owns_scroll:
                 _pin_viewport_rest(view, rest, term)
             elif do_follow and not content_fits:
@@ -4868,6 +4990,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             pos = min(line_start + int(cursor[1]), line_end)
             sel.clear()
             sel.add(sublime.Region(pos, pos))
+            if term is not None:
+                term._last_auto_caret_pos = pos
             if tui_owns_scroll:
                 _pin_viewport_rest(view, rest, term)
             elif do_follow and not content_fits:
@@ -4882,6 +5006,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                 pt = view.text_point(last_real, 0)
                 sel.clear()
                 sel.add(sublime.Region(pt, pt))
+                if term is not None:
+                    term._last_auto_caret_pos = pt
                 if do_follow and not content_fits:
                     _scroll_to_bottom(view)
                     if term is not None:

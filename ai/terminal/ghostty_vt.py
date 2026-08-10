@@ -47,6 +47,15 @@ class GhosttyBuffer(ctypes.Structure):
     ]
 
 
+class GhosttyString(ctypes.Structure):
+    """Borrowed byte string (pointer + length); not caller-provided like
+    GhosttyBuffer. Valid only until the next terminal_vt_write()/reset()."""
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
 # ---- color.h / style.h ----
 
 class GhosttyColorRgb(ctypes.Structure):
@@ -158,6 +167,7 @@ TERMINAL_DATA_CURSOR_VISIBLE = 7
 TERMINAL_DATA_TOTAL_ROWS = 14
 TERMINAL_DATA_SCROLLBACK_ROWS = 15
 TERMINAL_DATA_MOUSE_TRACKING = 11
+TERMINAL_DATA_TITLE = 12  # OSC 0/2 window title (GhosttyString)
 TERMINAL_DATA_COLOR_PALETTE = 21
 TERMINAL_DATA_VIEWPORT_ACTIVE = 32
 
@@ -182,6 +192,15 @@ RENDER_STATE_DATA_COLS = 1
 RENDER_STATE_DATA_ROWS = 2
 RENDER_STATE_DATA_DIRTY = 3
 RENDER_STATE_DATA_ROW_ITERATOR = 4
+RENDER_STATE_DATA_CURSOR_VISUAL_STYLE = 10  # DECSCUSR shape (GhosttyRenderStateCursorVisualStyle)
+
+# GhosttyRenderStateCursorVisualStyle -- NOT the same as TERMINAL_DATA_CURSOR_
+# STYLE (=10 on the *terminal* enum, data id 10 there means the SGR text
+# style applied to newly-typed characters, a different thing entirely).
+RENDER_STATE_CURSOR_VISUAL_STYLE_BAR = 0
+RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK = 1
+RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE = 2
+RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW = 3
 
 RENDER_STATE_DIRTY_FALSE = 0
 RENDER_STATE_DIRTY_PARTIAL = 1

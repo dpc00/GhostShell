@@ -24,23 +24,36 @@ def cell_needs_host_cursor(rows, cy, cx):
     return not bool(attr & REVERSE)
 
 
-# Full block glyph (display-only, never sent to the PTY).
+# Blank-cell cursor glyphs (display-only, never sent to the PTY), keyed by
+# Screen.cursor_shape (DECSCUSR, via GhosttyRenderStateCursorVisualStyle).
 # Bright-white-on-black attr: ST often drops region *fill* and keeps only
-# foreground. Reverse-default is black-on-white → black █ on black terminal
-# when fill is dropped = invisible. White █ stays visible without fill.
-_HOST_CURSOR_GLYPH = "\u2588"  # █
+# foreground. Reverse-default is black-on-white → black glyph on black
+# terminal when fill is dropped = invisible. White glyph stays visible
+# without fill.
+# Mid-line (on a real character) has no shape to swap -- there is only one
+# glyph per cell in a monospace text buffer, so a bar/underline cursor there
+# would either hide the character or require a second column. That case
+# always uses colour-reversal instead, regardless of shape (see below).
+_HOST_CURSOR_GLYPHS = {
+    "block": "\u2588",      # █ full block
+    "bar": "\u258f",        # ▏ left one eighth block
+    "underline": "\u2581", # ▁ lower one eighth block
+    "hollow": "\u25af",    # ▯ white vertical rectangle
+}
 _HOST_CURSOR_ATTR = pack_attr(fg=16, bg=1)  # → ai.fb.16.1 white on near-black
 
 
-def paint_host_cursor(rows, cy, cx):
+def paint_host_cursor(rows, cy, cx, shape="block"):
     """Ensure a visible cursor cell when the app did not SGR-reverse it.
 
     ST host caret is invisible (matches bg) so Claude/ratatui reverse-video is
     not doubled. Apps that never reverse the cursor cell need a host paint:
 
-    - Blank / EOL insertion point → white █ (visible even if region fill drops).
-    - Mid-line on a real glyph → keep the character, OR REVERSE (do not replace
-      with █). Without this, left/right onto typed text has zero visible cursor.
+    - Blank / EOL insertion point → shaped glyph per DECSCUSR (block/bar/
+      underline/hollow), visible even if region fill drops.
+    - Mid-line on a real glyph → keep the character, OR REVERSE (do not
+      replace it) -- shape does not apply here, see module comment above.
+      Without this, left/right onto typed text has zero visible cursor.
 
     Display-only overlay; never written back to the Screen grid.
 
@@ -60,10 +73,11 @@ def paint_host_cursor(rows, cy, cx):
         rows[cy] = row
         return rows, False
     if not ch or ch in (" ", "\u00a0"):
-        # EOL / blank insertion point — white block glyph path.
-        row[cx] = (_HOST_CURSOR_GLYPH, _HOST_CURSOR_ATTR)
+        # EOL / blank insertion point — shaped glyph path.
+        glyph = _HOST_CURSOR_GLYPHS.get(shape, _HOST_CURSOR_GLYPHS["block"])
+        row[cx] = (glyph, _HOST_CURSOR_ATTR)
     else:
-        # Mid-line — invert the real character (do not replace with █).
+        # Mid-line — invert the real character (do not replace with a glyph).
         row[cx] = (ch, attr | REVERSE)
     rows[cy] = row
     return rows, True
