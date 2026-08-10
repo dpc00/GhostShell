@@ -1260,6 +1260,28 @@ def _force_main_screen(profile_name=None):
     return bool(s.get("force_main_screen", True))
 
 
+# Seconds a dead tab's final output stays visible before auto-close. Long
+# enough to read a one-line error ("file not found", "[process exited]"),
+# short enough that a normal `exit` in a shell profile still feels immediate.
+_CLOSE_TAB_ON_EXIT_DELAY = 1.5
+
+
+def _close_tab_on_exit(profile_name=None):
+    """Whether a terminal tab should close itself when its PTY process ends
+    (crash, clean exit, or the user typing `exit`). Default true: a dead tab
+    that lingers with no process behind it isn't a normal terminal-app
+    experience. A profile may set ``"close_tab_on_exit": false`` to opt out
+    (e.g. a profile you want to keep open to read a crash/update message).
+    """
+    s = _settings or sublime.load_settings(_SETTINGS_NAME)
+    if profile_name:
+        profiles = _all_profiles(s)
+        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
+        if isinstance(profile, dict) and "close_tab_on_exit" in profile:
+            return bool(profile["close_tab_on_exit"])
+    return bool(s.get("close_tab_on_exit", True))
+
+
 def _make_parser(screen, force_main_screen):
     """libghostty-vt is the sole VT engine. See ai/terminal/ghostty_engine.py."""
     return _GhosttyParser(screen, force_main_screen=force_main_screen)
@@ -2082,6 +2104,24 @@ class _Terminal:
             print(f"[ai_terminal] reader error: {e}")
         finally:
             sublime.set_timeout(lambda: _vwrite(self.view, "\n[process exited]\n"), 0)
+            # _close_tab_on_exit() reads Settings (via _all_profiles), which is
+            # main-thread-only in the Sublime API -- this finally block still
+            # runs on the PTY reader thread, so the check itself must be
+            # deferred through set_timeout, not just the close that follows it.
+            sublime.set_timeout(self._maybe_close_dead_view, 0)
+
+    def _maybe_close_dead_view(self):
+        if _close_tab_on_exit(self.profile_name):
+            sublime.set_timeout(
+                self._close_dead_view, int(_CLOSE_TAB_ON_EXIT_DELAY * 1000)
+            )
+
+    def _close_dead_view(self):
+        # The user may have already closed this tab by hand in the interim;
+        # is_valid() guards against double-closing (or closing a view ID ST
+        # has since recycled for something unrelated).
+        if self.view.is_valid():
+            self.view.close()
 
     def _on_data(self, data):
         if _DEBUG:

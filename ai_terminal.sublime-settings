@@ -17,6 +17,12 @@
     ],
     // The default profile to run if no profile name is explicitly requested
     "default_profile": "OpenCode →⇢⇨ Ollama",
+    // Close a terminal tab automatically ~1.5s after its process exits
+    // (crash, clean quit, or the user typing `exit`) -- a dead tab that just
+    // sits there isn't normal terminal-app behavior. Default true. A profile
+    // can set "close_tab_on_exit": false to keep a tab open after exit (e.g.
+    // to read a final error/update message at leisure).
+    "close_tab_on_exit": true,
     // Mouse drag vs text selection when a TUI enables xterm mouse tracking:
     //   true  = mouse-first: plain drag → PTY (Grok scrollbar/UI); Shift/Ctrl-drag → ST select
     //   false = copy-first: drags → ST select (copy between agent tabs). Short *taps* and
