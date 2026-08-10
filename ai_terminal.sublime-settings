@@ -80,6 +80,13 @@
     // or trailing blank PTY rows can hide real content on scroll-to-bottom
     // (confirmed: broke Claude Code's TUI after typing).
     "min_rows": 1,
+    // Rename the ST tab to the app's OSC 0/2 window title (ssh, vim, npm
+    // scripts, etc. all set one). Default false: the existing profile-name-
+    // based tab titling is relied upon and must not change unless opted in.
+    // A profile can set "osc_title_updates_tab": true to opt in individually
+    // instead of flipping this globally. Live: takes effect on the next
+    // title change, no reload needed.
+    "osc_title_updates_tab": false,
     // Every configured profile is eligible when its launch executable exists.
     // ai_terminal learns current quota state from real terminal output and grays
     // a profile after a provider reports exhaustion. It never probes a provider,
