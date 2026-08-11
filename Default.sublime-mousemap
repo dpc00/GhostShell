@@ -1,27 +1,19 @@
 [
-	// ai_terminal: click-to-toggle copy mode. press_command stays plain
-	// drag_select (click/double/triple-click selection unaffected); command
-	// runs after the click has already moved the ST caret and just reads
-	// where it landed to flip AiTerminalClickCommand's copy-mode decision.
-	// See ai/ai_terminal.py AiTerminalClickCommand / _live_cursor_row.
 	{
 		"button": "button1", "count": 1,
 		"press_command": "drag_select",
-		"command": "ai_terminal_click",
 		"context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]
 	},
 	{
 		"button": "button1", "count": 2,
 		"press_command": "drag_select",
 		"press_args": {"by": "words"},
-		"command": "ai_terminal_click",
 		"context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]
 	},
 	{
 		"button": "button1", "count": 3,
 		"press_command": "drag_select",
 		"press_args": {"by": "lines"},
-		"command": "ai_terminal_click",
 		"context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]
 	}
 ]
