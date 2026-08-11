@@ -99,6 +99,9 @@
             // C:\Users\donal\AppData\Local\agy\bin\agy.exe -- not on PATH
             // until the shell that launches ST is restarted, so use the
             // full path (same reasoning as the Junie profile below).
+            // Mouse tracking: never enables DEC ?1000/1002/1003 (checked all
+            // 5 recorded asciicast sessions, 2026-08-11) -- no PTY-side
+            // receiver for a forwarded click; mouse_handling would be a no-op.
             "launch_command": [
                 "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
             ],
@@ -117,6 +120,10 @@
             "spawn_env": {}
         },
         "Claude": {
+            // Mouse tracking: only ever sends the disable form (?1000/1002/
+            // 1003l) at startup, never enables -- confirmed across 100+
+            // recorded asciicast sessions (2026-08-11). No PTY-side receiver
+            // for a forwarded click.
             "launch_command": [
                 "claude"
             ],
@@ -182,6 +189,8 @@
             }
         },
         "Codex": {
+            // Mouse tracking: never enables DEC ?1000/1002/1003 (34 recorded
+            // asciicast sessions checked, 2026-08-11).
             "launch_command": [
                 "codex"
             ],
@@ -226,6 +235,9 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             },
+            // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
+            // SGR coords; no bare 1000) -- confirmed across 32+ recorded
+            // asciicast sessions (2026-08-11).
             // gotui streams real scrollback (log lines via tea.Println)
             // instead of owning its own scroll/click region, and this host
             // can't tell gotui's clickable footer rows apart from plain log
@@ -242,6 +254,9 @@
             "force_main_screen": false
         },
         "Gemini": {
+            // Mouse tracking: only ever sends the disable form (?1002/1006l),
+            // never enables -- confirmed across 7 recorded asciicast sessions
+            // (2026-08-11). No PTY-side receiver for a forwarded click.
             "launch_command": [
                 "gemini.cmd"
             ],
@@ -252,6 +267,11 @@
             }
         },
         "Grok Build": {
+            // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords,
+            // combined-param DECSET form) -- confirmed across 56+ recorded
+            // asciicast sessions (2026-08-11). Real PTY-side receiver exists;
+            // this is the profile mouse_handling's click/tap-to-PTY path
+            // (_route_mouse_click) targets (Grok trust dialog / buttons).
             "launch_command": [
                 "grok"
             ],
@@ -263,6 +283,8 @@
             // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
             // in the project cwd — not the PyCharm plugin panel. Prefer full
             // path so a long-lived ST process still finds the shim.
+            // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
+            // asciicast sessions checked, 2026-08-11).
             "launch_command": [
                 "C:\\Users\\donal\\.local\\bin\\junie.bat"
             ],
@@ -271,6 +293,8 @@
             }
         },
         "jcode": {
+            // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords)
+            // -- confirmed across 18+ recorded asciicast sessions (2026-08-11).
             "launch_command": [
                 "jcode"
             ],
@@ -280,6 +304,8 @@
             }
         },
         "Kimi": {
+            // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
+            // asciicast sessions checked, 2026-08-11).
             "launch_command": [
                 "kimi"
             ],
@@ -289,6 +315,8 @@
             }
         },
         "Kiro": {
+            // Mouse tracking: never enables DEC ?1000/1002/1003 (9 recorded
+            // asciicast sessions checked, 2026-08-11).
             "launch_command": [
                 "kiro-cli"
             ],
@@ -298,6 +326,9 @@
             }
         },
         "Mimo": {
+            // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
+            // any-motion, SGR coords) -- confirmed across recorded asciicast
+            // sessions (2026-08-11).
             "launch_command": [
                 "mimo"
             ],
@@ -307,6 +338,10 @@
             }
         },
         "OpenCode": {
+            // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
+            // any-motion, SGR coords) -- confirmed across 14+ recorded
+            // asciicast sessions (2026-08-11). Same for the --mini and
+            // →⇢⇨ Ollama variants below (same binary).
             "launch_command": [
                 "opencode",
             ],
@@ -375,6 +410,10 @@
             "spawn_env": {}
         },
         "Qwen": {
+            // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
+            // SGR coords; no bare 1000) -- confirmed across 25+ recorded
+            // asciicast sessions (2026-08-11). Same for the →⇢⇨ Ollama
+            // variant below (same binary).
             "launch_command": [
                 "qwen"
             ],
@@ -413,6 +452,9 @@
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
                 "LOG_LEVEL":"DEBUG"
             },
+            // Mouse tracking: enables ?1000/1003/1006h (click + any-motion,
+            // SGR coords; no 1002) -- confirmed across 17+ recorded asciicast
+            // sessions (2026-08-11).
             // Vibe (Textual) manages its own scroll region and never emits a
             // real ANSI scroll, so the history deque stays empty and PageUp/
             // PageDown reach nothing -- mouse wheel is the only way to see

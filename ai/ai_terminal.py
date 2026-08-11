@@ -531,6 +531,9 @@ try:
     from .terminal.caret import (
         adjust_display_caret as _adjust_display_caret,
         pad_row_for_caret as _pad_row_for_caret,
+        find_prompt_row as _find_prompt_row,
+        input_start_col as _input_start_col,
+        field_right_limit as _field_right_limit,
     )
     from .terminal.mouse import (
         BTN_RELEASE_X10 as _BTN_RELEASE_X10,
@@ -609,6 +612,9 @@ except ImportError as _term_imp_err:
         from ai.terminal.caret import (
             adjust_display_caret as _adjust_display_caret,
             pad_row_for_caret as _pad_row_for_caret,
+            find_prompt_row as _find_prompt_row,
+            input_start_col as _input_start_col,
+            field_right_limit as _field_right_limit,
         )
         from ai.terminal.mouse import (
             BTN_RELEASE_X10 as _BTN_RELEASE_X10,
@@ -2027,6 +2033,21 @@ class _Terminal:
         # True, plain navigation keys move the ST caret instead of reaching
         # the PTY. See AiTerminalKeypressCommand.run for the routing.
         self.copy_mode = False
+        # True once the user has moved the ST caret away from the PTY's own
+        # cursor by a real gesture (click, native ST nav) -- see
+        # AiTerminalViewListener.on_selection_modified. The render loop then
+        # stops auto-repositioning the caret until this clears again (re-
+        # entering the app's drawn command-line box). Deliberately NOT
+        # derived by diffing the caret's absolute buffer offset against the
+        # last position we placed it at: a full-buffer view.replace() (the
+        # common, non fast-caret render path) collapses/shifts old regions
+        # in ways unrelated to user intent, which falsely latched this
+        # forever on the very first such frame (caret would freeze while
+        # text kept flowing in). _in_render below suppresses selection
+        # events that fire from our own edits so only genuine user-driven
+        # moves flip this.
+        self._user_owns_caret = False
+        self._in_render = False
         self._spawn_env = spawn_env or {}
         self.profile_name = profile_name
         # Last OSC 0/2 title applied to the ST tab (osc_title_updates_tab
@@ -3047,6 +3068,47 @@ def _debug_log(data):
         pass
 
 
+_BOX_BORDER_CHARS = set("─╭╮╰╯")
+
+
+def _command_line_row_range(term):
+    """Screen-row span (top_border, bottom_border) of the box the PTY cursor
+    currently sits inside, or None if the cursor isn't inside a drawn box.
+
+    Ink-style TUIs (Claude Code, OpenCode, ...) frame their live input with a
+    box-drawing border above and below it -- that's a reliable, app-agnostic
+    signal for "this is the command line" vs. plain scrollback/response text.
+    Plain shells (cmd.exe, PowerShell, bash) never draw such a box, so this
+    returns None for them and callers must leave copy_mode untouched.
+    """
+    try:
+        with term._lock:
+            rows, cy, cx = term.screen.render_cells()
+    except Exception:
+        return None
+    n = len(rows)
+    if not (0 <= cy < n):
+        return None
+
+    def is_border_row(idx):
+        chars = [c for c, _a in rows[idx] if c and c != " "]
+        return len(chars) >= 3 and all(ch in _BOX_BORDER_CHARS for ch in chars)
+
+    top = None
+    for r in range(cy, max(cy - 30, -1) - 1, -1):
+        if is_border_row(r):
+            top = r
+            break
+    bottom = None
+    for r in range(cy, min(cy + 30, n - 1) + 1):
+        if is_border_row(r):
+            bottom = r
+            break
+    if top is None or bottom is None or top == bottom:
+        return None
+    return (top, bottom)
+
+
 # ─── view event listener: keystroke forwarding + lifecycle ───────────────────
 
 
@@ -3152,6 +3214,62 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
                 # lone \n to \r would NOT submit (verified) -- so send \n as-is.
                 term.send_string(chars)
 
+    def on_selection_modified(self):
+        # term._user_owns_caret tells the render loop (AiTerminalRenderCommand)
+        # whether the user has taken manual control of the caret, so it stops
+        # fighting a position the user just placed. Planting the caret back
+        # inside the app's drawn input box (bounded by box-drawing borders,
+        # see _command_line_row_range) hands control back to the PTY cursor.
+        #
+        # Deliberately does NOT auto-*engage* copy_mode when the caret lands
+        # outside the box (an earlier version of this method did). Bounds
+        # detection reads the live screen grid, which is transiently wrong
+        # or absent during permission prompts and "thinking" redraws -- that
+        # false-positived copy_mode ON and silently swallowed the very
+        # keystrokes needed to dismiss the prompt. copy_mode ON must stay an
+        # explicit ctrl+alt+c action; see AiTerminalKeypressCommand's own
+        # comment on why the identical heuristic was already removed once.
+        #
+        # It IS safe to auto-*disengage* copy_mode on a click back into the
+        # box: that direction can only ever hand control back to the PTY,
+        # never trap the user, so a missed/late bounds read just means the
+        # user keeps using the manual ctrl+alt+c toggle instead.
+        view = self.view
+        term = _Terminal.from_id(view.id())
+        if term is None or not term.pty.is_alive():
+            return
+        if getattr(term, "_in_render", False):
+            # Selection changed as a side effect of our own render pass
+            # (buffer patch or auto-caret placement) -- not a user gesture.
+            return
+        sel = view.sel()
+        if len(sel) != 1:
+            return
+        pt = sel[0].b
+        bounds = _command_line_row_range(term)
+        if bounds is None:
+            term._user_owns_caret = True
+            return
+        row = view.rowcol(pt)[0]
+        if bounds[0] <= row <= bounds[1]:
+            term._user_owns_caret = False
+            # _do_render only repaints when term.screen.dirty -- i.e. on new
+            # PTY bytes. A click back into the box hands tracking back to
+            # the live PTY cursor (above), but nothing marks the screen
+            # dirty, so the caret would otherwise keep showing the click's
+            # landing spot -- stale -- until the next keystroke/output
+            # happens to trigger a frame. Force one now so it snaps to the
+            # true PTY cursor immediately.
+            term.screen.dirty = True
+            _schedule_render(term)
+            if term.copy_mode:
+                term.copy_mode = False
+                _scroll_to_bottom(view)
+                term._auto_follow = True
+                sublime.status_message("Ai terminal: command line")
+        else:
+            term._user_owns_caret = True
+
     def on_close(self):
         term = _Terminal.from_id(self.view.id())
         if term is None:
@@ -3224,6 +3342,47 @@ def _event_to_pty_cell(view, term, event):
         screen_rows=term.screen.rows,
         screen_cols=term.screen.cols,
     )
+
+
+def _route_click_to_cursor_fallback(view, term, event):
+    """Reposition the PTY's own line-editor cursor via synthesized arrow keys.
+
+    For apps with no DEC mouse-tracking receiver (Claude Code, Gemini,
+    Antigravity, Codex, Kimi, Kiro, Junie -- confirmed via asciicast scan,
+    2026-08-11: they never send CSI ?1000/1002/1003 h) a click has no PTY-side
+    mechanism to move the app's real edit cursor at all -- ST's own selection
+    moves, but the app's readline-style buffer does not, so left/right still
+    act on the old position. This fakes it: only when the hardware cursor is
+    already sitting on the live `>` prompt row (so we know screen.x is really
+    the app's cursor column, not a footer-park artifact -- see caret.py), map
+    the click column to a delta from the current column and send that many
+    Left/Right presses, exactly what a human would type to get there by hand.
+
+    Off the prompt row (find_prompt_row None) or hardware cursor parked
+    elsewhere (spinner, footer) this intentionally no-ops -- there is no
+    reliable column to diff against, so guessing would risk moving the
+    cursor to the wrong place instead of just leaving it be.
+    """
+    cell = _event_to_pty_cell(view, term, event)
+    if cell is None:
+        return False
+    col, row = cell  # 1-based
+    screen = term.screen
+    py = _find_prompt_row(screen)
+    if py is None or screen.y != py or (row - 1) != py:
+        return False
+    start = _input_start_col(screen, py)
+    limit = _field_right_limit(screen, py)
+    target = min(max(col - 1, start), limit)
+    current = int(screen.x)
+    delta = target - current
+    if delta == 0:
+        return True
+    application_mode = 1 in screen.private_modes
+    key = "right" if delta > 0 else "left"
+    code = _get_key_code(key, application_mode=application_mode)
+    term.send_string(code * abs(delta))
+    return True
 
 
 # Button-hold state for 1002/1003:
@@ -3618,14 +3777,25 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
         #           drag is off so Grok cannot steal the gesture; wheel still
         #           routes via scroll_lines. (Modifier-drag → PTY was a bad flip:
         #           it removed the only working select bypasses.)
-        if command_name == "drag_select" and not _mouse_handling_enabled(term):
-            return None
         if command_name == "drag_select":
             args = args or {}
             event = args.get("event") or {}
             modified = bool(
                 args.get("extend") or args.get("additive") or args.get("subtractive")
             )
+            multi = args.get("by") in ("words", "lines", "columns")
+            # No DEC mouse-tracking receiver for this click (mouse_handling
+            # off -- the common case, see ai_terminal.sublime-settings profile
+            # comments -- or the app never asked for tracking): fall back to
+            # synthesized arrow keys so a plain click on the live prompt still
+            # moves the app's real cursor, not just ST's own selection. Skip
+            # for modifier-drags (text selection) and multi-click (word/line
+            # select) -- those are never cursor-placement gestures.
+            tracked = _mouse_handling_enabled(term) and bool(term.screen.mouse_tracking)
+            if not modified and not multi and not tracked:
+                _route_click_to_cursor_fallback(view, term, event)
+            if not _mouse_handling_enabled(term):
+                return None
             raw = sublime.load_settings(_SETTINGS_NAME).get(
                 "drag_forwards_by_default", True
             )
@@ -3633,7 +3803,6 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
                 forward_by_default = raw.strip().lower() in ("1", "true", "yes", "on")
             else:
                 forward_by_default = bool(raw)
-            multi = args.get("by") in ("words", "lines", "columns")
             # Copy-first: ST owns *drags* (text select between agent tabs).
             # Still deliver short *taps* and multi-clicks to the PTY when the
             # app enabled mouse tracking — otherwise Grok trust dialogs /
@@ -4704,6 +4873,12 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
         if term.copy_mode:
             sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
         else:
+            # Hand caret control back to the PTY cursor -- otherwise the
+            # caret stays wherever copy-mode nav left it (outside the box)
+            # and the very next keypress's render sees term._user_owns_caret
+            # still True, freezing the caret and looking like copy mode
+            # never really turned off.
+            term._user_owns_caret = False
             _scroll_to_bottom(self.view)
             term._auto_follow = True
             sublime.status_message("Ai terminal: copy mode OFF")
@@ -4766,6 +4941,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         if term.copy_mode:
             if key == "escape" and not ctrl and not alt and not shift:
                 term.copy_mode = False
+                term._user_owns_caret = False
                 if last_auto is not None:
                     pos = min(last_auto, self.view.size())
                     sel = self.view.sel()
@@ -4971,7 +5147,19 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         ve = view.viewport_extent()
         lh = view.line_height() or 20
         term = _Terminal.from_id(view.id())
+        if term is not None:
+            # Suppresses on_selection_modified's user-gesture detection for
+            # the selection churn our own buffer patch/caret placement below
+            # causes -- see on_selection_modified for why this replaced a
+            # fragile offset comparison.
+            term._in_render = True
+        try:
+            self._run(view, edit, term, vp, ve, lh, text, cursor, cursor_offset, regions, fast_caret)
+        finally:
+            if term is not None:
+                term._in_render = False
 
+    def _run(self, view, edit, term, vp, ve, lh, text, cursor, cursor_offset, regions, fast_caret):
         # Abort buffer mutation while the user is selecting text. Even a
         # single-char patch shifts offsets and kills a drag mid-response.
         # Critical: _do_render already cleared screen.dirty before invoking us.
@@ -5045,19 +5233,12 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         pad = _HOST_SCROLL_PAD_LINES
         sel = view.sel()
         # User cursor control is the default: the render loop only auto-
-        # positions the caret at the PTY's cursor (cursor_offset/cursor) the
-        # very first frame, or on any later frame where the live caret still
-        # sits exactly where WE last put it. The moment the user moves the
-        # caret away by any means (click, shift-select, native ST nav), it
-        # is treated as user-owned and never auto-repositioned again -- a
+        # positions the caret at the PTY's cursor (cursor_offset/cursor)
+        # until term._user_owns_caret is set (by on_selection_modified,
+        # a real click/nav outside our own render pass -- see there). A
         # CLI's own idea of where the cursor belongs must never override
-        # what the user actually did. This also covers the pre-existing
-        # active-selection case (a real selection can never equal our
-        # single collapsed auto-caret region, so it always reads as
-        # user-owned).
-        cur_regions = [(s.a, s.b) for s in sel]
-        last_auto = getattr(term, "_last_auto_caret_pos", None) if term is not None else None
-        keep_selection = last_auto is not None and cur_regions != [(last_auto, last_auto)]
+        # what the user actually did.
+        keep_selection = bool(term is not None and getattr(term, "_user_owns_caret", False))
         if keep_selection:
             if tui_owns_scroll:
                 _pin_viewport_rest(view, rest, term)

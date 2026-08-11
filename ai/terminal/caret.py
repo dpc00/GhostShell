@@ -205,11 +205,24 @@ def adjust_display_caret(screen, cy, cx):
 
 
 def pad_row_for_caret(rows, cy, cx):
-    """Ensure row cy is long enough for caret column cx (after rstrip)."""
+    """Ensure row cy is long enough that index cx (the caret column) exists.
+
+    Must reach length cx + 1, not cx: cursor_text_offset() requires
+    `cx < len(row)` to resolve a text offset at all. Previously padded only
+    to length cx (one short), so whenever the app parks the hardware cursor
+    with DECTCEM off (cursor_visible False -- see _do_render, e.g. Claude
+    Code's Ink TUI, which draws its own highlight instead of a real
+    terminal cursor) paint_host_cursor's own `<= cx` padding never ran to
+    cover the gap. cursor_text_offset then saw cx >= len(row), returned
+    None, and the render loop fell back to the coarser (cursor row, col)
+    path -- whose line_end clamp landed one column short of the real PTY
+    cursor on that now-one-cell-short row. Visible as the ST caret sitting
+    one character behind the TUI's own cursor.
+    """
     if cy < 0 or cy >= len(rows):
         return rows
     row = list(rows[cy])
-    while len(row) < cx:
+    while len(row) <= cx:
         row.append((" ", 0))
     rows = list(rows)
     rows[cy] = row
