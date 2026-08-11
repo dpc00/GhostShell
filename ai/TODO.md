@@ -417,12 +417,29 @@ that doesn't override it — and the rarer case of an app that hasn't
 enabled tracking yet). Compiles clean, existing 51/51
 `tests/test_terminal_core.py` pass.
 
-**NOT yet live-verified** — same standing caveat as the rest of this file:
-landed via source edit + commit, no plugin reload/restart performed yet.
-**Next step on this restart:** open a Claude Code (or Gemini/Antigravity/
-Codex/Kimi/Kiro/Junie) tab, click mid-text on the live prompt line, and
-confirm the real cursor (the SGR-reverse-video cell, not an ST caret —
-host caret stays off for terminal views) jumps to the click point instead
-of staying at its old position. Also sanity-check that clicking on a
-tracking-enabled app (Grok, OpenCode, Qwen, Vibe, gotui) is unaffected —
-those should still route through `_route_mouse_click` exactly as before.
+**Live-verified 2026-08-11**: after restarting ST, click-to-reposition on a
+live Claude Code prompt line tested and passes — clicking mid-text moves
+the real app cursor to the click point as intended.
+
+## Debug instrumentation baton (2026-08-11, uncommitted)
+
+Two TEMP DEBUG blocks were added to `ai_terminal.py` (uncommitted, still
+sitting in the working tree as of this restart) to chase two separately
+reported bugs, neither root-caused yet:
+
+1. `_do_render`: logs `PAINT BLOCKED`/`PAINT UNBLOCKED` around the
+   `_selection_paint_blocked` early-return, with view id, selection,
+   guard-expiry time, and dirty state — chasing a report that keystrokes
+   (backspace) reach the live app but the ST view stops visually updating
+   until a later keypress, then catches up all at once (consistent with an
+   unbounded paint-block).
+2. `AiTerminalToggleCopyModeCommand.run`: logs every firing plus an 8-frame
+   call stack — chasing a report of copy_mode toggling spuriously during
+   Claude responses/permission prompts, apparently without `ctrl+alt+c`
+   being pressed.
+
+Both are gated to log only on state transitions (not every poll tick), so
+they're safe to leave running for a while. Neither bug has reproduced yet
+this session (console log checked right after restart — clean, no
+instrumentation output). Remove both blocks once root-caused; do not
+commit them as permanent logging.
