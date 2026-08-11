@@ -168,3 +168,20 @@ CATALOG = {
         ),
     },
 }
+
+
+def profile_from_entry(entry):
+    """Settings-shaped profile dict for one CATALOG entry.
+
+    The single definition of what a catalog entry contributes to a profile
+    ("notes" and "display_name" are documentation/keying, never settings), so
+    the in-plugin sync command and tools/scan_agents.py cannot drift apart on
+    which quirk keys a detected agent gets.
+    """
+    profile = {
+        "launch_command": list(entry["launch_command"]),
+        "spawn_env": dict(entry["spawn_env"]),
+    }
+    if "mouse_handling" in entry:
+        profile["mouse_handling"] = entry["mouse_handling"]
+    return profile

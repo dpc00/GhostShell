@@ -2,117 +2,23 @@
 
 Purpose: catch import-time and class-definition-time errors that would make
 Sublime silently fail to register commands. Run standalone, not under pytest,
-because it installs fake `sublime` / `sublime_plugin` modules into sys.modules.
+because it installs fake `sublime` / `sublime_plugin` modules into sys.modules
+(tests.sublime_stub, the same ones the flow tests use).
 
     python tools/check_import.py
 """
 
 import os
 import sys
-import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-
-def _stub_sublime():
-    m = types.ModuleType("sublime")
-
-    class Region:
-        def __init__(self, a, b=None):
-            self.a, self.b = a, b if b is not None else a
-
-    class Settings(dict):
-        def get(self, k, d=None):
-            return dict.get(self, k, d)
-
-        def set(self, k, v):
-            self[k] = v
-
-        def add_on_change(self, *a, **k):
-            pass
-
-        def clear_on_change(self, *a, **k):
-            pass
-
-    class QuickPanelItem:
-        def __init__(self, trigger, details="", annotation="", kind=None):
-            self.trigger = trigger
-            self.details = details
-            self.annotation = annotation
-            self.kind = kind
-
-    m.Region = Region
-    m.Settings = Settings
-    m.QuickPanelItem = QuickPanelItem
-    m.load_settings = lambda name: Settings()
-    m.save_settings = lambda name: None
-    m.packages_path = lambda: os.path.join(REPO, ".fake-packages")
-    m.cache_path = lambda: os.path.join(REPO, ".fake-cache")
-    m.executable_path = lambda: "sublime_text.exe"
-    m.set_timeout = lambda fn, ms=0: None
-    m.set_timeout_async = lambda fn, ms=0: None
-    m.status_message = lambda msg: None
-    m.error_message = lambda msg: None
-    m.message_dialog = lambda msg: None
-    m.windows = lambda: []
-    m.active_window = lambda: None
-    m.run_command = lambda *a, **k: None
-    m.version = lambda: "4169"
-    m.platform = lambda: "windows"
-    m.arch = lambda: "x64"
-    m.expand_variables = lambda s, v: s
-    m.find_resources = lambda pattern: []
-    m.load_resource = lambda path: ""
-    m.DRAW_NO_OUTLINE = 256
-    m.DRAW_NO_FILL = 32
-    m.DRAW_EMPTY = 1
-    m.PERSISTENT = 16
-    m.HIDDEN = 128
-    m.LAYOUT_INLINE = 0
-    m.KIND_ID_AMBIGUOUS = 0
-    m.MONOSPACE_FONT = 1
-    m.HOVER_TEXT = 1
-    return m
-
-
-def _stub_sublime_plugin():
-    m = types.ModuleType("sublime_plugin")
-
-    class _Base:
-        def __init__(self, *a, **k):
-            pass
-
-    class WindowCommand(_Base):
-        pass
-
-    class TextCommand(_Base):
-        pass
-
-    class ApplicationCommand(_Base):
-        pass
-
-    class EventListener(_Base):
-        pass
-
-    class ViewEventListener(_Base):
-        pass
-
-    class TextChangeListener(_Base):
-        pass
-
-    m.WindowCommand = WindowCommand
-    m.TextCommand = TextCommand
-    m.ApplicationCommand = ApplicationCommand
-    m.EventListener = EventListener
-    m.ViewEventListener = ViewEventListener
-    m.TextChangeListener = TextChangeListener
-    return m
+from tests.sublime_stub import install as install_sublime_stubs  # noqa: E402
 
 
 def main():
-    sys.modules.setdefault("sublime", _stub_sublime())
-    sys.modules.setdefault("sublime_plugin", _stub_sublime_plugin())
+    install_sublime_stubs()
 
     try:
         from ai import ai_terminal

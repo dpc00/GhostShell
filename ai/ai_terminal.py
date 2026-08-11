@@ -514,7 +514,10 @@ try:
         reset_update_from_text as _reset_update_from_text,
         usage_update_from_text as _usage_update_from_text,
     )
-    from .terminal.agent_catalog import CATALOG as _AGENT_CATALOG
+    from .terminal.agent_catalog import (
+        CATALOG as _AGENT_CATALOG,
+        profile_from_entry as _agent_profile_from_entry,
+    )
     from .terminal.usage_scan import (
         gather_usage as _gather_usage,
         provider_for_profile as _provider_for_profile,
@@ -595,7 +598,10 @@ except ImportError as _term_imp_err:
             reset_update_from_text as _reset_update_from_text,
             usage_update_from_text as _usage_update_from_text,
         )
-        from ai.terminal.agent_catalog import CATALOG as _AGENT_CATALOG
+        from ai.terminal.agent_catalog import (
+            CATALOG as _AGENT_CATALOG,
+            profile_from_entry as _agent_profile_from_entry,
+        )
         from ai.terminal.usage_scan import (
             gather_usage as _gather_usage,
             provider_for_profile as _provider_for_profile,
@@ -676,15 +682,7 @@ _WRITE_PENDING = False
 
 
 def _color_scheme_log(message):
-    try:
-        path = os.path.expanduser("~/data/logs/ai_terminal/color_scheme.log")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            t_name = threading.current_thread().name
-            f.write(f"[{ts}] [{t_name}] {message}\n")
-    except Exception:
-        pass
+    _append_log_line("color_scheme.log", message)
 
 
 def _ensure_host_cursor_rule(scheme_data):
@@ -1141,6 +1139,77 @@ def _all_profiles(s):
     merged.update(explicit)
     return merged
 
+
+def _settings_obj(settings=None):
+    """The Settings object every knob reads: an explicit one, else the cached
+    global bound in plugin_loaded, else a fresh load."""
+    return settings or _settings or sublime.load_settings(_SETTINGS_NAME)
+
+
+def _profile_settings(profile_name, settings=None):
+    """The profile dict named `profile_name`, or None when there is no such
+    (dict-shaped) profile."""
+    if not profile_name:
+        return None
+    profiles = _all_profiles(_settings_obj(settings))
+    if not isinstance(profiles, dict):
+        return None
+    profile = profiles.get(profile_name)
+    return profile if isinstance(profile, dict) else None
+
+
+def _profile_bool(profile_name, key, default, settings=None):
+    """Per-profile boolean override for `key`, else `default`.
+
+    The profile only wins when it actually names the key -- absence means
+    "inherit", so a caller's default (a module kill switch, another flag) is
+    never shadowed by a falsy missing value.
+    """
+    profile = _profile_settings(profile_name, settings)
+    if profile is not None and key in profile:
+        return bool(profile[key])
+    return default
+
+
+def _setting_bool(key, default, profile_name=None, settings=None):
+    """Boolean knob resolved profile-override first, then the global settings
+    key of the same name, then `default`."""
+    s = _settings_obj(settings)
+    profile = _profile_settings(profile_name, s)
+    if profile is not None and key in profile:
+        return bool(profile[key])
+    return bool(s.get(key, default))
+
+
+def _setting_number(key, default, cast=int, settings=None):
+    """Numeric knob, falling back to `default` on a missing/garbage value.
+
+    A hand-edited settings file is the only source here, so a bad value must
+    never propagate as an exception into a render/resize tick.
+    """
+    try:
+        return cast(_settings_obj(settings).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _append_log_line(filename, message):
+    """Append one timestamped, thread-tagged line to ~/data/logs/ai_terminal.
+
+    Diagnostics only: every failure (unwritable path, disk full) is swallowed,
+    since losing a log line must never break a render or a settings reload.
+    """
+    try:
+        path = os.path.expanduser("~/data/logs/ai_terminal/" + filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            t_name = threading.current_thread().name
+            f.write(f"[{ts}] [{t_name}] {message}\n")
+    except Exception:
+        pass
+
+
 _DEFAULT_SCROLLBACK = 300
 _DEFAULT_MIN_COLS = 20
 _DEFAULT_MIN_ROWS = 1
@@ -1167,20 +1236,16 @@ _DEFAULT_MIN_ROWS = 1
 _MOUSE_HANDLING_ENABLED = False
 
 
+def _term_profile_name(term):
+    return term.profile_name if term is not None else None
+
+
 def _mouse_handling_enabled(term):
     """Effective mouse-handling flag for one terminal: profile override, or
     the global kill switch above when the profile doesn't set one."""
-    if term is not None:
-        s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = _all_profiles(s)
-        profile = (
-            profiles.get(term.profile_name)
-            if isinstance(profiles, dict) and term.profile_name
-            else None
-        )
-        if isinstance(profile, dict) and "mouse_handling" in profile:
-            return bool(profile["mouse_handling"])
-    return _MOUSE_HANDLING_ENABLED
+    return _profile_bool(
+        _term_profile_name(term), "mouse_handling", _MOUSE_HANDLING_ENABLED
+    )
 
 
 def _pin_viewport_enabled(term):
@@ -1197,17 +1262,7 @@ def _pin_viewport_enabled(term):
     "pin_viewport": false to opt out of the hard pin and let real ST
     scrollback move normally.
     """
-    if term is not None:
-        s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = _all_profiles(s)
-        profile = (
-            profiles.get(term.profile_name)
-            if isinstance(profiles, dict) and term.profile_name
-            else None
-        )
-        if isinstance(profile, dict) and "pin_viewport" in profile:
-            return bool(profile["pin_viewport"])
-    return True
+    return _profile_bool(_term_profile_name(term), "pin_viewport", True)
 
 
 def _osc_title_enabled(term):
@@ -1216,17 +1271,9 @@ def _osc_title_enabled(term):
     titling is relied upon and must not change unless opted into, per-profile
     ("osc_title_updates_tab": true) or globally via the same settings key.
     """
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    if term is not None:
-        profiles = _all_profiles(s)
-        profile = (
-            profiles.get(term.profile_name)
-            if isinstance(profiles, dict) and term.profile_name
-            else None
-        )
-        if isinstance(profile, dict) and "osc_title_updates_tab" in profile:
-            return bool(profile["osc_title_updates_tab"])
-    return bool(s.get("osc_title_updates_tab", False))
+    return _setting_bool(
+        "osc_title_updates_tab", False, profile_name=_term_profile_name(term)
+    )
 
 
 def _wheel_to_pty_enabled(term):
@@ -1240,17 +1287,9 @@ def _wheel_to_pty_enabled(term):
     ST's native scroll -- for apps like gotui that want clicks but have real
     scrollback content for the wheel to move through.
     """
-    if term is not None:
-        s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = _all_profiles(s)
-        profile = (
-            profiles.get(term.profile_name)
-            if isinstance(profiles, dict) and term.profile_name
-            else None
-        )
-        if isinstance(profile, dict) and "wheel_to_pty" in profile:
-            return bool(profile["wheel_to_pty"])
-    return _mouse_handling_enabled(term)
+    return _profile_bool(
+        _term_profile_name(term), "wheel_to_pty", _mouse_handling_enabled(term)
+    )
 
 
 def _home_end_native_enabled(term):
@@ -1269,17 +1308,7 @@ def _home_end_native_enabled(term):
     bug in Qwen), and piggybacking Home/End on that default silently broke
     Home/End for every profile that didn't explicitly set mouse_handling.
     """
-    if term is not None:
-        s = _settings or sublime.load_settings(_SETTINGS_NAME)
-        profiles = _all_profiles(s)
-        profile = (
-            profiles.get(term.profile_name)
-            if isinstance(profiles, dict) and term.profile_name
-            else None
-        )
-        if isinstance(profile, dict) and "home_end_native" in profile:
-            return bool(profile["home_end_native"])
-    return False
+    return _profile_bool(_term_profile_name(term), "home_end_native", False)
 
 
 def _tui_like(term):
@@ -1318,11 +1347,9 @@ _DEFAULT_SPAWN_ENV = {
 
 
 def _scrollback_size():
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    try:
-        return max(0, int(s.get("scrollback_history_size", _DEFAULT_SCROLLBACK)))
-    except (TypeError, ValueError):
-        return _DEFAULT_SCROLLBACK
+    return max(
+        0, _setting_number("scrollback_history_size", _DEFAULT_SCROLLBACK)
+    )
 
 
 def _force_main_screen(profile_name=None):
@@ -1332,13 +1359,7 @@ def _force_main_screen(profile_name=None):
     Textual apps need the real alt-screen buffer; a profile may set
     ``"force_main_screen": false`` to opt out.
     """
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    if profile_name:
-        profiles = _all_profiles(s)
-        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
-        if isinstance(profile, dict) and "force_main_screen" in profile:
-            return bool(profile["force_main_screen"])
-    return bool(s.get("force_main_screen", True))
+    return _setting_bool("force_main_screen", True, profile_name=profile_name)
 
 
 # Seconds a dead tab's final output stays visible before auto-close. Long
@@ -1354,13 +1375,7 @@ def _close_tab_on_exit(profile_name=None):
     experience. A profile may set ``"close_tab_on_exit": false`` to opt out
     (e.g. a profile you want to keep open to read a crash/update message).
     """
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    if profile_name:
-        profiles = _all_profiles(s)
-        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
-        if isinstance(profile, dict) and "close_tab_on_exit" in profile:
-            return bool(profile["close_tab_on_exit"])
-    return bool(s.get("close_tab_on_exit", True))
+    return _setting_bool("close_tab_on_exit", True, profile_name=profile_name)
 
 
 def _log_tab_text(profile_name=None):
@@ -1372,13 +1387,7 @@ def _log_tab_text(profile_name=None):
     ANSI or any per-agent transcript format. Default true, same posture as
     record_asciicast. A profile may set ``"log_tab_text": false`` to opt out.
     """
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    if profile_name:
-        profiles = _all_profiles(s)
-        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
-        if isinstance(profile, dict) and "log_tab_text" in profile:
-            return bool(profile["log_tab_text"])
-    return bool(s.get("log_tab_text", True))
+    return _setting_bool("log_tab_text", True, profile_name=profile_name)
 
 
 def _make_parser(screen, force_main_screen):
@@ -1387,19 +1396,9 @@ def _make_parser(screen, force_main_screen):
 
 
 def _cols_bounds():
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    try:
-        mn = max(1, int(s.get("min_columns", _DEFAULT_MIN_COLS)))
-    except (TypeError, ValueError):
-        mn = _DEFAULT_MIN_COLS
-    mx_raw = s.get("max_columns", None)
-    mx = None
-    if mx_raw is not None:
-        try:
-            mx = max(mn, int(mx_raw))
-        except (TypeError, ValueError):
-            mx = None
-    return mn, mx
+    mn = max(1, _setting_number("min_columns", _DEFAULT_MIN_COLS))
+    mx = _setting_number("max_columns", None)
+    return mn, (max(mn, mx) if mx is not None else None)
 
 
 def _min_rows():
@@ -1412,11 +1411,7 @@ def _min_rows():
     after typing). Floor is 1; the pane-height computation in _measure()
     is the only ceiling.
     """
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    try:
-        return max(1, int(s.get("min_rows", _DEFAULT_MIN_ROWS)))
-    except (TypeError, ValueError):
-        return _DEFAULT_MIN_ROWS
+    return max(1, _setting_number("min_rows", _DEFAULT_MIN_ROWS))
 
 
 def _platform_argv(value, default=None):
@@ -1459,8 +1454,7 @@ def _launch_command():
     `["claude"]` for direct Anthropic API, or `["opencode"]`) without editing
     the plugin. Falls back to _DEFAULT_LAUNCH_COMMAND on any shape error.
     Applied on the next _spawn (reopen the ai_terminal tab)."""
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    cmd = s.get("launch_command", _DEFAULT_LAUNCH_COMMAND)
+    cmd = _settings_obj().get("launch_command", _DEFAULT_LAUNCH_COMMAND)
     return _platform_argv(cmd)
 
 
@@ -1629,13 +1623,30 @@ def _spawn_env():
     env can be swapped alongside `launch_command` without editing the plugin.
     Keys and values must be strings; falls back to _DEFAULT_SPAWN_ENV on any
     shape error. Applied on the next _spawn (reopen the ai_terminal tab)."""
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    ev = s.get("spawn_env", _DEFAULT_SPAWN_ENV)
+    ev = _settings_obj().get("spawn_env", _DEFAULT_SPAWN_ENV)
     if not isinstance(ev, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in ev.items()
     ):
         return dict(_DEFAULT_SPAWN_ENV)
     return dict(ev)
+
+
+def _observed_usage(profile_name):
+    """(remaining percent, reset label) learned from this profile's own output.
+
+    Both live in sys attributes so they survive a plugin reload; either half
+    is None when nothing has been observed yet.
+    """
+    usage = getattr(sys, "_stext_ai_profile_usage", {})
+    resets = getattr(sys, "_stext_ai_profile_resets", {})
+    return (
+        usage.get(profile_name) if isinstance(usage, dict) else None,
+        resets.get(profile_name) if isinstance(resets, dict) else None,
+    )
+
+
+def _profile_is_exhausted(name):
+    return _observed_usage(name)[0] == 0.0
 
 
 def _profile_is_available(profile_name, settings=None):
@@ -1645,14 +1656,12 @@ def _profile_is_available(profile_name, settings=None):
     inference quota. Executable detection prevents stale menu entries from
     launching, while actual terminal output can mark any profile exhausted.
     """
-    s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = _all_profiles(s)
+    s = _settings_obj(settings)
     if not profile_name:
         profile_name = s.get("default_profile")
-    profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
+    profile = _profile_settings(profile_name, s)
     path = os.environ.get("Path") or os.environ.get("PATH")
-    usage = getattr(sys, "_stext_ai_profile_usage", {})
-    if isinstance(usage, dict) and usage.get(profile_name) == 0.0:
+    if _profile_is_exhausted(profile_name):
         return False
     return _profile_is_available_pure(profile_name, profile, path=path)
 
@@ -1703,11 +1712,9 @@ _usage_refresh_token = None
 
 
 def _usage_refresh_interval_ms():
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    try:
-        minutes = float(s.get("usage_refresh_minutes", _DEFAULT_USAGE_REFRESH_MINUTES))
-    except (TypeError, ValueError):
-        minutes = _DEFAULT_USAGE_REFRESH_MINUTES
+    minutes = _setting_number(
+        "usage_refresh_minutes", _DEFAULT_USAGE_REFRESH_MINUTES, cast=float
+    )
     if minutes <= 0:
         return 0
     # Floor at a minute: a tighter loop would hammer provider endpoints for no
@@ -1753,37 +1760,34 @@ def _scanned_usage_for_profile(profile_name, settings=None):
     scan = getattr(sys, "_stext_ai_profile_scan", None)
     if not isinstance(scan, dict) or not scan:
         return None
-    s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = _all_profiles(s)
-    profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
+    profile = _profile_settings(profile_name, settings)
     provider = _provider_for_profile(profile)
     return scan.get(provider) if provider else None
 
 
+def _with_reset(label, reset):
+    return label + (" | resets " + reset if reset else "")
+
+
 def _profile_availability_label(profile_name, settings=None):
     """Explain the locally known state without spending provider quota."""
-    usage = getattr(sys, "_stext_ai_profile_usage", {})
-    remaining = usage.get(profile_name) if isinstance(usage, dict) else None
-    resets = getattr(sys, "_stext_ai_profile_resets", {})
-    reset = resets.get(profile_name) if isinstance(resets, dict) else None
+    remaining, reset = _observed_usage(profile_name)
     scanned = _scanned_usage_for_profile(profile_name, settings)
     if remaining == 0.0:
-        label = "Quota exhausted"
-        return label + (" | resets " + reset if reset else "")
+        return _with_reset("Quota exhausted", reset)
     if not _profile_is_available(profile_name, settings):
         return "Executable unavailable"
     if isinstance(remaining, (int, float)):
-        label = "%g%% remaining" % remaining
-        return label + (" | resets " + reset if reset else "")
+        return _with_reset("%g%% remaining" % remaining, reset)
     if scanned:
         if scanned.get("summary"):
             return scanned["summary"]
         if scanned.get("error"):
             return scanned["error"]
         if isinstance(scanned.get("remaining"), (int, float)):
-            label = "%g%% remaining" % scanned["remaining"]
-            sreset = scanned.get("reset")
-            return label + (" | resets " + sreset if sreset else "")
+            return _with_reset(
+                "%g%% remaining" % scanned["remaining"], scanned.get("reset")
+            )
     if reset:
         return "Usage unknown | resets " + reset
     return "Installed — no usage data"
@@ -1797,12 +1801,10 @@ def _profile_menu_caption(profile_name, settings=None):
     or "Gemini — quota exhausted, resets Aug 5". Purely local state.
     """
     if not profile_name:
-        s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-        profile_name = s.get("default_profile") or "Default Profile"
-    usage = getattr(sys, "_stext_ai_profile_usage", {})
-    remaining = usage.get(profile_name) if isinstance(usage, dict) else None
-    resets = getattr(sys, "_stext_ai_profile_resets", {})
-    reset = resets.get(profile_name) if isinstance(resets, dict) else None
+        profile_name = (
+            _settings_obj(settings).get("default_profile") or "Default Profile"
+        )
+    remaining, reset = _observed_usage(profile_name)
     executable_ok = _profile_is_available(profile_name, settings) or remaining == 0.0
     if remaining is None and executable_ok:
         # No live-observed terminal signal yet: use the startup sweep's
@@ -1900,15 +1902,7 @@ def _resolve_secret_refs(env):
 
 
 def _settings_debug_log(message):
-    try:
-        path = os.path.expanduser("~/data/logs/ai_terminal/settings_debug.log")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            ts = time.strftime('%Y-%m-%d %H:%M:%S')
-            t_name = threading.current_thread().name
-            f.write(f"[{ts}] [{t_name}] {message}\n")
-    except Exception:
-        pass
+    _append_log_line("settings_debug.log", message)
 
 
 def _on_settings_change():
@@ -2719,6 +2713,18 @@ def _schedule_render(term, delay_ms=None):
     sublime.set_timeout(lambda: _do_render(term), delay)
 
 
+def _rearm_if_dirty(term):
+    """Arm another frame when keys/PTY dirtied the screen while we painted.
+
+    Clearing the coalesce flag even when nothing is dirty is what keeps a
+    stalled frame (Grok often goes silent for seconds) from staying armed.
+    """
+    if term.screen.dirty or getattr(term, "_render_coalesce", False):
+        term._render_coalesce = False
+        if term.screen.dirty:
+            _schedule_render(term)
+
+
 def _plain_cells_signature(rows):
     """Stable content fingerprint before host-cursor paint (no ST deps)."""
     if not rows:
@@ -2960,10 +2966,7 @@ def _do_render(term):
     )
     if skip_all:
         term._last_render_mono = time.monotonic()
-        if term.screen.dirty or getattr(term, "_render_coalesce", False):
-            term._render_coalesce = False
-            if term.screen.dirty:
-                _schedule_render(term)
+        _rearm_if_dirty(term)
         return
 
     # Absolute caret offset (with top pad) so mid-line typing stays put.
@@ -2984,11 +2987,7 @@ def _do_render(term):
     term._last_render_text = text
     term._last_caret_off = caret_off if caret_off is not None else -1
     term._last_render_mono = time.monotonic()
-    # If keys/PTY dirtied the screen while we painted, arm another frame.
-    if term.screen.dirty or getattr(term, "_render_coalesce", False):
-        term._render_coalesce = False
-        if term.screen.dirty:
-            _schedule_render(term)
+    _rearm_if_dirty(term)
 
 
 def _build_text_and_regions(rows):
@@ -3924,14 +3923,8 @@ def _quick_panel_item(trigger, details, annotation, kind):
 
 
 def _profile_names(settings=None):
-    s = settings or _settings or sublime.load_settings(_SETTINGS_NAME)
-    profiles = _all_profiles(s)
+    profiles = _all_profiles(_settings_obj(settings))
     return list(profiles.keys()) if isinstance(profiles, dict) else []
-
-
-def _profile_is_exhausted(name):
-    usage = getattr(sys, "_stext_ai_profile_usage", {})
-    return isinstance(usage, dict) and usage.get(name) == 0.0
 
 
 # ─── commands ────────────────────────────────────────────────────────────────
@@ -4251,16 +4244,11 @@ def _spawn(window, path, profile=None):
         sublime.error_message("ai_terminal: no PTY backend available (ConPTY ctypes binding failed).")
         return
 
-    s = sublime.load_settings(_SETTINGS_NAME)
-    profiles = _all_profiles(s)
-    
-    profile_name = profile
-    if not profile_name:
-        profile_name = s.get("default_profile")
-        
-    profile_data = profiles.get(profile_name) if profile_name else None
-    
-    if profile_data and isinstance(profile_data, dict):
+    s = _settings_obj()
+    profile_name = profile or s.get("default_profile")
+    profile_data = _profile_settings(profile_name, s)
+
+    if profile_data:
         argv = _platform_argv(
             profile_data.get("launch_command", _DEFAULT_LAUNCH_COMMAND)
         )
@@ -4466,13 +4454,7 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
         for entry in _AGENT_CATALOG.values():
             if not _command_exists(entry["launch_command"], path=path):
                 continue
-            profile = {
-                "launch_command": entry["launch_command"],
-                "spawn_env": dict(entry["spawn_env"]),
-            }
-            if "mouse_handling" in entry:
-                profile["mouse_handling"] = entry["mouse_handling"]
-            detected[entry["display_name"]] = profile
+            detected[entry["display_name"]] = _agent_profile_from_entry(entry)
 
         gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
         gs.set("profiles", detected)
@@ -4876,6 +4858,31 @@ def _scroll_to_bottom(view):
         view.set_viewport_position((0.0, top), False)
 
 
+def _place_auto_caret(view, term, pos):
+    """Put the sole caret at `pos` on the render loop's behalf.
+
+    Recorded on the terminal so on_selection_modified can tell this from a
+    real user gesture (which then takes caret ownership).
+    """
+    sel = view.sel()
+    sel.clear()
+    sel.add(sublime.Region(pos, pos))
+    if term is not None:
+        term._last_auto_caret_pos = pos
+
+
+def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits):
+    """Where the viewport lands after a frame: pinned to rest for an app-owned
+    TUI, else following the tail while the user hasn't scrolled away and there
+    is real content below the fold."""
+    if tui_owns_scroll:
+        _pin_viewport_rest(view, rest, term)
+    elif do_follow and not content_fits:
+        _scroll_to_bottom(view)
+        if term is not None:
+            term._last_vp_y = view.viewport_position()[1]
+
+
 class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
     """Toggle copy mode (see AiTerminalKeypressCommand.run).
 
@@ -5265,7 +5272,6 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # cursor_offset (includes top pad) so mid-line ST selection matches
         # the block highlight and the next keystroke stays in place.
         pad = _HOST_SCROLL_PAD_LINES
-        sel = view.sel()
         # User cursor control is the default: the render loop only auto-
         # positions the caret at the PTY's cursor (cursor_offset/cursor)
         # until term._user_owns_caret is set (by on_selection_modified,
@@ -5274,54 +5280,23 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # what the user actually did.
         keep_selection = bool(term is not None and getattr(term, "_user_owns_caret", False))
         if keep_selection:
-            if tui_owns_scroll:
-                _pin_viewport_rest(view, rest, term)
-            elif do_follow and not content_fits:
-                _scroll_to_bottom(view)
-                if term is not None:
-                    term._last_vp_y = view.viewport_position()[1]
+            pass  # the user's own caret/selection stands; only scroll below
         elif cursor_offset is not None and int(cursor_offset) >= 0:
-            pos = min(int(cursor_offset), view.size())
-            sel.clear()
-            sel.add(sublime.Region(pos, pos))
-            if term is not None:
-                term._last_auto_caret_pos = pos
-            if tui_owns_scroll:
-                _pin_viewport_rest(view, rest, term)
-            elif do_follow and not content_fits:
-                _scroll_to_bottom(view)
-                if term is not None:
-                    term._last_vp_y = view.viewport_position()[1]
+            _place_auto_caret(view, term, min(int(cursor_offset), view.size()))
         elif cursor is not None:
             last_real = max(0, view.rowcol(view.size())[0] - pad)
             row = min(int(cursor[0]) + pad, last_real)
             line_start = view.text_point(row, 0)
             line_end = view.line(line_start).b
-            pos = min(line_start + int(cursor[1]), line_end)
-            sel.clear()
-            sel.add(sublime.Region(pos, pos))
-            if term is not None:
-                term._last_auto_caret_pos = pos
-            if tui_owns_scroll:
-                _pin_viewport_rest(view, rest, term)
-            elif do_follow and not content_fits:
-                _scroll_to_bottom(view)
-                if term is not None:
-                    term._last_vp_y = view.viewport_position()[1]
-        else:
-            if tui_owns_scroll:
-                _pin_viewport_rest(view, rest, term)
-            else:
-                last_real = max(0, view.rowcol(view.size())[0] - pad)
-                pt = view.text_point(last_real, 0)
-                sel.clear()
-                sel.add(sublime.Region(pt, pt))
-                if term is not None:
-                    term._last_auto_caret_pos = pt
-                if do_follow and not content_fits:
-                    _scroll_to_bottom(view)
-                    if term is not None:
-                        term._last_vp_y = view.viewport_position()[1]
+            _place_auto_caret(
+                view, term, min(line_start + int(cursor[1]), line_end)
+            )
+        elif not tui_owns_scroll:
+            # No cursor at all: park on the last real row (an app-owned TUI
+            # keeps whatever caret it has and is only re-pinned).
+            last_real = max(0, view.rowcol(view.size())[0] - pad)
+            _place_auto_caret(view, term, view.text_point(last_real, 0))
+        _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         if content_fits or tui_owns_scroll:
             _pin_viewport_rest(view, rest, term)
 
