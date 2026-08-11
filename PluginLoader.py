@@ -22,6 +22,7 @@ from GhostShell.ai.ai_terminal import (
     AiTerminalSendStringCommand,
     AiTerminalSendStringWindowCommand,
     AiTerminalKeypressCommand,
+    AiTerminalToggleCopyModeCommand,
     AiTerminalRenderCommand,
     AiTerminalNukeCommand,
     AiTerminalNoopCommand,
