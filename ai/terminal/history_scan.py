@@ -24,6 +24,7 @@ import glob
 import os
 import sqlite3
 import time
+import urllib.parse
 
 
 def _mtime(path):
@@ -114,10 +115,19 @@ def _scan_glob_source(source, base):
 # ─── custom sources: one file/db holding many sessions ────────────────────────
 
 
+def read_only_uri(db_path):
+    """``file:`` URI opening ``db_path`` read-only.
+
+    The path is percent-encoded: a literal ``?`` in a directory name would
+    otherwise start the URI's query string and let the path itself override
+    ``mode=ro`` (``...?mode=rwc``) on someone else's database.
+    """
+    path = urllib.parse.quote(db_path.replace("\\", "/"), safe="/:")
+    return "file:%s?mode=ro" % path
+
+
 def _read_ollama_chats(db_path):
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(read_only_uri(db_path), uri=True)
     try:
         return conn.execute(
             "SELECT id, title, created_at FROM chats ORDER BY created_at DESC"
@@ -153,9 +163,7 @@ def scan_ollama(localappdata):
 
 
 def _read_t3_threads(db_path):
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(read_only_uri(db_path), uri=True)
     try:
         return conn.execute(
             """
