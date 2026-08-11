@@ -2871,8 +2871,31 @@ def _do_render(term):
     # Defer while selecting/copying: full-buffer replace + caret re-pin wipes it.
     # Poll until selection clears and the post-drag guard expires.
     if _selection_paint_blocked(view, term):
+        # TEMP DEBUG (2026-08-11): instrumenting a reported bug where
+        # keystrokes (backspace) reach the live app but the ST view stops
+        # visually updating until some later keypress, then catches up all
+        # at once -- exactly what an unbounded paint-block would produce.
+        # Logs once on entering the blocked state (not every poll tick) with
+        # enough state to diagnose why it's blocked. Remove once root-caused.
+        if not getattr(term, "_paint_block_logged", False):
+            term._paint_block_logged = True
+            term._paint_block_since = time.monotonic()
+            try:
+                sels = [(s.a, s.b) for s in view.sel()]
+            except Exception:
+                sels = None
+            guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
+            print(
+                f"[ai_terminal] PAINT BLOCKED view={view.id()} sel={sels} "
+                f"guard_until={guard:.2f} now={time.monotonic():.2f} "
+                f"dirty={getattr(term.screen, 'dirty', None)}"
+            )
         sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
         return  # leave _render_pending True so _schedule_render doesn't double-arm
+    if getattr(term, "_paint_block_logged", False):
+        term._paint_block_logged = False
+        dur = time.monotonic() - float(getattr(term, "_paint_block_since", 0.0) or 0.0)
+        print(f"[ai_terminal] PAINT UNBLOCKED view={view.id()} after {dur:.2f}s")
     term._render_pending = False
     _maybe_apply_osc_title(term)
     if not term.screen.dirty:
@@ -4870,6 +4893,17 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
         if term is None:
             return
         term.copy_mode = not term.copy_mode
+        # TEMP DEBUG (2026-08-11): instrumenting an unexplained spurious
+        # toggle reported during Claude responses / permission prompts,
+        # apparently without ctrl+alt+c being pressed. Logs every firing so
+        # the next occurrence is caught with a timestamp + call stack
+        # instead of guessing. Remove once root-caused.
+        import traceback
+        print(
+            f"[ai_terminal] copy_mode TOGGLE fired -> now {term.copy_mode} "
+            f"(view {self.view.id()}) stack:\n"
+            + "".join(traceback.format_stack(limit=8))
+        )
         if term.copy_mode:
             sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
         else:
