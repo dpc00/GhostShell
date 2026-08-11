@@ -45,6 +45,15 @@ _BOX_V = frozenset(
 )
 _PROMPT_PREFIX = frozenset((" ", "\u00a0")) | _BOX_V
 
+# Prompt marker glyphs, by CLI. ">" covers plain shells and Grok. Claude
+# Code uses U+276F (heavy right-pointing angle quotation mark ornament, a
+# chevron) instead of a plain ">" -- verified against a live Claude Code
+# session; the plain ">" check silently never matched it, so
+# find_prompt_row always returned None while running Claude Code. Add the
+# next CLI's marker here when it differs too -- real per-CLI work, not
+# something one generic check can stand in for.
+_PROMPT_MARKERS = frozenset((">", "\u276f"))
+
 
 def _prompt_marker_col(screen, prompt_y):
     """Column of the `>` prompt marker on the row, or None.
@@ -60,7 +69,7 @@ def _prompt_marker_col(screen, prompt_y):
         ch = row[i]
         if ch in _PROMPT_PREFIX:
             continue
-        return i if ch == ">" else None
+        return i if ch in _PROMPT_MARKERS else None
     return None
 
 

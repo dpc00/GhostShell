@@ -4709,68 +4709,6 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             sublime.status_message("Ai terminal: copy mode OFF")
 
 
-def _live_cursor_row(term):
-    """Buffer row of the PTY's actual hardware cursor -- the live input line.
-
-    Deliberately NOT a per-agent prompt-box scan (no `>`-marker detection,
-    no box-drawing-char matching): that would need bespoke logic per CLI
-    (Claude Code, Codex, Gemini, Grok, plain shells, ...). The hardware
-    cursor row is raw terminal-protocol state every one of them reports the
-    same way, so this one check works for all of them.
-    """
-    try:
-        with term._lock:
-            hist = 0 if term.screen.alt_screen else len(term.screen.history)
-            return hist + int(term.screen.y)
-    except Exception:
-        return None
-
-
-class AiTerminalClickCommand(sublime_plugin.TextCommand):
-    """Toggle copy mode based on where a click in an Ai terminal view lands.
-
-    Fired after Default.sublime-mousemap's press_command (still plain
-    drag_select, so click/double/triple-click selection behaves exactly as
-    normal) has already moved the ST caret -- this only reads the result.
-    Clicking on (or within one row of) the PTY's actual hardware cursor row
-    turns copy mode off (back to the live PTY); clicking anywhere else in
-    scrollback/response text turns it on. See _live_cursor_row for why this
-    uses the raw cursor position instead of scanning for a prompt marker.
-    Idempotent: clicking again inside the same region is a no-op, so it
-    never fights typing or a drag that starts and ends within the same
-    side.
-
-    Bound in Default.sublime-mousemap, button1 counts 1-3 (context:
-    setting.ai_terminal_view == true). No menu/palette entry.
-    """
-
-    def run(self, edit):
-        view = self.view
-        term = _Terminal.from_id(view.id())
-        if term is None:
-            return
-        sel = view.sel()
-        if not sel:
-            return
-        row = view.rowcol(sel[0].b)[0]
-        cursor_row = _live_cursor_row(term)
-        if cursor_row is not None:
-            on_command_line = abs(row - cursor_row) <= 1
-        else:
-            last_row = view.rowcol(view.size())[0]
-            on_command_line = row >= last_row
-        if on_command_line:
-            if term.copy_mode:
-                term.copy_mode = False
-                _scroll_to_bottom(view)
-                term._auto_follow = True
-                sublime.status_message("Ai terminal: copy mode OFF")
-        else:
-            if not term.copy_mode:
-                term.copy_mode = True
-                sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
-
-
 class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
     """Forward a physical key to the PTY as the terminal byte sequence it expects.
 
