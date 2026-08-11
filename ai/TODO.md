@@ -374,3 +374,55 @@ live command line" ambiguity, and for other easy ports.
 Remaining real candidates, in original rank order: item 2 (command-block
 segmentation / jump to prev-next command) and item 3 (CR-redraw line
 folding for clean copy/export). Neither started.
+
+## Click-to-reposition fallback session baton (2026-08-11)
+
+Restart test after the caret-visibility work above surfaced a new gap:
+clicking with the mouse to plant the cursor mid-text on the live command
+line did not move the TUI's own cursor — only ST's local selection moved.
+Root cause: over a plain PTY there is no "set cursor to column N" from
+outside; an app only moves its own cursor via keystrokes it recognizes, or
+(if it opted in) DEC mouse-tracking reports (`CSI ?1000/1002/1003h`) it
+parses itself. `_route_mouse_click` (`ai_terminal.py`) already handles the
+tracking-app case; nothing existed for apps with no tracking at all.
+
+**Surveyed which agents actually support DEC mouse tracking** by replaying
+all 470 recorded asciicast sessions under
+`~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering`
+(613 MB) and regex-matching `CSI ?<modes>h/l`, including the combined-
+parameter DECSET form (`?1003;1006h`) that a first-pass regex missed and
+had to be corrected for (caught Grok/jcode as false negatives initially).
+Findings recorded as per-profile comments in `ai_terminal.sublime-settings`:
+
+- **Never enable tracking** (no PTY-side receiver exists, ever): Claude
+  Code, Gemini CLI, Antigravity (`agy`), Codex, Kimi, Kiro CLI, Junie.
+- **Do enable it** (real mouse-report path, already handled by
+  `_route_mouse_click`): Grok (`?1003;1006h`), jcode (`?1003;1006h`),
+  OpenCode (`?1000/1002/1003/1006h`), Mimo (`?1000/1002/1003/1006h`),
+  Qwen-code (`?1002/1003/1006h`), gotui (`?1002/1003/1006h`), Vibe
+  (`?1000/1003/1006h`).
+
+**Implemented and committed** (`c3d0860`, on `main`, 1 ahead of
+`origin/main` — not pushed): `_route_click_to_cursor_fallback()`
+(`ai_terminal.py`, near `_event_to_pty_cell`) synthesizes Left/Right
+keypresses (via the existing `_get_key_code`, DECCKM-aware) to move the
+app's real cursor to the clicked column — but ONLY when the hardware
+cursor is already confirmed sitting on the live `>` prompt row (via
+`caret.py`'s `find_prompt_row`/`input_start_col`/`field_right_limit`, so it
+never guesses off a footer-parked cursor during a spinner). Wired into
+`AiTerminalKeyInterceptor.on_text_command`'s `drag_select` handling, gated
+to fire only when the click will NOT be forwarded as a real DEC mouse
+report (covers both `mouse_handling` off — the default/every profile above
+that doesn't override it — and the rarer case of an app that hasn't
+enabled tracking yet). Compiles clean, existing 51/51
+`tests/test_terminal_core.py` pass.
+
+**NOT yet live-verified** — same standing caveat as the rest of this file:
+landed via source edit + commit, no plugin reload/restart performed yet.
+**Next step on this restart:** open a Claude Code (or Gemini/Antigravity/
+Codex/Kimi/Kiro/Junie) tab, click mid-text on the live prompt line, and
+confirm the real cursor (the SGR-reverse-video cell, not an ST caret —
+host caret stays off for terminal views) jumps to the click point instead
+of staying at its old position. Also sanity-check that clicking on a
+tracking-enabled app (Grok, OpenCode, Qwen, Vibe, gotui) is unaffected —
+those should still route through `_route_mouse_click` exactly as before.
