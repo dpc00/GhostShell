@@ -81,6 +81,16 @@
       NOT live-verified in the running ST process, same standing reason as
       the rest of this session's changes (see baton above).
 
+- [ ] Not applicable as-is: GPU/Metal/OpenGL rendering, custom shaders,
+      native macOS/GTK shell, quick-terminal dropdown, terminal inspector
+      GUI, sixel/Kitty graphics protocol, tmux integration, split-pane
+      windowing, crash telemetry — these all rely on Ghostty's standalone
+      GPU-surface app model, so none of that code carries over to rendering
+      inside a Sublime Text buffer. Equivalent features (e.g. split panes,
+      session persistence) aren't ruled out — they'd just have to be built
+      new against Sublime's own APIs rather than reused from Ghostty. No
+      action taken; logged for scope reference only.
+
 ## Key handling / selection session baton (2026-08-10)
 
 Long back-and-forth (user: "many pointless discussions on the subject")
@@ -199,3 +209,168 @@ that the caret stays put where the user leaves it instead of snapping back
 to the PTY cursor, against the live session. No urgency was expressed for
 this — the user just wants the modifications themselves to keep moving
 forward without forcing that restart.
+
+### Follow-up (2026-08-10): plain Up/Down/Left/Right still "tied to" the PTY when off the command line
+
+After the fixes above were live-verified (restart happened), a new complaint
+surfaced: doing typical ST-style selection/movement in *response* text — not
+the live command line — still behaves like it's on the command line. Plain
+arrow keys (no modifiers) are forwarded to the PTY unconditionally in
+`AiTerminalKeypressCommand.run` regardless of where the ST caret actually is
+(see the block right after the Ctrl+Shift+Home/End handling, ~line 4726 in
+`ai_terminal.py`), so Up/Down from inside scrollback/response text still
+triggers the shell's readline history recall instead of moving the ST caret.
+
+**Root-cause research (web + reading `~/tools/ghostty` source directly):**
+there is no reliable signal to consume here, from either side.
+
+- Real ghostty only knows "where the command line is" via **OSC 133**
+  semantic-prompt markers (`ESC]133;A/B/C/D`) emitted by the *shell's own*
+  integration script (`~/tools/ghostty/src/terminal/osc/parsers/
+  semantic_prompt.zig`, `page.zig`'s `Row.SemanticPrompt` enum). Ghostty does
+  not infer prompt boundaries from cursor position at all — it is 100%
+  dependent on the child shell cooperating.
+- Our own libghostty-vt bindings (`ai/terminal/ghostty_vt.py`,
+  `ghostty_engine.py`) do not parse or expose OSC 133 / semantic-prompt state
+  at all today — there is nothing to read even if the child emitted it.
+- More importantly: it wouldn't apply to this case anyway. OSC 133 is a
+  *shell* prompt protocol; a live Claude Code CLI session isn't a shell
+  prompt, it's a TUI managing its own input box. Confirmed via `gh issue
+  view` (not just search summaries, which overstated this) on
+  anthropics/claude-code#1465, #22528, #26235, #32635 — all *requesting*
+  Claude Code emit OSC 133 for exactly this "which row is the input" gap,
+  all closed by the inactivity bot with **zero maintainer engagement** over
+  more than a year, none implemented. One commenter on #26235 tried writing
+  iTerm2 mark sequences directly to `/dev/tty` from a hook as a workaround —
+  the Claude Code TUI swallowed the escape sequence entirely, and marks set
+  via OS-level menu automation got wiped by the TUI's own redraws. So Claude
+  Code's TUI doesn't just fail to emit boundary markers, it actively
+  discards externally-injected ones too.
+
+**Conclusion:** there is no oracle to consult — this is a structural gap in
+Claude Code's TUI itself (and terminals generally, absent shell
+cooperation), not a missed API call on our side. The best available
+approximation, if this is ever revisited, is a heuristic already in the same
+spirit as `_tui_like()`: compare the ST caret's row against the PTY's own
+live cursor row (already tracked every render via `term._last_caret_off` /
+`term.screen.y`) and only forward plain arrows to the PTY when they match.
+Known weakness: a wrapped multi-row command line would make Up/Down
+ambiguous for some of its rows. Not implemented — logged here so it isn't
+re-litigated from scratch; no action taken.
+
+### Follow-up (2026-08-10): resolved via cmux-style copy-mode toggle, plus a feature backlog
+
+Researched `~/tools/cmux` (a larger, more mature terminal-multiplexer project
+that also embeds Ghostty) for how it handles the same "is the cursor on the
+live command line" ambiguity, and for other easy ports.
+
+- [x] **Copy-mode toggle** — DONE 2026-08-10. cmux doesn't use a caret-vs-PTY-
+      row heuristic either; it sidesteps the ambiguity entirely with an
+      explicit mode switch (`toggleTerminalCopyMode` keybinding). Ported the
+      same idea instead of the heuristic sketched above: `ctrl+alt+c`
+      (`Default.sublime-keymap`) runs the new
+      `AiTerminalToggleCopyModeCommand` (`ai_terminal.py`), which flips
+      `term.copy_mode` (new `_Terminal.__init__` attr, default `False`).
+      While on, `AiTerminalKeypressCommand.run` intercepts plain (no ctrl/
+      alt) up/down/left/right/pageup/pagedown/home/end — including with
+      shift, for selection — and routes them to native ST `move`/`move_to`
+      instead of the PTY (new block right before the existing Shift+Arrow
+      handling). Escape exits copy mode and re-pins the viewport to the
+      live prompt via `_scroll_to_bottom` + `term._auto_follow = True`,
+      same as toggling the command again.
+
+      **Live-verified 2026-08-10, and it broke on first contact**: after the
+      user actually restarted ST to test this (and the rest of the baton
+      below), ai_terminal's PTY input was completely dead — plain typed
+      characters did nothing, only nav keys worked (as native ST movement).
+      Root cause was an addition that went beyond the copy-mode toggle
+      itself: `AiTerminalKeypressCommand.run` had also been gated on a
+      passive `caret_detached` signal (`view.sel()` not matching
+      `term._last_auto_caret_pos`) *in addition to* `term.copy_mode` — and
+      when detached, **every** key was swallowed, not just navigation.
+      Confirmed live via `sublime-mcp eval_python`: `term.copy_mode` was
+      found `True` on the live session for an unknown reason (init sets it
+      `False`, never reproduced how it flipped), and even after forcing it
+      back to `False`, `_last_auto_caret_pos` was stuck stale (`0`) against
+      the real selection (`1601`) — any PTY-driven scrollback trim/redraw
+      shifts absolute buffer positions, so this equality check drifts
+      after nearly any render and re-locks the swallow-all-keys path with
+      no visible feedback (status message scrolls away instantly). A real
+      terminal forwards typed input to the child process regardless of
+      caret position — that's not optional terminal behavior, so the
+      passive auto-detach gate was flat wrong to add.
+      **Fixed**: removed `caret_detached` from the gate entirely —
+      `AiTerminalKeypressCommand.run` now only enters the ST-domain
+      nav/swallow block when `term.copy_mode` is `True` (i.e. only via the
+      explicit `ctrl+alt+c` toggle or Escape to exit it). Applied first as
+      a live in-process monkeypatch (`sublime-mcp eval_python`, replacing
+      `AiTerminalKeypressCommand.run` on the loaded class — NOT
+      `importlib.reload()`, see [[feedback_no_manual_plugin_reload]]) to
+      unblock the user's live session immediately, then landed the same
+      fix on disk in `ai_terminal.py` so a real restart picks it up too.
+      Confirmed working live afterward: plain typing reached the PTY again
+      on the command line. `caret_detached`/`cur_regions` are no longer
+      computed at all in this method — only `last_auto` survives, used
+      solely by the Escape-while-copy_mode branch.
+  - Also surfaced: cmux's Rust bindings (`cmux-tui/crates/ghostty-vt/
+    src/terminal.rs`) suggest libghostty-vt itself may persist OSC 133
+    semantic-prompt state per row (`GHOSTTY_ROW_DATA_SEMANTIC_PROMPT`,
+    queried via `ghostty_row_get`) — separate from cmux's own live-typing
+    `PromptSemanticTracker`. This may mean the "our bindings don't expose
+    OSC 133 at all" premise above is only half true (the C library might
+    track it; our ctypes layer in `ghostty_vt.py` just doesn't wrap the
+    call yet). Not verified against the actual header — worth checking
+    before ever building the row-comparison heuristic for real, since a
+    real semantic-prompt signal would be strictly better than a heuristic.
+
+- [ ] Other easy-to-port features/intelligence spotted in cmux, not yet
+      started, roughly ranked:
+  1. Port cmux's small `PromptSemanticTracker` OSC-133 write-path hook
+     (`terminal.rs`, ~50 lines, `finish_osc` callback mapping `A/N/P→Prompt`,
+     `B→Input`, `I→InputUntilEndOfLine`, `C/D→Output`) into
+     `ghostty_engine.py`, once/if the libghostty-vt exposure question above
+     is resolved.
+  2. Command-block segmentation (`OSC133CommandParser.swift`, a pure
+     idle→prompt→command→output state machine) — could power a "jump to
+     previous/next command" navigation in scrollback.
+  3. CR-redraw line folding (`foldLine`) — collapses `\r`-progress-bar spam
+     to its final state; useful for `render.py` copy/log-export so a
+     copied progress bar isn't hundreds of stale redraw lines.
+  4. Auto-scroll suppression once the user manually scrolls up
+     (`userScrolledAwayFromBottom` in `GhosttyTerminalView.swift`) — close
+     to `term._auto_follow` already, may just be a naming/behavior gap
+     check against what we have.
+  5. Exit-code-based failure flagging (`TerminalCommandBlock.failed`) — a
+     gutter marker for failed commands, cheap once (2) above exists.
+  6. Bounded escape-sequence buffering (`maxEscapeLength`) — a defensive
+     cap worth copying into GhostShell's own escape parser so a malformed/
+     huge OSC sequence can't grow a buffer unboundedly.
+  Alt-screen-based "always forward arrows" was also on the original
+  candidate list but turned out to already be existing behavior here
+  (nothing intercepts plain arrows in `_tui_like()` alt-screen apps today) —
+  no action needed.
+
+### Follow-up (2026-08-10): triaged the backlog against GhostShell's actual code
+
+- Item 1 (OSC 133 row tracking): confirmed real — checked
+  `~/tools/ghostty/include/ghostty/vt/screen.h` directly.
+  `GHOSTTY_ROW_DATA_SEMANTIC_PROMPT` / `ghostty_row_get()` exist and are
+  unwrapped in our `ghostty_vt.py`. But the C API only distinguishes
+  prompt vs. non-prompt rows (no input/output split like cmux's own
+  tracker), and Claude Code's TUI still never emits OSC 133 at all (see
+  the gh-issue research two sections up) — so wrapping it would only help
+  plain-shell profiles (bash/cmd), not the primary Claude Code case that
+  copy-mode above already fixed. Demoted in priority; not started.
+- Item 4 (auto-scroll suppression): already implemented. `term._auto_follow`
+  (`_Terminal.__init__`, flipped throughout `ai_terminal.py`) is exactly
+  cmux's `userScrolledAwayFromBottom` pattern, just inverted naming. No
+  work needed — removed from the backlog.
+- Item 6 (bounded escape-sequence buffering): not applicable. GhostShell
+  doesn't hand-parse escape sequences — the real libghostty-vt C library
+  does that. This was a concern specific to cmux's own hand-rolled Swift
+  OSC parser layer (`OSC133CommandParser.swift`), which GhostShell has no
+  equivalent of. Removed from the backlog.
+
+Remaining real candidates, in original rank order: item 2 (command-block
+segmentation / jump to prev-next command) and item 3 (CR-redraw line
+folding for clean copy/export). Neither started.

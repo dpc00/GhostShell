@@ -2023,6 +2023,10 @@ class _Terminal:
         self._input_cast_writer = None
         self._last_cols = screen.cols
         self._last_rows = screen.rows
+        # Copy mode (ctrl+alt+c / AiTerminalToggleCopyModeCommand): while
+        # True, plain navigation keys move the ST caret instead of reaching
+        # the PTY. See AiTerminalKeypressCommand.run for the routing.
+        self.copy_mode = False
         self._spawn_env = spawn_env or {}
         self.profile_name = profile_name
         # Last OSC 0/2 title applied to the ST tab (osc_title_updates_tab
@@ -4653,6 +4657,31 @@ def _scroll_to_bottom(view):
         view.set_viewport_position((0.0, top), False)
 
 
+class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
+    """Toggle copy mode (see AiTerminalKeypressCommand.run).
+
+    While on, plain arrow/page/home/end keys move or extend the ST caret
+    instead of being forwarded to the PTY -- lets scrollback/response text be
+    navigated and selected with the keyboard without triggering shell
+    history recall or fighting a TUI's own cursor. Escape or toggling again
+    exits copy mode and re-pins the viewport to the live prompt.
+
+    Bound to ctrl+alt+c inside an Ai terminal view. No menu/palette entry.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None:
+            return
+        term.copy_mode = not term.copy_mode
+        if term.copy_mode:
+            sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
+        else:
+            _scroll_to_bottom(self.view)
+            term._auto_follow = True
+            sublime.status_message("Ai terminal: copy mode OFF")
+
+
 class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
     """Forward a physical key to the PTY as the terminal byte sequence it expects.
 
@@ -4694,6 +4723,45 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             if any(not s.empty() for s in self.view.sel()):
                 self.view.run_command("copy" if key == "c" else "cut")
                 return
+        # Copy mode (explicit ctrl+alt+c toggle only -- see
+        # AiTerminalToggleCopyModeCommand): while on, the view is pure ST
+        # domain and nothing reaches the PTY except the nav keys handled
+        # below and Escape to exit. This used to also auto-engage whenever
+        # the ST caret merely didn't match term._last_auto_caret_pos (e.g.
+        # after a click, or after any PTY-driven scrollback trim/redraw
+        # shifted absolute buffer positions), which made it swallow *all*
+        # keys -- including plain typing -- any time that passive signal
+        # drifted, with no visible feedback. A real terminal forwards typed
+        # input to the child process regardless of where the caret happens
+        # to sit, so that auto-engage path was removed; only the explicit
+        # toggle (or copy_mode already being on) gates this block now.
+        last_auto = getattr(term, "_last_auto_caret_pos", None)
+        if term.copy_mode:
+            if key == "escape" and not ctrl and not alt and not shift:
+                term.copy_mode = False
+                if last_auto is not None:
+                    pos = min(last_auto, self.view.size())
+                    sel = self.view.sel()
+                    sel.clear()
+                    sel.add(sublime.Region(pos, pos))
+                _scroll_to_bottom(self.view)
+                term._auto_follow = True
+                sublime.status_message("Ai terminal: copy mode OFF")
+                return
+            if not ctrl and not alt and key in ("up", "down", "left", "right", "pageup", "pagedown", "home", "end"):
+                if key in ("up", "down"):
+                    self.view.run_command("move", {"by": "lines", "forward": key == "down", "extend": shift})
+                elif key in ("left", "right"):
+                    self.view.run_command("move", {"by": "characters", "forward": key == "right", "extend": shift})
+                elif key in ("pageup", "pagedown"):
+                    self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
+                else:
+                    self.view.run_command("move_to", {"to": "bol" if key == "home" else "eol", "extend": shift})
+                return
+            # Any other key while detached: ST domain, so it must not reach
+            # the PTY. Swallow it rather than falling through to the PTY
+            # forward below.
+            return
         # Shift+Arrow always extends the ST selection natively -- never
         # forwarded to the PTY, unconditionally (including while positioned
         # over the live command line). Plain arrows (no shift) are untouched
