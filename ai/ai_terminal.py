@@ -3690,6 +3690,26 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
             return ("ai_terminal_noop", {})
         return None
 
+    def on_query_context(self, view, key, operator, operand, match_all):
+        # Lets Default.sublime-keymap gate every ai_terminal_keypress binding
+        # on copy_mode being off, so when copy_mode is on those keys fall
+        # through to ST's own default keybindings untouched -- true native
+        # ST navigation/selection/copy, not a hand-picked subset re-routed
+        # through custom move/move_to calls. Only ctrl+alt+c (the toggle
+        # itself, bound unconditionally) still reaches this plugin while in
+        # copy mode.
+        if key != "ai_terminal_copy_mode":
+            return None
+        if not view.settings().get(_VIEW_SETTING):
+            return None
+        term = _Terminal.from_id(view.id())
+        val = bool(term.copy_mode) if term is not None else False
+        if operator == sublime.OP_EQUAL:
+            return val == bool(operand)
+        if operator == sublime.OP_NOT_EQUAL:
+            return val != bool(operand)
+        return None
+
 
 def _quick_panel_item(trigger, details, annotation, kind):
     """sublime.QuickPanelItem when available, else a plain [trigger, detail] row.
