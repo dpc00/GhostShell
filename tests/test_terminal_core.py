@@ -27,6 +27,7 @@ from ai.terminal import (
     translate_key,
     view_point_to_cell,
 )
+from ai.terminal import ghostty_vt
 from ai.terminal.colors import FAINT, REVERSE
 
 
@@ -115,6 +116,42 @@ class TestScreen(unittest.TestCase):
         rows, cy, cx = s.render_cells()
         self.assertEqual(len(rows), 2)
         self.assertEqual(cy, s.y)
+
+
+class TestGhosttyResultCheck(unittest.TestCase):
+    def test_success_passes_and_failure_names_the_call(self):
+        self.assertIsNone(ghostty_vt.check(ghostty_vt.SUCCESS, "ghostty_terminal_new"))
+        with self.assertRaises(ghostty_vt.GhosttyError) as ctx:
+            ghostty_vt.check(ghostty_vt.OUT_OF_MEMORY, "ghostty_terminal_vt_write")
+        self.assertIn("ghostty_terminal_vt_write", str(ctx.exception))
+        self.assertIn("OUT_OF_MEMORY", str(ctx.exception))
+        self.assertEqual(ctx.exception.result, ghostty_vt.OUT_OF_MEMORY)
+
+
+class TestRetireLineErrors(unittest.TestCase):
+    def _scroll_once(self, s):
+        s.put_char("1")
+        s.cr()
+        s.lf()
+        s.put_char("2")
+        s.cr()
+        s.lf()
+
+    def test_callback_failure_is_recorded_and_callback_dropped(self):
+        s = Screen(5, 2, history_cap=10)
+        calls = []
+
+        def boom(text):
+            calls.append(text)
+            raise OSError("disk full")
+
+        s.on_retire_line = boom
+        self._scroll_once(s)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(s.on_retire_line)
+        self.assertIsInstance(s.retire_line_error, OSError)
+        # Rendering must survive a broken logging callback.
+        self.assertEqual(len(s.history), 1)
 
 
 class TestParser(unittest.TestCase):

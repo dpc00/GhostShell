@@ -27,6 +27,7 @@ as a fallback for any key-bound commands that still dispatch as insert/move.
 import codecs
 import collections
 import ctypes
+import errno
 import json
 import os
 import queue
@@ -46,6 +47,11 @@ import sublime_plugin
 
 _PTY_OK = False
 _k32 = None
+
+# A closed pseudoconsole surfaces as one of these on ReadFile rather than as a
+# clean zero-byte read, so they mean "child gone", not "pipe broke".
+_ERROR_HANDLE_EOF = 38
+_ERROR_BROKEN_PIPE = 109
 
 if os.name == "nt":
     try:
@@ -196,8 +202,17 @@ class _Pty:
             raise OSError("CreatePipe(output) failed")
 
         hPC = HANDLE()
-        hr = _k32.CreatePseudoConsole(_COORD(self._cols, self._rows),
-                                      hPipePtyIn, hPipePtyOut, 0, byref(hPC))
+        # restype=HRESULT: ctypes raises OSError itself on a failing result, so
+        # the hr check below never ran and the raise leaked both pipe ends.
+        try:
+            hr = _k32.CreatePseudoConsole(_COORD(self._cols, self._rows),
+                                          hPipePtyIn, hPipePtyOut, 0, byref(hPC))
+        except OSError:
+            _k32.CloseHandle(hPipePtyIn)
+            _k32.CloseHandle(hPipePtyOut)
+            _k32.CloseHandle(hInWrite)
+            _k32.CloseHandle(hOutRead)
+            raise
         # The pseudoconsole now holds its own copies of the pty-side pipe ends.
         _k32.CloseHandle(hPipePtyIn)
         _k32.CloseHandle(hPipePtyOut)
@@ -207,6 +222,19 @@ class _Pty:
             raise OSError(f"CreatePseudoConsole failed: HRESULT 0x{hr & 0xffffffff:08X}")
         self._hPC = hPC.value
 
+        # Every failure past this point must undo the pseudoconsole and the pipe
+        # ends we own, or a rejected spawn leaks them for the life of the host.
+        try:
+            self._start_child(hInWrite, hOutRead)
+        except BaseException:
+            self._close_pc()
+            _k32.CloseHandle(hInWrite)
+            _k32.CloseHandle(hOutRead)
+            self._release_attr_list()
+            self._alive = False
+            raise
+
+    def _start_child(self, hInWrite, hOutRead):
         # Build the proc-thread attribute list (double call: NULL -> size -> alloc -> call).
         size = c_ulong(0)
         _k32.InitializeProcThreadAttributeList(None, 1, 0, byref(size))
@@ -215,13 +243,19 @@ class _Pty:
         if not buf:
             raise OSError("HeapAlloc attribute list failed")
         attr = c_void_p(buf)
+        self._heap_buf = (heap, buf)
         if not _k32.InitializeProcThreadAttributeList(attr, 1, 0, byref(size)):
-            raise OSError("InitializeProcThreadAttributeList failed")
+            raise OSError(
+                "InitializeProcThreadAttributeList failed (GetLastError %d)"
+                % ctypes.get_last_error()
+            )
+        self._attr_list = attr
         if not _k32.UpdateProcThreadAttribute(attr, 0, _PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
                                               self._hPC, sizeof(HANDLE), None, None):
-            raise OSError("UpdateProcThreadAttribute failed")
-        self._attr_list = attr
-        self._heap_buf = (heap, buf)
+            raise OSError(
+                "UpdateProcThreadAttribute failed (GetLastError %d)"
+                % ctypes.get_last_error()
+            )
 
         si = _STARTUPINFOEXW()
         si.StartupInfo.cb = sizeof(_STARTUPINFOEXW)
@@ -275,7 +309,9 @@ class _Pty:
         try:
             _k32.WaitForSingleObject(h, _INFINITE)
         except Exception:
-            return
+            # Losing the wait would park the reader in ReadFile forever, so still
+            # close the pseudoconsole and say why the watcher gave up early.
+            print("[ai_terminal] exit watcher failed:\n%s" % traceback.format_exc())
         self._close_pc()
 
     def _close_pc(self):
@@ -290,7 +326,15 @@ class _Pty:
         n = DWORD(0)
         while self._alive:
             ok = _k32.ReadFile(self._hOutRead, buf, 8192, byref(n), None)
-            if not ok or n.value == 0:
+            if not ok:
+                err = ctypes.get_last_error()
+                self._alive = False
+                if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE):
+                    return
+                raise OSError(
+                    "ReadFile on the pseudoconsole output failed (GetLastError %d)" % err
+                )
+            if n.value == 0:
                 break
             on_data(bytes(buf[: n.value]))
         self._alive = False
@@ -299,13 +343,36 @@ class _Pty:
         if not self._alive or self._hInWrite is None:
             return
         written = DWORD(0)
-        _k32.WriteFile(self._hInWrite, data, len(data), byref(written), None)
+        while data:
+            if not _k32.WriteFile(self._hInWrite, data, len(data), byref(written), None):
+                raise OSError(
+                    "WriteFile to the pseudoconsole input failed (GetLastError %d)"
+                    % ctypes.get_last_error()
+                )
+            if not written.value:
+                raise OSError(
+                    "WriteFile accepted 0 of %d bytes of terminal input" % len(data)
+                )
+            data = data[written.value:]
 
     def resize(self, cols, rows):
         if not self._alive or self._hPC is None:
             return
         self._cols, self._rows = cols, rows
-        _k32.ResizePseudoConsole(self._hPC, _COORD(cols, rows))
+        # restype=HRESULT makes ctypes raise on a failing result, so a bad
+        # resize used to escape into the caller's layout watcher. Non-fatal:
+        # the child keeps its old winsize, so full-screen TUIs draw at the
+        # wrong width until a later resize succeeds -- report, don't propagate.
+        try:
+            hr = _k32.ResizePseudoConsole(self._hPC, _COORD(cols, rows))
+        except OSError as e:
+            print(f"[ai_terminal] ResizePseudoConsole({cols}, {rows}) failed: {e}")
+            return
+        if hr & 0x80000000:
+            print(
+                "[ai_terminal] ResizePseudoConsole(%d, %d) failed: HRESULT 0x%08X"
+                % (cols, rows, hr & 0xFFFFFFFF)
+            )
 
     def is_alive(self):
         if not self._alive or self._hProcess is None:
@@ -334,6 +401,9 @@ class _Pty:
             if h is not None:
                 _k32.CloseHandle(h)
         self._hInWrite = self._hOutRead = self._hThread = self._hProcess = None
+        self._release_attr_list()
+
+    def _release_attr_list(self):
         if self._attr_list is not None:
             _k32.DeleteProcThreadAttributeList(self._attr_list)
             self._attr_list = None
@@ -377,7 +447,15 @@ class _PosixPty:
                     os.chdir(self._cwd)
                 env = {str(k): str(v) for k, v in (self._env or os.environ).items()}
                 os.execvpe(self.argv[0], self.argv, env)
-            except Exception:
+            except BaseException as e:
+                # The parent cannot see an exception raised in the forked child,
+                # so write the reason onto the pty: otherwise a bad cwd or a
+                # missing executable shows up as a blank tab that exits at once.
+                try:
+                    os.write(2, ("ai_terminal: could not exec %s: %s\r\n"
+                                 % (self.argv[0], e)).encode("utf-8", "replace"))
+                except OSError:
+                    pass
                 os._exit(127)
         self.pid = pid
         self._fd = fd
@@ -387,16 +465,24 @@ class _PosixPty:
                 termios.TIOCSWINSZ,
                 struct.pack("HHHH", self._rows, self._cols, 0, 0),
             )
-        except Exception:
-            pass
+        except OSError as e:
+            # Non-fatal: the child starts at the pty default size, so full-screen
+            # TUIs draw at the wrong width until the next resize.
+            print(f"[ai_terminal] posix pty initial resize failed: {e}")
 
     def read(self, on_data):
         """Blocking reader loop; calls on_data(bytes) until EOF. Run on a daemon thread."""
         while self._alive and self._fd >= 0:
             try:
                 data = os.read(self._fd, 8192)
-            except OSError:
-                break
+            except OSError as e:
+                self._alive = False
+                # EIO on the master side is how Linux reports the child closing
+                # the slave: that is a normal exit, anything else is a failure
+                # the caller must not mistake for one.
+                if e.errno == errno.EIO:
+                    return
+                raise
             if not data:
                 break
             on_data(data)
@@ -407,12 +493,9 @@ class _PosixPty:
             return
         if isinstance(data, str):
             data = data.encode("utf-8", "replace")
-        try:
-            while data:
-                n = os.write(self._fd, data)
-                data = data[n:]
-        except OSError as e:
-            print(f"[ai_terminal] posix pty write error: {e}")
+        while data:
+            n = os.write(self._fd, data)
+            data = data[n:]
 
     def resize(self, cols, rows):
         if not self._alive or self._fd < 0:
@@ -426,8 +509,8 @@ class _PosixPty:
             fcntl.ioctl(
                 self._fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0)
             )
-        except Exception:
-            pass
+        except OSError as e:
+            print(f"[ai_terminal] posix pty resize({cols}, {rows}) failed: {e}")
 
     def is_alive(self):
         if not self._alive or not self.pid:
@@ -1684,8 +1767,24 @@ def _ensure_usage_scanner(force=False):
             print("[ai_terminal] usage sweep done: %s" % {
                 k: v.get("summary") or v.get("error") for k, v in scan.items()
             })
+            for provider, data in scan.items():
+                # e.g. rotated OAuth tokens that could not be written back:
+                # the sweep still produced usage, but the CLI is now at risk
+                # of being logged out, which the caption alone would not say.
+                if data.get("warning"):
+                    print("[ai_terminal] %s: %s" % (provider, data["warning"]))
         except Exception as e:
-            print("[ai_terminal] usage sweep failed: %s" % e)
+            # A sweep that dies wholesale (not one provider failing, which
+            # gather_usage already reports per provider) leaves the menus
+            # captioned from stale or absent data, so record the failure.
+            # `e` is unbound once the except block exits, so the status text
+            # has to be built here rather than inside the timeout's lambda.
+            message = "ai_terminal: usage sweep failed: %s" % e
+            sys._stext_ai_usage_scan_error = str(e)
+            print("[ai_terminal] usage sweep failed:\n%s" % traceback.format_exc())
+            sublime.set_timeout(lambda: sublime.status_message(message), 0)
+        else:
+            sys._stext_ai_usage_scan_error = None
 
     thread = threading.Thread(
         target=run_once, name="ai_terminal_usage_sweep", daemon=True
@@ -1880,7 +1979,13 @@ def _resolve_secret_refs(env):
     try:
         store = sublime.load_settings(_SECRETS_SETTINGS_NAME)
     except Exception:
+        # Without the store every reference below resolves to nothing, which
+        # looks exactly like an unconfigured key — say which it was.
         store = None
+        print(
+            "ai_terminal: could not load %s, every secret reference will be "
+            "dropped:\n%s" % (_SECRETS_SETTINGS_NAME, traceback.format_exc())
+        )
 
     out = dict(env)
     missing = []
@@ -1892,10 +1997,15 @@ def _resolve_secret_refs(env):
             out.pop(var, None)
             missing.append("%s (%s)" % (var, name))
     if missing:
-        print(
-            "ai_terminal: no value in %s for %s; spawning without it"
-            % (_SECRETS_SETTINGS_NAME, ", ".join(missing))
+        # The agent starts anyway (many providers work off a subscription
+        # login), but an unset key otherwise only shows up as an opaque auth
+        # error from the child, so put it in front of the user too.
+        detail = "no value in %s for %s; spawning without it" % (
+            _SECRETS_SETTINGS_NAME,
+            ", ".join(missing),
         )
+        print("ai_terminal: %s" % detail)
+        sublime.status_message("ai_terminal: %s" % detail)
     return out
 
 
@@ -2087,6 +2197,8 @@ class _Terminal:
         self._cast_t0 = 0.0       # session start (epoch seconds)
         self._cast_last = 0.0     # timestamp of the previous event
         self._text_log_file = None  # see _log_tab_text() / _on_retire_line
+        # Parser failures are reported once per terminal; see _on_data.
+        self._feed_failed = False
         # Geometry watcher for standard terminal resize behavior.
         self._watcher = _LayoutWatcher(self)
 
@@ -2143,9 +2255,10 @@ class _Terminal:
                 }
                 self._cast_file.write(json.dumps(header) + "\n")
                 self._cast_file.flush()
-            except Exception as e:
-                print(f"[ai_terminal] cast open failed: {e}")
+            except Exception:
+                print("[ai_terminal] cast open failed:\n%s" % traceback.format_exc())
                 self._cast_file = None
+                self._notify("recording disabled: could not open the .cast file")
         self._text_log_file = None
         if _log_tab_text(self.profile_name):
             try:
@@ -2154,12 +2267,24 @@ class _Terminal:
                 path = os.path.join(_TEXT_LOG_DIR, fname)
                 self._text_log_file = open(path, "a", encoding="utf-8", newline="\n")
                 self.screen.on_retire_line = self._on_retire_line
-            except Exception as e:
-                print(f"[ai_terminal] text log open failed: {e}")
+            except Exception:
+                print("[ai_terminal] text log open failed:\n%s" % traceback.format_exc())
                 self._text_log_file = None
+                self._notify("tab text logging disabled: could not open the log file")
         self._ensure_writer()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+
+    def _notify(self, message):
+        """Put an operational failure where the user will actually see it.
+
+        The console is invisible to most users, so anything that silently
+        degrades a session (recording off, input dropped) also goes to the
+        status bar. Safe from any thread.
+        """
+        sublime.set_timeout(
+            lambda: sublime.status_message("ai_terminal: %s" % message), 0
+        )
 
     def _on_retire_line(self, text):
         """Screen.on_retire_line callback: one scrollback line just became
@@ -2172,7 +2297,17 @@ class _Terminal:
             f.write(text + "\n")
             f.flush()
         except Exception as e:
-            print(f"[ai_terminal] text log write failed: {e}")
+            # A write that failed once (full disk, deleted file) fails for
+            # every remaining line, so stop logging instead of printing the
+            # same error per line for the rest of the session.
+            print("[ai_terminal] text log write failed:\n%s" % traceback.format_exc())
+            self._notify("text log disabled after write failure: %s" % e)
+            self._text_log_file = None
+            self.screen.on_retire_line = None
+            try:
+                f.close()
+            except Exception:
+                pass
 
     def _close_text_log(self):
         """Flush whatever never scrolled off (the final live screen) and
@@ -2236,7 +2371,14 @@ class _Terminal:
                 # hold an Up/Down key (or any other input) ahead of the PTY.
                 self.pty.write(text.encode("utf-8", errors="replace"))
             except Exception as e:
-                print(f"[ai_terminal] writer error: {e}")
+                print(f"[ai_terminal] writer error: {e}\n{traceback.format_exc()}")
+                if not self.pty.is_alive():
+                    # The child is gone: every further keystroke would be
+                    # discarded with nothing on screen to say so. Report once
+                    # and stop the writer instead of swallowing input forever.
+                    self._notify("input dropped, the terminal process is gone")
+                    return
+                self._notify("could not deliver input to the terminal: %s" % e)
                 continue
             # Recording has its own queue/thread.  In particular, never wait
             # here on _cast_lock after the first arrow while later arrows are
@@ -2262,22 +2404,41 @@ class _Terminal:
             try:
                 self._cast_file.write(line + "\n")
                 self._cast_file.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                # A recorder that keeps dropping events writes a .cast that
+                # replays as a shorter, wrong session; stop and say so instead.
+                print(f"[ai_terminal] cast write failed, recording stopped: {e}")
+                try:
+                    self._cast_file.close()
+                except Exception:
+                    pass
+                self._cast_file = None
+                self._notify("recording stopped after a write failure: %s" % e)
 
     def _read_loop(self):
+        error = None
         try:
             self.pty.read(self._on_data)
         except Exception as e:
-            print(f"[ai_terminal] reader error: {e}")
+            error = e
+            print(f"[ai_terminal] reader error: {e}\n{traceback.format_exc()}")
         finally:
             self._close_text_log()
-            sublime.set_timeout(lambda: _vwrite(self.view, "\n[process exited]\n"), 0)
-            # _close_tab_on_exit() reads Settings (via _all_profiles), which is
-            # main-thread-only in the Sublime API -- this finally block still
-            # runs on the PTY reader thread, so the check itself must be
-            # deferred through set_timeout, not just the close that follows it.
-            sublime.set_timeout(self._maybe_close_dead_view, 0)
+            # A reader that died must not be reported as an ordinary exit, and
+            # the tab must stay open so the reason remains readable.
+            notice = (
+                "\n[process exited]\n"
+                if error is None
+                else "\n[terminal read failed: %s]\n" % error
+            )
+            sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
+            if error is None:
+                # _close_tab_on_exit() reads Settings (via _all_profiles), which
+                # is main-thread-only in the Sublime API -- this finally block
+                # still runs on the PTY reader thread, so the check itself must
+                # be deferred through set_timeout, not just the close that
+                # follows it.
+                sublime.set_timeout(self._maybe_close_dead_view, 0)
 
     def _maybe_close_dead_view(self):
         if _close_tab_on_exit(self.profile_name):
@@ -2298,7 +2459,24 @@ class _Terminal:
         text = self._decoder.decode(data)
         _record_profile_usage(getattr(self, "profile_name", None), text)
         with self._lock:
-            self.parser.feed(text)
+            try:
+                self.parser.feed(text)
+            except Exception as e:
+                # Losing the reader thread over one bad chunk would strand a
+                # live child behind a dead-looking tab, so keep reading; the
+                # traceback goes to the console once per terminal.
+                if not self._feed_failed:
+                    self._feed_failed = True
+                    print("[ai_terminal] parser feed failed:\n%s"
+                          % traceback.format_exc())
+                    self._notify("terminal output could not be parsed: %s" % e)
+            # Screen drops a scrollback callback that raised; report it here so
+            # a silently stopped text log doesn't look like an empty session.
+            retire_error = self.screen.retire_line_error
+            if retire_error is not None:
+                self.screen.retire_line_error = None
+                print(f"[ai_terminal] scrollback callback failed: {retire_error}")
+                self._notify("scrollback logging stopped: %s" % retire_error)
         # Recording patch: emit an asciicast v3 "o" (output) event for the
         # raw chunk. Logged once, here, at the stream layer -- not at
         # scroll-off -- so it is faithful to what Claude emitted and does NOT
@@ -2325,13 +2503,22 @@ class _Terminal:
             return
         self._last_cols, self._last_rows = cols, rows
         with self._lock:
-            if hasattr(self.parser, "resize"):
-                # The parser owns its own internal terminal state mirroring
-                # self.screen's size; it must stay in lockstep or _sync()
-                # reads past its actual column/row range next feed().
-                self.parser.resize(cols, rows)
-            else:
-                self.screen.resize(cols, rows)
+            try:
+                if hasattr(self.parser, "resize"):
+                    # The parser owns its own internal terminal state mirroring
+                    # self.screen's size; it must stay in lockstep or _sync()
+                    # reads past its actual column/row range next feed().
+                    self.parser.resize(cols, rows)
+                else:
+                    self.screen.resize(cols, rows)
+            except Exception as e:
+                # This runs on the geometry watcher's timeout; report the
+                # failure and forget the target size so the next tick retries
+                # instead of assuming this size was applied.
+                self._last_cols = self._last_rows = None
+                print(f"[ai_terminal] resize to {cols}x{rows} failed: {e}")
+                self._notify("terminal resize failed: %s" % e)
+                return
         self.pty.resize(cols, rows)
         # Recording patch: emit an "r" (resize) event so the .cast records
         # geometry changes for accurate replay.
@@ -4317,11 +4504,22 @@ def _spawn(window, path, profile=None):
     try:
         pty.start()
     except Exception as e:
+        print("[ai_terminal] PTY start failed:\n%s" % traceback.format_exc())
         sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
         view.close()
         return
-    screen = _Screen(cols, rows, history_cap=_scrollback_size())
-    parser = _make_parser(screen, _force_main_screen(profile_name))
+    try:
+        screen = _Screen(cols, rows, history_cap=_scrollback_size())
+        parser = _make_parser(screen, _force_main_screen(profile_name))
+    except Exception as e:
+        # A missing or incompatible libghostty-vt used to raise here with the
+        # child already running and nobody reading it: an orphaned process
+        # behind a tab that never printed anything.
+        print("[ai_terminal] VT engine init failed:\n%s" % traceback.format_exc())
+        pty.kill()
+        sublime.error_message(f"ai_terminal: failed to initialize the VT engine:\n{e}")
+        view.close()
+        return
     term = _Terminal(
         view,
         pty,
