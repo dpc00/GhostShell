@@ -2544,6 +2544,17 @@ class _Terminal:
         self._write_queue.put(s)
 
     def resize(self, cols, rows):
+        if getattr(self.parser, "force_main_screen", False) and self._last_rows is not None:
+            # Main-screen (no-alt-screen) mode has no real viewport height --
+            # vertical space is indefinite scrollback, not a fixed fullscreen
+            # page. Forwarding a row change still reaches the child as a
+            # normal resize/SIGWINCH, so a fullscreen TUI (which thinks it's
+            # on the alt screen) repaints its whole frame; with no alt-screen
+            # erase, the old frame just scrolls into history instead of being
+            # cleared -- visible as a duplicate/garbled banner. Only column
+            # changes (real reflow) are ever forwarded; rows stay pinned to
+            # whatever we last told the child.
+            rows = self._last_rows
         if cols == self._last_cols and rows == self._last_rows:
             return
         self._last_cols, self._last_rows = cols, rows
@@ -2673,6 +2684,19 @@ class _LayoutWatcher:
         view = self.term.view
         if not view or not view.is_valid():
             return
+        # The console (and other bottom panels) steal vertical space from
+        # every group in the window, shrinking this view's viewport without
+        # the user ever touching the terminal's own layout. Resizing the PTY
+        # to that transient size churns a full-screen redraw (duplicate
+        # banners, TUI repaint) for no reason -- skip measuring while any
+        # panel is showing; closing it restores the prior viewport, which
+        # already matches term._last_cols/_last_rows, so no resize fires.
+        try:
+            window = view.window()
+            if window is not None and window.active_panel():
+                return
+        except Exception:
+            pass
         try:
             size = _measure(view)
         except Exception as e:
@@ -2707,9 +2731,18 @@ class _LayoutWatcher:
         self._candidate = None
         self._candidate_count = 0
         cols, rows = size
-        if (cols, rows) != (self.term._last_cols, self.term._last_rows):
+        # In main-screen mode term.resize() pins rows and only ever forwards
+        # column changes (see its docstring) -- so a pure row fluctuation
+        # (e.g. dragging the pane shorter) must not count as "changed" here
+        # either, or every poll re-triggers resize()/re-render for a
+        # dimension the child is never actually told about.
+        if getattr(self.term.parser, "force_main_screen", False):
+            changed = cols != self.term._last_cols
+        else:
+            changed = (cols, rows) != (self.term._last_cols, self.term._last_rows)
+        if changed:
             self.term.resize(cols, rows)
-            print(f"[ai_terminal] resized PTY to {cols}x{rows}")
+            print(f"[ai_terminal] resized PTY to {self.term._last_cols}x{self.term._last_rows}")
 
     def dispose(self):
         if self._token is not None:
