@@ -107,12 +107,9 @@ class GhosttyParser:
         if self.force_main_screen:
             text = _strip_alt_screen(text)
         data = text.encode("utf-8", "surrogateescape")
-        # A dropped write leaves the rendered screen permanently out of step
-        # with what the child actually printed.
-        gvt.check(
-            self._g.terminal_vt_write(self._term, data, len(data)),
-            "ghostty_terminal_vt_write",
-        )
+        # ghostty_terminal_vt_write returns void (see its restype in
+        # ghostty_vt.py) -- nothing to check here.
+        self._g.terminal_vt_write(self._term, data, len(data))
         self._sync()
 
     def resize(self, cols, rows):
