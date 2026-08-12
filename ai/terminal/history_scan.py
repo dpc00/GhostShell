@@ -208,10 +208,19 @@ _CUSTOM_SCANNERS = [
 
 
 def scan_all(home=None, localappdata=None, limit=60):
-    """Merge every registered agent's history, newest first, capped at *limit*."""
+    """Merge every registered agent's history, newest first, capped at *limit*.
+
+    home/localappdata use `is None`, not truthiness: an explicit "" (a caller
+    saying "no such root, scan nothing under it") must not fall through to
+    the real ~/%LOCALAPPDATA%, which `x or default` would silently do.
+    """
     bases = {
-        "home": home or os.path.expanduser("~"),
-        "localappdata": localappdata or os.environ.get("LOCALAPPDATA", ""),
+        "home": home if home is not None else os.path.expanduser("~"),
+        "localappdata": (
+            localappdata
+            if localappdata is not None
+            else os.environ.get("LOCALAPPDATA", "")
+        ),
     }
     sessions = []
     for source in _GLOB_SOURCES:
