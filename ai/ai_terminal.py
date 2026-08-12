@@ -30,6 +30,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -1565,7 +1566,8 @@ def _resolve_launch_argv(argv, env=None):
     without use_last_error the plugin used to report GetLastError 0.
 
     Resolve via ``shutil.which`` (PATHEXT + PATH), then wrap ``.cmd``/``.bat``
-    with ``cmd.exe /c`` and ``.ps1`` with PowerShell.
+    with ``cmd.exe /c`` and ``.ps1`` with PowerShell (RemoteSigned, so a shim
+    that arrived from the internet still has to be signed to run).
 
     Bare ``bash`` skips the WSL WindowsApps stub in favour of Git Bash when
     present (WSL is the separate ``WSL Bash`` profile via wsl.exe).
@@ -1615,7 +1617,7 @@ def _resolve_launch_argv(argv, env=None):
             "powershell.exe",
             "-NoProfile",
             "-ExecutionPolicy",
-            "Bypass",
+            "RemoteSigned",
             "-File",
             resolved,
             *rest,
@@ -1899,11 +1901,53 @@ def _resolve_secret_refs(env):
     return out
 
 
+# ─── on-disk log locations and permissions ───────────────────────────────────
+#
+# Everything written under _LOG_ROOT is a verbatim record of an agent session:
+# raw ANSI, rendered transcripts, keystrokes. That routinely contains API keys,
+# OAuth codes and source code, so the tree is created owner-only and every log
+# file is opened 0600 (a no-op on Windows ACLs, load-bearing on POSIX).
+_LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))
+_DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
+
+
+def _makedirs_private(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+
+
+def _open_private(path, mode="w", **kwargs):
+    """open() that creates the file readable/writable by its owner only."""
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= os.O_APPEND if "a" in mode else os.O_TRUNC
+    return os.fdopen(os.open(path, flags, 0o600), mode, **kwargs)
+
+
+_SECRET_NAME = r"[A-Za-z0-9_\-]*(?:key|token|secret|password)[A-Za-z0-9_\-]*"
+_SECRET_SUBSTITUTIONS = (
+    # Bare key material (OpenAI/Anthropic/OpenRouter shapes).
+    (re.compile(r"(?i)\bsk-[A-Za-z0-9_\-]{8,}"), "***"),
+    # NAME=value / NAME: value.
+    (re.compile(r"(?i)(%s\s*[=:]\s*)\S+" % _SECRET_NAME), r"\1***"),
+    # --api-key value.
+    (re.compile(r"(?i)(--?%s\s+)\S+" % _SECRET_NAME), r"\1***"),
+)
+
+
+def _redact_secrets(text):
+    """Blank out key-shaped substrings so they are not persisted to a log."""
+    text = text or ""
+    for pattern, replacement in _SECRET_SUBSTITUTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _settings_debug_log(message):
+    if not _DEBUG:
+        return
     try:
-        path = os.path.expanduser("~/data/logs/ai_terminal/settings_debug.log")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
+        path = os.path.join(_LOG_ROOT, "ai_terminal", "settings_debug.log")
+        _makedirs_private(os.path.dirname(path))
+        with _open_private(path, "a", encoding="utf-8") as f:
             ts = time.strftime('%Y-%m-%d %H:%M:%S')
             t_name = threading.current_thread().name
             f.write(f"[{ts}] [{t_name}] {message}\n")
@@ -2124,12 +2168,12 @@ class _Terminal:
                 pass
         if log_on:
             try:
-                os.makedirs(_CAST_DIR, exist_ok=True)
+                _makedirs_private(_CAST_DIR)
                 self._cast_t0 = time.time()
                 self._cast_last = self._cast_t0
                 fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.cast"
                 path = os.path.join(_CAST_DIR, fname)
-                self._cast_file = open(path, "w", encoding="utf-8", newline="")
+                self._cast_file = _open_private(path, "w", encoding="utf-8", newline="")
                 header = {
                     "version": 3,
                     "term": {
@@ -2139,7 +2183,12 @@ class _Terminal:
                     },
                     "timestamp": int(self._cast_t0),
                     "title": "ai_terminal",
-                    "command": " ".join(self.pty.argv) if hasattr(self.pty, "argv") else "",
+                    # argv can carry an inline API key (a profile flag or a
+                    # $secret: value resolved at spawn), and this header is
+                    # persisted verbatim, so key-shaped words are redacted.
+                    "command": _redact_secrets(
+                        " ".join(self.pty.argv) if hasattr(self.pty, "argv") else ""
+                    ),
                 }
                 self._cast_file.write(json.dumps(header) + "\n")
                 self._cast_file.flush()
@@ -2149,10 +2198,12 @@ class _Terminal:
         self._text_log_file = None
         if _log_tab_text(self.profile_name):
             try:
-                os.makedirs(_TEXT_LOG_DIR, exist_ok=True)
+                _makedirs_private(_TEXT_LOG_DIR)
                 fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.log"
                 path = os.path.join(_TEXT_LOG_DIR, fname)
-                self._text_log_file = open(path, "a", encoding="utf-8", newline="\n")
+                self._text_log_file = _open_private(
+                    path, "a", encoding="utf-8", newline="\n"
+                )
                 self.screen.on_retire_line = self._on_retire_line
             except Exception as e:
                 print(f"[ai_terminal] text log open failed: {e}")
@@ -3073,8 +3124,7 @@ def _apply_color_regions(view, regs):
 
 # ─── debug logging ────────────────────────────────────────────────────────────
 
-_DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
-_DEBUG_PATH = r"C:\Users\donal\data\logs\ai_terminal_raw_ansi_stream_debug_logs"
+_DEBUG_PATH = os.path.join(_LOG_ROOT, "ai_terminal_raw_ansi_stream_debug_logs")
 _debug_lock = threading.Lock()
 # Asciicast v3 recording (recording patch): env-gated like _DEBUG. When on
 # (AI_TERMINAL_LOG_LINES set in spawn_env OR in ST's process env), each
@@ -3085,17 +3135,19 @@ _debug_lock = threading.Lock()
 # is a new session = new .cast). Per stext-settings-json-strict the toggle is
 # NOT a top-level setting key; it lives in spawn_env where the user put it.
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
-_CAST_DIR = r"C:\Users\donal\data\logs\ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+_CAST_DIR = os.path.join(
+    _LOG_ROOT, "ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+)
 # Plain-text, agent-readable counterpart to the .cast recordings above --
 # see _log_tab_text(). Same timestamped-per-session naming so a .cast and
 # its .log pair up, but content is clean rendered text, not raw ANSI events.
-_TEXT_LOG_DIR = r"C:\Users\donal\data\logs\ai_terminal_session_text_logs"
+_TEXT_LOG_DIR = os.path.join(_LOG_ROOT, "ai_terminal_session_text_logs")
 
 
 def _debug_log(data):
     try:
-        os.makedirs(_DEBUG_PATH, exist_ok=True)
-        with open(os.path.join(_DEBUG_PATH, "raw.log"), "ab") as f:
+        _makedirs_private(_DEBUG_PATH)
+        with _open_private(os.path.join(_DEBUG_PATH, "raw.log"), "ab") as f:
             with _debug_lock:
                 f.write(data)
     except Exception:
@@ -4667,9 +4719,7 @@ def _ollama_chat_transcript(db_path, chat_id):
     """Best-effort plain-text dump of one Ollama chat's messages, newest last."""
     import sqlite3
 
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
     try:
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at",
@@ -4688,9 +4738,7 @@ def _t3_thread_transcript(db_path, thread_id):
     """Best-effort plain-text dump of one T3 Code thread's messages."""
     import sqlite3
 
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
     try:
         rows = conn.execute(
             "SELECT role, text FROM projection_thread_messages "
