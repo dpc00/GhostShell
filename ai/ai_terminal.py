@@ -30,6 +30,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -1193,23 +1194,6 @@ def _setting_number(key, default, cast=int, settings=None):
         return default
 
 
-def _append_log_line(filename, message):
-    """Append one timestamped, thread-tagged line to ~/data/logs/ai_terminal.
-
-    Diagnostics only: every failure (unwritable path, disk full) is swallowed,
-    since losing a log line must never break a render or a settings reload.
-    """
-    try:
-        path = os.path.expanduser("~/data/logs/ai_terminal/" + filename)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            t_name = threading.current_thread().name
-            f.write(f"[{ts}] [{t_name}] {message}\n")
-    except Exception:
-        pass
-
-
 _DEFAULT_SCROLLBACK = 300
 _DEFAULT_MIN_COLS = 20
 _DEFAULT_MIN_ROWS = 1
@@ -1559,7 +1543,8 @@ def _resolve_launch_argv(argv, env=None):
     without use_last_error the plugin used to report GetLastError 0.
 
     Resolve via ``shutil.which`` (PATHEXT + PATH), then wrap ``.cmd``/``.bat``
-    with ``cmd.exe /c`` and ``.ps1`` with PowerShell.
+    with ``cmd.exe /c`` and ``.ps1`` with PowerShell (RemoteSigned, so a shim
+    that arrived from the internet still has to be signed to run).
 
     Bare ``bash`` skips the WSL WindowsApps stub in favour of Git Bash when
     present (WSL is the separate ``WSL Bash`` profile via wsl.exe).
@@ -1609,7 +1594,7 @@ def _resolve_launch_argv(argv, env=None):
             "powershell.exe",
             "-NoProfile",
             "-ExecutionPolicy",
-            "Bypass",
+            "RemoteSigned",
             "-File",
             resolved,
             *rest,
@@ -1901,7 +1886,66 @@ def _resolve_secret_refs(env):
     return out
 
 
+# ─── on-disk log locations and permissions ───────────────────────────────────
+#
+# Everything written under _LOG_ROOT is a verbatim record of an agent session:
+# raw ANSI, rendered transcripts, keystrokes. That routinely contains API keys,
+# OAuth codes and source code, so the tree is created owner-only and every log
+# file is opened 0600 (a no-op on Windows ACLs, load-bearing on POSIX).
+_LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))
+_DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
+
+
+def _makedirs_private(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+
+
+def _open_private(path, mode="w", **kwargs):
+    """open() that creates the file readable/writable by its owner only."""
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= os.O_APPEND if "a" in mode else os.O_TRUNC
+    return os.fdopen(os.open(path, flags, 0o600), mode, **kwargs)
+
+
+def _append_log_line(filename, message):
+    """Append one timestamped, thread-tagged line to a diagnostic log.
+
+    Diagnostics only: every failure (unwritable path, disk full) is swallowed,
+    since losing a log line must never break a render or a settings reload.
+    """
+    try:
+        path = os.path.join(_LOG_ROOT, "ai_terminal", filename)
+        _makedirs_private(os.path.dirname(path))
+        with _open_private(path, "a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            t_name = threading.current_thread().name
+            f.write(f"[{ts}] [{t_name}] {message}\n")
+    except Exception:
+        pass
+
+
+_SECRET_NAME = r"[A-Za-z0-9_\-]*(?:key|token|secret|password)[A-Za-z0-9_\-]*"
+_SECRET_SUBSTITUTIONS = (
+    # Bare key material (OpenAI/Anthropic/OpenRouter shapes).
+    (re.compile(r"(?i)\bsk-[A-Za-z0-9_\-]{8,}"), "***"),
+    # NAME=value / NAME: value.
+    (re.compile(r"(?i)(%s\s*[=:]\s*)\S+" % _SECRET_NAME), r"\1***"),
+    # --api-key value.
+    (re.compile(r"(?i)(--?%s\s+)\S+" % _SECRET_NAME), r"\1***"),
+)
+
+
+def _redact_secrets(text):
+    """Blank out key-shaped substrings so they are not persisted to a log."""
+    text = text or ""
+    for pattern, replacement in _SECRET_SUBSTITUTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _settings_debug_log(message):
+    if not _DEBUG:
+        return
     _append_log_line("settings_debug.log", message)
 
 
@@ -2118,12 +2162,12 @@ class _Terminal:
                 pass
         if log_on:
             try:
-                os.makedirs(_CAST_DIR, exist_ok=True)
+                _makedirs_private(_CAST_DIR)
                 self._cast_t0 = time.time()
                 self._cast_last = self._cast_t0
                 fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.cast"
                 path = os.path.join(_CAST_DIR, fname)
-                self._cast_file = open(path, "w", encoding="utf-8", newline="")
+                self._cast_file = _open_private(path, "w", encoding="utf-8", newline="")
                 header = {
                     "version": 3,
                     "term": {
@@ -2133,7 +2177,12 @@ class _Terminal:
                     },
                     "timestamp": int(self._cast_t0),
                     "title": "ai_terminal",
-                    "command": " ".join(self.pty.argv) if hasattr(self.pty, "argv") else "",
+                    # argv can carry an inline API key (a profile flag or a
+                    # $secret: value resolved at spawn), and this header is
+                    # persisted verbatim, so key-shaped words are redacted.
+                    "command": _redact_secrets(
+                        " ".join(self.pty.argv) if hasattr(self.pty, "argv") else ""
+                    ),
                 }
                 self._cast_file.write(json.dumps(header) + "\n")
                 self._cast_file.flush()
@@ -2143,10 +2192,12 @@ class _Terminal:
         self._text_log_file = None
         if _log_tab_text(self.profile_name):
             try:
-                os.makedirs(_TEXT_LOG_DIR, exist_ok=True)
+                _makedirs_private(_TEXT_LOG_DIR)
                 fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.log"
                 path = os.path.join(_TEXT_LOG_DIR, fname)
-                self._text_log_file = open(path, "a", encoding="utf-8", newline="\n")
+                self._text_log_file = _open_private(
+                    path, "a", encoding="utf-8", newline="\n"
+                )
                 self.screen.on_retire_line = self._on_retire_line
             except Exception as e:
                 print(f"[ai_terminal] text log open failed: {e}")
@@ -2742,14 +2793,27 @@ def _plain_cells_signature(rows):
     return "".join(parts)
 
 
-def _clear_view_selection(view):
-    """Collapse to a single empty caret at the start of the buffer."""
+def _clear_view_selection(view, term=None):
+    """Collapse to a single empty caret at the start of the buffer.
+
+    When term is given, guarded by term._in_render so on_selection_modified
+    does not mistake this internal mutation for a user gesture and latch
+    term._user_owns_caret -- this runs from _do_render/_selection_paint_
+    blocked, outside AiTerminalRenderCommand's own _in_render window.
+    """
+    prev = None
+    if term is not None:
+        prev = getattr(term, "_in_render", False)
+        term._in_render = True
     try:
         sel = view.sel()
         sel.clear()
         sel.add(sublime.Region(0))
     except Exception:
         pass
+    finally:
+        if term is not None:
+            term._in_render = prev
 
 
 def _text_is_pad_only(text):
@@ -2805,6 +2869,9 @@ def _selection_is_spurious(view, term):
     return _text_is_pad_only(text)
 
 
+_SELECTION_PAINT_BLOCK_MAX_S = 2.5
+
+
 def _selection_paint_blocked(view, term):
     """True when a full paint would destroy an in-progress ST text selection.
 
@@ -2823,22 +2890,40 @@ def _selection_paint_blocked(view, term):
     if _view_lags_screen(term):
         try:
             if any(not s.empty() for s in view.sel()):
-                _clear_view_selection(view)
+                _clear_view_selection(view, term)
         except Exception:
-            _clear_view_selection(view)
+            _clear_view_selection(view, term)
         term._st_select_guard_until = 0.0
+        term._paint_block_since = None
         return False
 
     if _selection_is_spurious(view, term):
-        _clear_view_selection(view)
+        _clear_view_selection(view, term)
         term._st_select_guard_until = 0.0
+        term._paint_block_since = None
         return False
 
     try:
-        if any(not s.empty() for s in view.sel()):
-            return True
+        has_sel = any(not s.empty() for s in view.sel())
     except Exception:
-        pass
+        has_sel = False
+    if has_sel:
+        now = time.monotonic()
+        since = getattr(term, "_paint_block_since", None)
+        if since is None:
+            term._paint_block_since = now
+            return True
+        if now - since < _SELECTION_PAINT_BLOCK_MAX_S:
+            return True
+        # Blocked too long: a stale/abandoned selection must not freeze the
+        # view forever -- keystrokes keep reaching the PTY while blocked, so
+        # an unbounded block makes the view silently fall behind until
+        # something happens to collapse the selection (see ai/TODO.md,
+        # "Debug instrumentation baton"). Let the next paint through; the
+        # full-buffer replace will naturally take the selection with it.
+        term._paint_block_since = None
+        return False
+    term._paint_block_since = None
     guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
     return guard > 0.0 and time.monotonic() < guard
 
@@ -2877,31 +2962,8 @@ def _do_render(term):
     # Defer while selecting/copying: full-buffer replace + caret re-pin wipes it.
     # Poll until selection clears and the post-drag guard expires.
     if _selection_paint_blocked(view, term):
-        # TEMP DEBUG (2026-08-11): instrumenting a reported bug where
-        # keystrokes (backspace) reach the live app but the ST view stops
-        # visually updating until some later keypress, then catches up all
-        # at once -- exactly what an unbounded paint-block would produce.
-        # Logs once on entering the blocked state (not every poll tick) with
-        # enough state to diagnose why it's blocked. Remove once root-caused.
-        if not getattr(term, "_paint_block_logged", False):
-            term._paint_block_logged = True
-            term._paint_block_since = time.monotonic()
-            try:
-                sels = [(s.a, s.b) for s in view.sel()]
-            except Exception:
-                sels = None
-            guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
-            print(
-                f"[ai_terminal] PAINT BLOCKED view={view.id()} sel={sels} "
-                f"guard_until={guard:.2f} now={time.monotonic():.2f} "
-                f"dirty={getattr(term.screen, 'dirty', None)}"
-            )
         sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
         return  # leave _render_pending True so _schedule_render doesn't double-arm
-    if getattr(term, "_paint_block_logged", False):
-        term._paint_block_logged = False
-        dur = time.monotonic() - float(getattr(term, "_paint_block_since", 0.0) or 0.0)
-        print(f"[ai_terminal] PAINT UNBLOCKED view={view.id()} after {dur:.2f}s")
     term._render_pending = False
     _maybe_apply_osc_title(term)
     if not term.screen.dirty:
@@ -3061,8 +3123,7 @@ def _apply_color_regions(view, regs):
 
 # ─── debug logging ────────────────────────────────────────────────────────────
 
-_DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
-_DEBUG_PATH = r"C:\Users\donal\data\logs\ai_terminal_raw_ansi_stream_debug_logs"
+_DEBUG_PATH = os.path.join(_LOG_ROOT, "ai_terminal_raw_ansi_stream_debug_logs")
 _debug_lock = threading.Lock()
 # Asciicast v3 recording (recording patch): env-gated like _DEBUG. When on
 # (AI_TERMINAL_LOG_LINES set in spawn_env OR in ST's process env), each
@@ -3073,24 +3134,31 @@ _debug_lock = threading.Lock()
 # is a new session = new .cast). Per stext-settings-json-strict the toggle is
 # NOT a top-level setting key; it lives in spawn_env where the user put it.
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
-_CAST_DIR = r"C:\Users\donal\data\logs\ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+_CAST_DIR = os.path.join(
+    _LOG_ROOT, "ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+)
 # Plain-text, agent-readable counterpart to the .cast recordings above --
 # see _log_tab_text(). Same timestamped-per-session naming so a .cast and
 # its .log pair up, but content is clean rendered text, not raw ANSI events.
-_TEXT_LOG_DIR = r"C:\Users\donal\data\logs\ai_terminal_session_text_logs"
+_TEXT_LOG_DIR = os.path.join(_LOG_ROOT, "ai_terminal_session_text_logs")
 
 
 def _debug_log(data):
     try:
-        os.makedirs(_DEBUG_PATH, exist_ok=True)
-        with open(os.path.join(_DEBUG_PATH, "raw.log"), "ab") as f:
+        _makedirs_private(_DEBUG_PATH)
+        with _open_private(os.path.join(_DEBUG_PATH, "raw.log"), "ab") as f:
             with _debug_lock:
                 f.write(data)
     except Exception:
         pass
 
 
-_BOX_BORDER_CHARS = set("─╭╮╰╯")
+_BOX_BORDER_CHARS = set("─━═╌╍╭╮╰╯┌┐└┘┏┓┗┛╔╗╚╝")
+
+# A border row counts even with a title/hint label mixed in (e.g.
+# "╭─ Claude ─────╮" or a bottom row carrying a status hint) as long as most
+# of its non-space chars are border-drawing chars.
+_BOX_BORDER_ROW_MIN_FRACTION = 0.6
 
 
 def _command_line_row_range(term):
@@ -3101,7 +3169,10 @@ def _command_line_row_range(term):
     box-drawing border above and below it -- that's a reliable, app-agnostic
     signal for "this is the command line" vs. plain scrollback/response text.
     Plain shells (cmd.exe, PowerShell, bash) never draw such a box, so this
-    returns None for them and callers must leave copy_mode untouched.
+    returns None for them -- callers must fall back to a different signal
+    (e.g. _live_cursor_row) rather than leaving copy_mode/caret-ownership
+    untouched, since "no box" is the common case for plain shells, not a
+    rare edge case.
     """
     try:
         with term._lock:
@@ -3114,7 +3185,10 @@ def _command_line_row_range(term):
 
     def is_border_row(idx):
         chars = [c for c, _a in rows[idx] if c and c != " "]
-        return len(chars) >= 3 and all(ch in _BOX_BORDER_CHARS for ch in chars)
+        if len(chars) < 3:
+            return False
+        border = sum(1 for ch in chars if ch in _BOX_BORDER_CHARS)
+        return (border / len(chars)) >= _BOX_BORDER_ROW_MIN_FRACTION
 
     top = None
     for r in range(cy, max(cy - 30, -1) - 1, -1):
@@ -3129,6 +3203,22 @@ def _command_line_row_range(term):
     if top is None or bottom is None or top == bottom:
         return None
     return (top, bottom)
+
+
+def _live_cursor_row(term):
+    """Buffer row of the PTY's actual hardware cursor -- the live input line.
+
+    Fallback for _command_line_row_range when no drawn box is found (plain
+    shells: cmd.exe, PowerShell, bash never draw one). Deliberately not a
+    per-agent prompt-box scan -- the hardware cursor row is raw
+    terminal-protocol state every app reports the same way.
+    """
+    try:
+        with term._lock:
+            hist = 0 if term.screen.alt_screen else len(term.screen.history)
+            return hist + int(term.screen.y)
+    except Exception:
+        return None
 
 
 # ─── view event listener: keystroke forwarding + lifecycle ───────────────────
@@ -3268,12 +3358,19 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         if len(sel) != 1:
             return
         pt = sel[0].b
-        bounds = _command_line_row_range(term)
-        if bounds is None:
-            term._user_owns_caret = True
-            return
         row = view.rowcol(pt)[0]
-        if bounds[0] <= row <= bounds[1]:
+        bounds = _command_line_row_range(term)
+        if bounds is not None:
+            on_command_line = bounds[0] <= row <= bounds[1]
+        else:
+            # No drawn box (plain shells: cmd.exe, PowerShell, bash) -- fall
+            # back to comparing against the PTY's actual hardware cursor row
+            # instead of unconditionally latching term._user_owns_caret,
+            # which used to freeze the caret forever on the very first
+            # selection event in any such shell (see ai/TODO.md).
+            cursor_row = _live_cursor_row(term)
+            on_command_line = cursor_row is not None and abs(row - cursor_row) <= 1
+        if on_command_line:
             term._user_owns_caret = False
             # _do_render only repaints when term.screen.dirty -- i.e. on new
             # PTY bytes. A click back into the box hands tracking back to
@@ -3390,17 +3487,28 @@ def _route_click_to_cursor_fallback(view, term, event):
         return False
     col, row = cell  # 1-based
     screen = term.screen
-    py = _find_prompt_row(screen)
-    if py is None or screen.y != py or (row - 1) != py:
-        return False
-    start = _input_start_col(screen, py)
-    limit = _field_right_limit(screen, py)
-    target = min(max(col - 1, start), limit)
-    current = int(screen.x)
-    delta = target - current
+    # Locked: screen.x/y/private_modes/cols are mutated by the reader thread
+    # concurrently, and every other grid consumer (_command_line_row_range,
+    # _Terminal.kill, the render path) already takes this lock first -- an
+    # unlocked mid-scroll read here could compute delta against a torn
+    # screen.x and silently send arrow keys to the wrong column.
+    with term._lock:
+        py = _find_prompt_row(screen)
+        if py is None or screen.y != py or (row - 1) != py:
+            return False
+        start = _input_start_col(screen, py)
+        limit = _field_right_limit(screen, py)
+        target = min(max(col - 1, start), limit)
+        current = int(screen.x)
+        delta = target - current
+        application_mode = 1 in screen.private_modes
+        cols = int(screen.cols)
     if delta == 0:
         return True
-    application_mode = 1 in screen.private_modes
+    if abs(delta) > cols:
+        # A stale/torn screen.x would otherwise turn into a large visible
+        # cursor jump; treat an implausible delta as a no-op instead.
+        return False
     key = "right" if delta > 0 else "left"
     code = _get_key_code(key, application_mode=application_mode)
     term.send_string(code * abs(delta))
@@ -4593,9 +4701,7 @@ def _ollama_chat_transcript(db_path, chat_id):
     """Best-effort plain-text dump of one Ollama chat's messages, newest last."""
     import sqlite3
 
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
     try:
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at",
@@ -4614,9 +4720,7 @@ def _t3_thread_transcript(db_path, thread_id):
     """Best-effort plain-text dump of one T3 Code thread's messages."""
     import sqlite3
 
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
     try:
         rows = conn.execute(
             "SELECT role, text FROM projection_thread_messages "
@@ -4900,17 +5004,6 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
         if term is None:
             return
         term.copy_mode = not term.copy_mode
-        # TEMP DEBUG (2026-08-11): instrumenting an unexplained spurious
-        # toggle reported during Claude responses / permission prompts,
-        # apparently without ctrl+alt+c being pressed. Logs every firing so
-        # the next occurrence is caught with a timestamp + call stack
-        # instead of guessing. Remove once root-caused.
-        import traceback
-        print(
-            f"[ai_terminal] copy_mode TOGGLE fired -> now {term.copy_mode} "
-            f"(view {self.view.id()}) stack:\n"
-            + "".join(traceback.format_stack(limit=8))
-        )
         if term.copy_mode:
             sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
         else:
@@ -4985,9 +5078,17 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 term._user_owns_caret = False
                 if last_auto is not None:
                     pos = min(last_auto, self.view.size())
-                    sel = self.view.sel()
-                    sel.clear()
-                    sel.add(sublime.Region(pos, pos))
+                    # Guarded: on_selection_modified must not see this as a
+                    # user gesture and re-latch _user_owns_caret via the
+                    # _command_line_row_range(None) fallback -- see there.
+                    prev_in_render = getattr(term, "_in_render", False)
+                    term._in_render = True
+                    try:
+                        sel = self.view.sel()
+                        sel.clear()
+                        sel.add(sublime.Region(pos, pos))
+                    finally:
+                        term._in_render = prev_in_render
                 _scroll_to_bottom(self.view)
                 term._auto_follow = True
                 sublime.status_message("Ai terminal: copy mode OFF")

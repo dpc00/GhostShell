@@ -285,13 +285,22 @@ def scan_local_usage(home=None, now=None):
 # ("no data for this provider"), never as a failure worth propagating.
 _FETCH_ERRORS = (urllib.error.URLError, OSError, ValueError)
 
+# Every response here is a small JSON document. Reading unbounded would let a
+# hostile or misbehaving endpoint (including a local server on the ollama port)
+# exhaust the plugin host's memory, so reads are capped.
+_MAX_RESPONSE_BYTES = 1 << 20
+
+
+def _read_json(response):
+    return json.loads(response.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
+
 
 def _http_json(request, timeout=20):
     """Decoded JSON body of `request` (a Request or a bare URL), or None when
     the call or the decode fails."""
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8", "replace"))
+            return _read_json(response)
     except _FETCH_ERRORS:
         return None
 

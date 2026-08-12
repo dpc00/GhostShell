@@ -24,6 +24,7 @@ import glob
 import os
 import sqlite3
 import time
+import urllib.parse
 
 
 def _mtime(path):
@@ -114,17 +115,24 @@ def _scan_glob_source(source, base):
 # ─── custom sources: one file/db holding many sessions ────────────────────────
 
 
+def read_only_uri(db_path):
+    """``file:`` URI opening ``db_path`` read-only.
+
+    The path is percent-encoded: a literal ``?`` in a directory name would
+    otherwise start the URI's query string and let the path itself override
+    ``mode=ro`` (``...?mode=rwc``) on someone else's database.
+    """
+    path = urllib.parse.quote(db_path.replace("\\", "/"), safe="/:")
+    return "file:%s?mode=ro" % path
+
+
 def _sqlite_rows(db_path, query):
     """All rows of `query` from a read-only connection to `db_path`.
 
-    Read-only URI mode matters: these are live databases owned by other,
-    possibly running apps, and this sweep must never write or lock them
-    (backslashes become forward slashes because a Windows path is not a valid
-    sqlite URI otherwise).
+    Read-only matters: these are live databases owned by other, possibly
+    running apps, and this sweep must never write to or lock them.
     """
-    conn = sqlite3.connect(
-        "file:%s?mode=ro" % db_path.replace("\\", "/"), uri=True
-    )
+    conn = sqlite3.connect(read_only_uri(db_path), uri=True)
     try:
         return conn.execute(query).fetchall()
     finally:
