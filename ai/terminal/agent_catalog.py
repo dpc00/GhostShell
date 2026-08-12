@@ -36,7 +36,6 @@ CATALOG = {
         "launch_command": ["codex"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -45,7 +44,6 @@ CATALOG = {
         "launch_command": ["opencode"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -75,7 +73,6 @@ CATALOG = {
         "launch_command": ["qwen"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": (
             "Never emits a real ANSI scroll (Screen.history stays empty), "
@@ -90,7 +87,6 @@ CATALOG = {
         "launch_command": ["vibe"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
             "LOG_LEVEL": "DEBUG",
         },
         "mouse_handling": True,
@@ -108,7 +104,6 @@ CATALOG = {
         "launch_command": ["kimi"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -117,7 +112,6 @@ CATALOG = {
         "launch_command": ["kiro-cli"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -126,7 +120,6 @@ CATALOG = {
         "launch_command": ["mimo"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -135,7 +128,6 @@ CATALOG = {
         "launch_command": ["jcode"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": None,
     },
@@ -158,7 +150,6 @@ CATALOG = {
         "launch_command": ["agy"],
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": (
             "Google Antigravity CLI. Shim (e.g. "
