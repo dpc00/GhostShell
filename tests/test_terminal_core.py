@@ -27,7 +27,9 @@ from ai.terminal import (
     translate_key,
     view_point_to_cell,
 )
+from ai.terminal import ghostty_vt
 from ai.terminal.colors import FAINT, REVERSE
+from ai.terminal.history_scan import read_only_uri
 
 
 class TestKeys(unittest.TestCase):
@@ -115,6 +117,42 @@ class TestScreen(unittest.TestCase):
         rows, cy, cx = s.render_cells()
         self.assertEqual(len(rows), 2)
         self.assertEqual(cy, s.y)
+
+
+class TestGhosttyResultCheck(unittest.TestCase):
+    def test_success_passes_and_failure_names_the_call(self):
+        self.assertIsNone(ghostty_vt.check(ghostty_vt.SUCCESS, "ghostty_terminal_new"))
+        with self.assertRaises(ghostty_vt.GhosttyError) as ctx:
+            ghostty_vt.check(ghostty_vt.OUT_OF_MEMORY, "ghostty_terminal_vt_write")
+        self.assertIn("ghostty_terminal_vt_write", str(ctx.exception))
+        self.assertIn("OUT_OF_MEMORY", str(ctx.exception))
+        self.assertEqual(ctx.exception.result, ghostty_vt.OUT_OF_MEMORY)
+
+
+class TestRetireLineErrors(unittest.TestCase):
+    def _scroll_once(self, s):
+        s.put_char("1")
+        s.cr()
+        s.lf()
+        s.put_char("2")
+        s.cr()
+        s.lf()
+
+    def test_callback_failure_is_recorded_and_callback_dropped(self):
+        s = Screen(5, 2, history_cap=10)
+        calls = []
+
+        def boom(text):
+            calls.append(text)
+            raise OSError("disk full")
+
+        s.on_retire_line = boom
+        self._scroll_once(s)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(s.on_retire_line)
+        self.assertIsInstance(s.retire_line_error, OSError)
+        # Rendering must survive a broken logging callback.
+        self.assertEqual(len(s.history), 1)
 
 
 class TestParser(unittest.TestCase):
@@ -512,6 +550,19 @@ class TestSanitizePtyEnv(unittest.TestCase):
         out = sanitize_pty_env({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
         self.assertEqual(out["TERM"], "xterm-256color")
         self.assertEqual(out["COLORTERM"], "truecolor")
+
+
+class TestReadOnlyUri(unittest.TestCase):
+    def test_windows_path_is_read_only(self):
+        self.assertEqual(
+            read_only_uri("C:\\Users\\me\\Ollama\\db.sqlite"),
+            "file:C:/Users/me/Ollama/db.sqlite?mode=ro",
+        )
+
+    def test_question_mark_in_path_cannot_override_mode(self):
+        uri = read_only_uri("/home/me/db.sqlite?mode=rwc")
+        self.assertEqual(uri, "file:/home/me/db.sqlite%3Fmode%3Drwc?mode=ro")
+        self.assertEqual(uri.count("?"), 1)
 
 
 if __name__ == "__main__":

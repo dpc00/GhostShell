@@ -421,25 +421,51 @@ enabled tracking yet). Compiles clean, existing 51/51
 live Claude Code prompt line tested and passes — clicking mid-text moves
 the real app cursor to the click point as intended.
 
-## Debug instrumentation baton (2026-08-11, uncommitted)
+## Debug instrumentation baton (2026-08-11) — ROOT-CAUSED AND FIXED
 
-Two TEMP DEBUG blocks were added to `ai_terminal.py` (uncommitted, still
-sitting in the working tree as of this restart) to chase two separately
-reported bugs, neither root-caused yet:
+Two TEMP DEBUG blocks were added to `ai_terminal.py` to chase two separately
+reported bugs. An independent code review of the pending commits (not the
+instrumentation's own output — neither bug had reproduced yet under
+logging) spotted both root causes directly in the render/selection code, so
+both are now fixed and the instrumentation removed:
 
-1. `_do_render`: logs `PAINT BLOCKED`/`PAINT UNBLOCKED` around the
-   `_selection_paint_blocked` early-return, with view id, selection,
-   guard-expiry time, and dirty state — chasing a report that keystrokes
-   (backspace) reach the live app but the ST view stops visually updating
-   until a later keypress, then catches up all at once (consistent with an
-   unbounded paint-block).
-2. `AiTerminalToggleCopyModeCommand.run`: logs every firing plus an 8-frame
-   call stack — chasing a report of copy_mode toggling spuriously during
-   Claude responses/permission prompts, apparently without `ctrl+alt+c`
-   being pressed.
+1. **Paint freeze** ("backspace reaches the live app but the ST view stops
+   visually updating until a later keypress, then catches up all at once"):
+   `_selection_paint_blocked` blocked repainting for *any* non-empty
+   selection with no time bound at all. Fixed: bounded to 2.5s
+   (`_SELECTION_PAINT_BLOCK_MAX_S`) — a stale/abandoned selection can no
+   longer freeze the view indefinitely.
+2. **Spurious copy_mode-adjacent caret freeze** (reported as copy_mode
+   toggling on its own during Claude responses/permission prompts): the
+   real bug was one level down — `on_selection_modified` latched
+   `term._user_owns_caret = True` unconditionally whenever
+   `_command_line_row_range` found no drawn box, which is the *normal* case
+   for plain shells (cmd.exe/PowerShell/bash draw no box at all), so the
+   very first selection event in such a shell froze the caret permanently.
+   Compounding it: `_do_render`'s own `_clear_view_selection` calls and the
+   copy-mode Escape handler's `sel.clear()/add()` fired
+   `on_selection_modified` as an unguarded side effect, re-latching the
+   same flag. Fixed: `on_selection_modified` now falls back to a new
+   `_live_cursor_row()` helper (hardware cursor row comparison, resurrected
+   from the logic removed in `0b7aa19`) instead of latching when no box is
+   found, and both internal selection mutations are now guarded by
+   `term._in_render` so they're never mistaken for a user gesture.
 
-Both are gated to log only on state transitions (not every poll tick), so
-they're safe to leave running for a while. Neither bug has reproduced yet
-this session (console log checked right after restart — clean, no
-instrumentation output). Remove both blocks once root-caused; do not
-commit them as permanent logging.
+Also fixed in the same pass (found during the same review, all in
+`ai_terminal.py`):
+- `_route_click_to_cursor_fallback` now reads `term.screen` under
+  `term._lock` (every other grid consumer already did) and no-ops on an
+  implausible delta instead of risking a torn read / large visible cursor
+  jump.
+- `_BOX_BORDER_CHARS` widened to sharp/heavy/double corner glyphs, and a
+  border row now only needs ≥60% border chars instead of 100% — a titled
+  border like `╭─ Claude ─────╮` used to fail to match, which fed back into
+  bug 2 above via a false "no box" read.
+
+103/103 tests pass, compiles clean. Findings #3/#4 from the same review
+(a `kill()`/handle-leak and a `_close_handles`/exit-watcher race, both in
+the PTY teardown path) were deliberately NOT fixed in this pass — an open
+Devin PR (`devin/1786491335-error-handling`) rewrites that exact region
+(`start`/`_watch_process_exit`/`read`/`write`/`_close_handles`), so fixing
+it here risked a merge conflict. Revisit once that PR is reviewed/merged
+or closed.

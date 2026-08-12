@@ -159,7 +159,10 @@ def provider_for_profile(profile):
     for item in argv:
         if not isinstance(item, str):
             continue
-        base = os.path.basename(item).lower()
+        # Split on both separators rather than os.path.basename: profiles hold
+        # Windows paths, and on a POSIX host basename() would keep the whole
+        # "C:\...\claude.exe" as the name and detect no provider at all.
+        base = re.split(r"[\\/]", item)[-1].lower()
         base = re.sub(r"\.(exe|cmd|bat|ps1)$", "", base)
         provider = _PROVIDER_EXECUTABLES.get(base)
         if provider:
@@ -280,10 +283,32 @@ def scan_local_usage(home=None, now=None):
 
 # ─── live usage endpoints (the source of truth) ──────────────────────────────
 
+# Every response here is a small JSON document. Reading unbounded would let a
+# hostile or misbehaving endpoint (including a local server on the ollama port)
+# exhaust the plugin host's memory, so reads are capped.
+_MAX_RESPONSE_BYTES = 1 << 20
+
+
+def _read_json(response):
+    return json.loads(response.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
+
+
 def _http_json(url, headers, timeout=20):
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", "replace"))
+        return _read_json(response)
+
+
+def _live_error(exc):
+    """Usage dict describing a live lookup that failed for a logged-in provider.
+
+    Returning None instead would be indistinguishable from "this provider is
+    not configured", so the menu would silently show no quota at all for a
+    provider the user is signed into. Callers only use this once credentials
+    were found; a provider with no credentials still returns None.
+    """
+    reason = getattr(exc, "reason", None) or exc
+    return {"error": "usage lookup failed: %s" % (reason,), "source": "live"}
 
 
 def _iso_to_epoch(value):
@@ -385,8 +410,9 @@ def fetch_codex_usage(codex_home="~/.codex", now=None):
     """Live Codex quota from the usage endpoint its own CLI uses.
 
     Reuses the OAuth access token Codex persisted in auth.json; a dedicated
-    usage endpoint, so no inference quota is spent. Returns None on any
-    failure (offline, logged out, token expired).
+    usage endpoint, so no inference quota is spent. Returns None when Codex
+    is not logged in at all, and an {"error": ...} dict when it is logged in
+    but the lookup failed (offline, token rejected).
     """
     auth_path = os.path.join(os.path.expanduser(codex_home), "auth.json")
     try:
@@ -409,8 +435,8 @@ def fetch_codex_usage(codex_home="~/.codex", now=None):
         headers["ChatGPT-Account-ID"] = account_id
     try:
         payload = _http_json("https://chatgpt.com/backend-api/wham/usage", headers)
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return _live_error(e)
     return parse_codex_wham_usage(payload, now=now)
 
 
@@ -465,12 +491,14 @@ def fetch_claude_usage(claude_home="~/.claude", now=None):
     oauth = _read_claude_oauth(creds_path)
     if not oauth or not oauth.get("accessToken"):
         return None
+    warning = None
     if _claude_token_expired(oauth, now=now):
-        oauth = _refresh_claude_token(creds_path, oauth)
+        oauth, warning = _refresh_claude_token(creds_path, oauth)
         if not oauth:
             return {
                 "error": "token expired — open Claude to refresh",
                 "source": "live",
+                "warning": warning,
             }
     headers = {
         "Authorization": "Bearer %s" % oauth["accessToken"],
@@ -479,9 +507,12 @@ def fetch_claude_usage(claude_home="~/.claude", now=None):
     }
     try:
         payload = _http_json("https://api.anthropic.com/api/oauth/usage", headers)
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
-    return parse_claude_oauth_usage(payload, now=now)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return _live_error(e)
+    usage = parse_claude_oauth_usage(payload, now=now)
+    if usage is not None and warning:
+        usage["warning"] = warning
+    return usage
 
 
 def _read_claude_oauth(creds_path):
@@ -509,18 +540,20 @@ _CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 
 
 def _refresh_claude_token(creds_path, oauth):
-    """Refresh the Claude access token exactly like the CLI does, or None.
+    """Refresh the Claude access token exactly like the CLI does.
 
-    The refresh grant rotates the refresh token, so the rotated pair is
-    atomically persisted back to .credentials.json before returning —
-    otherwise the CLI's next refresh would fail and log the user out.
-    If the grant is rejected (e.g. a concurrently running CLI just rotated
-    the token first), the file is re-read once: the winner's fresh token
-    serves fine.
+    Returns ``(oauth_or_None, warning_or_None)``. The refresh grant rotates
+    the refresh token, so the rotated pair is atomically persisted back to
+    .credentials.json before returning — otherwise the CLI's next refresh
+    would fail and log the user out. A failure to persist is reported as the
+    warning rather than dropped, because it costs the user their CLI login,
+    not just this sweep's data. If the grant is rejected (e.g. a concurrently
+    running CLI just rotated the token first), the file is re-read once: the
+    winner's fresh token serves fine.
     """
     refresh_token = oauth.get("refreshToken")
     if not refresh_token:
-        return None
+        return None, None
     body = json.dumps({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -537,15 +570,16 @@ def _refresh_claude_token(creds_path, oauth):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
-    except (urllib.error.URLError, OSError, ValueError):
+            payload = _read_json(response)
+    except (urllib.error.URLError, OSError, ValueError) as e:
         latest = _read_claude_oauth(creds_path)
         if latest and not _claude_token_expired(latest):
-            return latest  # someone else (the CLI) refreshed first — use theirs
-        return None
+            # someone else (the CLI) refreshed first — use theirs
+            return latest, None
+        return None, "token refresh failed: %s" % (getattr(e, "reason", None) or e,)
     access_token = payload.get("access_token")
     if not access_token:
-        return None
+        return None, "token refresh returned no access_token"
     oauth = dict(oauth)
     oauth["accessToken"] = access_token
     if payload.get("refresh_token"):
@@ -556,12 +590,17 @@ def _refresh_claude_token(creds_path, oauth):
     scope = payload.get("scope")
     if isinstance(scope, str) and scope:
         oauth["scopes"] = scope.split(" ")
-    _persist_claude_oauth(creds_path, oauth)
-    return oauth
+    return oauth, _persist_claude_oauth(creds_path, oauth)
 
 
 def _persist_claude_oauth(creds_path, oauth):
-    """Atomically merge the rotated oauth block back into .credentials.json."""
+    """Atomically merge the rotated oauth block back into .credentials.json.
+
+    Returns None on success or a message describing why the rotated tokens
+    could not be written: the sweep still finishes off the in-memory token,
+    but the CLI is now holding a refresh token the server has rotated away,
+    so the user has to log in again — never worth hiding.
+    """
     try:
         with open(creds_path, "r", encoding="utf-8") as handle:
             creds = json.load(handle)
@@ -574,8 +613,14 @@ def _persist_claude_oauth(creds_path, oauth):
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(creds, handle)
         os.replace(tmp_path, creds_path)
-    except OSError:
-        pass  # keeping the in-memory token still lets this sweep finish
+    except OSError as e:
+        # Keeping the in-memory token still lets this sweep finish, so this is
+        # a warning rather than a failure -- but never a silent one.
+        return (
+            "could not persist the rotated Claude tokens to %s (%s); the CLI "
+            "may need a fresh login" % (creds_path, e)
+        )
+    return None
 
 
 def parse_ollama_me(payload):
@@ -611,7 +656,7 @@ def fetch_ollama_usage(base_url="http://localhost:11434", now=None):
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
+            payload = _read_json(response)
     except (urllib.error.URLError, OSError, ValueError):
         return None
     return parse_ollama_me(payload)
@@ -641,16 +686,17 @@ def parse_kimi_me(payload):
 
 
 def _refresh_kimi_token(creds_path, creds):
-    """Refresh the Kimi access token exactly like the CLI does, or None.
+    """Refresh the Kimi access token exactly like the CLI does.
 
-    The grant is form-encoded (not JSON — the JSON body form the Claude
-    endpoint accepts returns 400 unsupported_grant_type here), rotates the
-    refresh token, and is persisted back atomically so ``kimi`` itself stays
-    logged in, mirroring _refresh_claude_token's contract.
+    Returns ``(creds_or_None, warning_or_None)``. The grant is form-encoded
+    (not JSON — the JSON body form the Claude endpoint accepts returns 400
+    unsupported_grant_type here), rotates the refresh token, and is persisted
+    back atomically so ``kimi`` itself stays logged in, mirroring
+    _refresh_claude_token's contract including its persist warning.
     """
     refresh_token = creds.get("refresh_token")
     if not refresh_token:
-        return None
+        return None, None
     body = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -666,12 +712,12 @@ def _refresh_kimi_token(creds_path, creds):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+            payload = _read_json(response)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return None, "token refresh failed: %s" % (getattr(e, "reason", None) or e,)
     access_token = payload.get("access_token")
     if not access_token:
-        return None
+        return None, "token refresh returned no access_token"
     creds = dict(creds)
     creds["access_token"] = access_token
     if payload.get("refresh_token"):
@@ -680,20 +726,27 @@ def _refresh_kimi_token(creds_path, creds):
     if isinstance(expires_in, (int, float)):
         creds["expires_at"] = int(time.time() + expires_in)
         creds["expires_in"] = expires_in
-    _persist_kimi_oauth(creds_path, creds)
-    return creds
+    return creds, _persist_kimi_oauth(creds_path, creds)
 
 
 def _persist_kimi_oauth(creds_path, creds):
-    """Atomically write the rotated credentials back to kimi-code.json."""
+    """Atomically write the rotated credentials back to kimi-code.json.
+
+    Returns None on success or a message describing the failure: as with
+    Claude, a rotated refresh token that never reached disk logs the CLI out.
+    """
     directory = os.path.dirname(creds_path) or "."
     try:
         fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(creds, handle)
         os.replace(tmp_path, creds_path)
-    except OSError:
-        pass  # keeping the in-memory token still lets this sweep finish
+    except OSError as e:
+        return (
+            "could not persist the rotated Kimi tokens to %s (%s); the CLI "
+            "may need a fresh login" % (creds_path, e)
+        )
+    return None
 
 
 def fetch_kimi_usage(kimi_home="~/.kimi-code", now=None):
@@ -717,17 +770,25 @@ def fetch_kimi_usage(kimi_home="~/.kimi-code", now=None):
         return None
     expires_at = creds.get("expires_at")  # epoch seconds
     now_s = now if now is not None else time.time()
+    warning = None
     if isinstance(expires_at, (int, float)) and expires_at <= now_s + 60:
-        refreshed = _refresh_kimi_token(creds_path, creds)
+        refreshed, warning = _refresh_kimi_token(creds_path, creds)
         if not refreshed:
-            return {"error": "token expired — open Kimi to refresh", "source": "live"}
+            return {
+                "error": "token expired — open Kimi to refresh",
+                "source": "live",
+                "warning": warning,
+            }
         access_token = refreshed["access_token"]
     headers = {"Authorization": "Bearer %s" % access_token, "Accept": "application/json"}
     try:
         payload = _http_json("https://api.kimi.com/coding/v1/me", headers)
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
-    return parse_kimi_me(payload)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return _live_error(e)
+    usage = parse_kimi_me(payload)
+    if usage is not None and warning:
+        usage["warning"] = warning
+    return usage
 
 
 def parse_openrouter_key(payload):
@@ -790,8 +851,8 @@ def fetch_openrouter_usage(qwen_home="~/.qwen", now=None):
     headers = {"Authorization": "Bearer %s" % key, "Accept": "application/json"}
     try:
         payload = _http_json("https://openrouter.ai/api/v1/key", headers)
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return _live_error(e)
     return parse_openrouter_key(payload)
 
 
@@ -805,30 +866,57 @@ def gather_usage(home=None, now=None):
     home_dir = os.path.expanduser(home or "~")
     results = {}
 
-    codex = fetch_codex_usage(os.path.join(home_dir, ".codex"), now=now)
+    def collect(provider, fetch):
+        """Run one provider's fetcher; an unexpected raise must not end the sweep.
+
+        The fetchers only promise to handle the failures they anticipate
+        (offline, malformed JSON). Anything else used to abort gather_usage
+        halfway through and discard every provider after it, so the bug
+        surfaced as missing quota rather than as a bug.
+        """
+        try:
+            return fetch()
+        except Exception as e:
+            results[provider] = {
+                "error": "usage scan raised %s: %s" % (type(e).__name__, e),
+                "source": "live",
+            }
+            return None
+
+    codex = collect(
+        "codex", lambda: fetch_codex_usage(os.path.join(home_dir, ".codex"), now=now)
+    )
     if not codex or "windows" not in codex:
-        local = scan_codex_usage(os.path.join(home_dir, ".codex"), now=now)
+        local = collect(
+            "codex", lambda: scan_codex_usage(os.path.join(home_dir, ".codex"), now=now)
+        )
         if local:
             local["source"] = "local"
             codex = local
     if codex:
         results["codex"] = codex
 
-    claude = fetch_claude_usage(os.path.join(home_dir, ".claude"), now=now)
+    claude = collect(
+        "claude", lambda: fetch_claude_usage(os.path.join(home_dir, ".claude"), now=now)
+    )
     if claude:
         results["claude"] = claude
 
-    ollama = fetch_ollama_usage(now=now)
+    ollama = collect("ollama", lambda: fetch_ollama_usage(now=now))
     if ollama:
         results["ollama"] = ollama
 
-    kimi = fetch_kimi_usage(os.path.join(home_dir, ".kimi-code"), now=now)
+    kimi = collect(
+        "kimi", lambda: fetch_kimi_usage(os.path.join(home_dir, ".kimi-code"), now=now)
+    )
     if kimi:
         results["kimi"] = kimi
 
     # Qwen Code is configured to bill through OpenRouter (its settings.json
     # persists the key), so the OpenRouter key status IS qwen's quota.
-    openrouter = fetch_openrouter_usage(os.path.join(home_dir, ".qwen"), now=now)
+    openrouter = collect(
+        "qwen", lambda: fetch_openrouter_usage(os.path.join(home_dir, ".qwen"), now=now)
+    )
     if openrouter:
         results["qwen"] = openrouter
 

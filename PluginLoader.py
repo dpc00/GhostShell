@@ -43,17 +43,28 @@ from GhostShell.ai.ai_terminal import (
 
 def plugin_loaded():
     import importlib
+    import traceback
 
     try:
         importlib.import_module("GhostShell.ai.ai_terminal").plugin_loaded()
-    except Exception as e:
-        print(f"GhostShell PluginLoader: ai_terminal.plugin_loaded failed: {e}")
+    except Exception:
+        # ST swallows an exception raised here, and the message alone leaves no
+        # way to tell a missing setting from a broken import, so log the
+        # traceback. Still caught: a failed load must not take out the host.
+        print(
+            "GhostShell PluginLoader: ai_terminal.plugin_loaded failed:\n%s"
+            % traceback.format_exc()
+        )
 
 
 def plugin_unloaded():
     import importlib
+    import traceback
 
     try:
         importlib.import_module("GhostShell.ai.ai_terminal").plugin_unloaded()
-    except Exception as e:
-        print(f"GhostShell PluginLoader: ai_terminal.plugin_unloaded failed: {e}")
+    except Exception:
+        print(
+            "GhostShell PluginLoader: ai_terminal.plugin_unloaded failed:\n%s"
+            % traceback.format_exc()
+        )

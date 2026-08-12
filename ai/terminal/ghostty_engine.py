@@ -60,9 +60,10 @@ class GhosttyParser:
         opts = gvt.GhosttyTerminalOptions(
             cols=screen.cols, rows=screen.rows, max_scrollback=cap
         )
-        rc = self._g.terminal_new(None, ctypes.byref(self._term), opts)
-        if rc != gvt.SUCCESS:
-            raise RuntimeError("ghostty_terminal_new failed: %d" % rc)
+        gvt.check(
+            self._g.terminal_new(None, ctypes.byref(self._term), opts),
+            "ghostty_terminal_new",
+        )
 
         # Ghostty's built-in default 0-15 palette doesn't match colors.py's
         # vivid Terminus-style ANSI16 table. Since resolved cell colors come
@@ -75,17 +76,29 @@ class GhosttyParser:
         palette = (gvt.GhosttyColorRgb * 256)(
             *[gvt.GhosttyColorRgb(r, g, b) for (r, g, b) in XTERM256_RGB]
         )
-        self._g.terminal_set(self._term, gvt.TERMINAL_OPT_COLOR_PALETTE, palette)
+        # An unapplied palette silently requantizes every named ANSI color to
+        # the wrong id, which is exactly what this override exists to prevent.
+        gvt.check(
+            self._g.terminal_set(self._term, gvt.TERMINAL_OPT_COLOR_PALETTE, palette),
+            "ghostty_terminal_set(COLOR_PALETTE)",
+        )
 
         self._render_state = gvt.GhosttyRenderState()
-        rc = self._g.render_state_new(None, ctypes.byref(self._render_state))
-        if rc != gvt.SUCCESS:
-            raise RuntimeError("ghostty_render_state_new failed: %d" % rc)
+        gvt.check(
+            self._g.render_state_new(None, ctypes.byref(self._render_state)),
+            "ghostty_render_state_new",
+        )
 
         self._row_iter = gvt.GhosttyRenderStateRowIterator()
-        self._g.render_state_row_iterator_new(None, ctypes.byref(self._row_iter))
+        gvt.check(
+            self._g.render_state_row_iterator_new(None, ctypes.byref(self._row_iter)),
+            "ghostty_render_state_row_iterator_new",
+        )
         self._cells = gvt.GhosttyRenderStateRowCells()
-        self._g.render_state_row_cells_new(None, ctypes.byref(self._cells))
+        gvt.check(
+            self._g.render_state_row_cells_new(None, ctypes.byref(self._cells)),
+            "ghostty_render_state_row_cells_new",
+        )
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
         self._last_scrollback_rows = -1
@@ -94,11 +107,21 @@ class GhosttyParser:
         if self.force_main_screen:
             text = _strip_alt_screen(text)
         data = text.encode("utf-8", "surrogateescape")
-        self._g.terminal_vt_write(self._term, data, len(data))
+        # A dropped write leaves the rendered screen permanently out of step
+        # with what the child actually printed.
+        gvt.check(
+            self._g.terminal_vt_write(self._term, data, len(data)),
+            "ghostty_terminal_vt_write",
+        )
         self._sync()
 
     def resize(self, cols, rows):
-        self._g.terminal_resize(self._term, cols, rows, 1, 1)
+        # Screen is resized only once the terminal agreed: the two sizes must
+        # stay in lockstep or _sync_grid quietly stops updating the grid.
+        gvt.check(
+            self._g.terminal_resize(self._term, cols, rows, 1, 1),
+            "ghostty_terminal_resize",
+        )
         self.s.resize(cols, rows)
         # A resize can reflow scrollback content without changing its row
         # count, which the row-count-delta check in _sync_scrollback can't
@@ -106,7 +129,7 @@ class GhosttyParser:
         self._last_scrollback_rows = -1
 
     def reset(self):
-        self._g.terminal_reset(self._term)
+        gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
         self._last_scrollback_rows = -1
         self._sync()
 
@@ -205,21 +228,27 @@ class GhosttyParser:
         # OUT_OF_SPACE (oversized sequence) or other error: signal fallback.
         return None
 
+    def _get(self, data_id, out):
+        """terminal_get, checked: a failed read otherwise reads as a real value.
+
+        The out-param keeps its zero value when the call fails, which renders
+        as a cursor at (0, 0), an empty scrollback or a hidden cursor —
+        indistinguishable from the terminal genuinely being in that state.
+        """
+        gvt.check(
+            self._g.terminal_get(self._term, data_id, ctypes.byref(out)),
+            "ghostty_terminal_get(%d)" % data_id,
+        )
+        return out.value
 
     def _get_u16(self, data_id):
-        v = ctypes.c_uint16()
-        self._g.terminal_get(self._term, data_id, ctypes.byref(v))
-        return v.value
+        return self._get(data_id, ctypes.c_uint16())
 
     def _get_size(self, data_id):
-        v = ctypes.c_size_t()
-        self._g.terminal_get(self._term, data_id, ctypes.byref(v))
-        return v.value
+        return self._get(data_id, ctypes.c_size_t())
 
     def _get_bool(self, data_id):
-        v = ctypes.c_bool()
-        self._g.terminal_get(self._term, data_id, ctypes.byref(v))
-        return v.value
+        return self._get(data_id, ctypes.c_bool())
 
     def _mode(self, mode_value):
         v = ctypes.c_bool()
@@ -300,9 +329,12 @@ class GhosttyParser:
         return self._finish_cell(text, fg, bg, flags)
 
     def _sync_grid(self):
-        rc = self._g.render_state_update(self._render_state, self._term)
-        if rc != gvt.SUCCESS:
-            return
+        # Skipping the update freezes the visible screen while the child keeps
+        # running, which reads as a hung agent rather than a failed call.
+        gvt.check(
+            self._g.render_state_update(self._render_state, self._term),
+            "ghostty_render_state_update",
+        )
 
         cols = self._get_u16(gvt.TERMINAL_DATA_COLS)
         rows = self._get_u16(gvt.TERMINAL_DATA_ROWS)
@@ -321,12 +353,20 @@ class GhosttyParser:
         # calls) can be skipped entirely -- this is the common case for a
         # single keystroke or cursor move.
         frame_dirty = ctypes.c_int()
-        self._g.render_state_get(
-            self._render_state, gvt.RENDER_STATE_DATA_DIRTY, ctypes.byref(frame_dirty)
+        gvt.check(
+            self._g.render_state_get(
+                self._render_state, gvt.RENDER_STATE_DATA_DIRTY, ctypes.byref(frame_dirty)
+            ),
+            "ghostty_render_state_get(DIRTY)",
         )
         if frame_dirty.value != gvt.RENDER_STATE_DIRTY_FALSE:
-            self._g.render_state_get(
-                self._render_state, gvt.RENDER_STATE_DATA_ROW_ITERATOR, ctypes.byref(self._row_iter)
+            gvt.check(
+                self._g.render_state_get(
+                    self._render_state,
+                    gvt.RENDER_STATE_DATA_ROW_ITERATOR,
+                    ctypes.byref(self._row_iter),
+                ),
+                "ghostty_render_state_get(ROW_ITERATOR)",
             )
             row_dirty = ctypes.c_bool()
             y = 0
@@ -375,9 +415,10 @@ class GhosttyParser:
         )
         s.cursor_shape = _CURSOR_SHAPE_NAMES.get(cursor_style.value, "block") if rc == gvt.SUCCESS else "block"
 
-        active_screen = ctypes.c_int()
-        self._g.terminal_get(self._term, gvt.TERMINAL_DATA_ACTIVE_SCREEN, ctypes.byref(active_screen))
-        s.alt_screen = active_screen.value == gvt.SCREEN_ALTERNATE
+        s.alt_screen = (
+            self._get(gvt.TERMINAL_DATA_ACTIVE_SCREEN, ctypes.c_int())
+            == gvt.SCREEN_ALTERNATE
+        )
 
         s.private_modes.discard(1000)
         s.private_modes.discard(1002)
@@ -399,7 +440,13 @@ class GhosttyParser:
         cols = s.cols
 
         palette = (gvt.GhosttyColorRgb * 256)()
-        self._g.terminal_get(self._term, gvt.TERMINAL_DATA_COLOR_PALETTE, palette)
+        # An unread palette resolves every scrollback cell's color to id 0.
+        gvt.check(
+            self._g.terminal_get(
+                self._term, gvt.TERMINAL_DATA_COLOR_PALETTE, palette
+            ),
+            "ghostty_terminal_get(COLOR_PALETTE)",
+        )
 
         # Row 0 is the top of ghostty's scrollback (terminal.h), so as long
         # as the row count only grew since last sync, the new rows are a
