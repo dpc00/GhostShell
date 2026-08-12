@@ -31,6 +31,10 @@ class Screen:
         # (resize reflow, set_history_cap) intentionally bypass this -- they
         # are not new content and must not be re-notified.
         self.on_retire_line = None
+        # Exception raised by on_retire_line, if it ever raised: the callback is
+        # dropped at that point (see _retire_line) so the owner can report the
+        # broken logging instead of the failure vanishing line after line.
+        self.retire_line_error = None
         self.saved = (0, 0)
         self.alt_screen = False
         # DECTCEM (mode 25): whether the app wants its real terminal cursor
@@ -139,8 +143,12 @@ class Screen:
         if self.on_retire_line is not None:
             try:
                 self.on_retire_line("".join(ch for ch, _attr in line))
-            except Exception:
-                pass  # logging must never break rendering
+            except Exception as e:
+                # Logging must never break rendering, but a callback that
+                # raises once raises on every line, so drop it and keep the
+                # reason for the owner rather than swallowing it forever.
+                self.on_retire_line = None
+                self.retire_line_error = e
         return line
 
     def live_lines_text(self):
