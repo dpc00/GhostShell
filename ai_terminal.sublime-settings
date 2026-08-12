@@ -106,8 +106,7 @@
                 "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Bash": {
@@ -195,8 +194,7 @@
                 "codex"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Codex →⇢⇨ Ollama": {
@@ -206,8 +204,7 @@
                 "codex"
             ],
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -299,8 +296,7 @@
                 "jcode"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Kimi": {
@@ -310,8 +306,7 @@
                 "kimi"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Kiro": {
@@ -321,8 +316,7 @@
                 "kiro-cli"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Mimo": {
@@ -333,8 +327,7 @@
                 "mimo"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "OpenCode": {
@@ -346,8 +339,7 @@
                 "opencode",
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -359,8 +351,7 @@
                 "--mini"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -373,8 +364,7 @@
                 "opencode"
             ],
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -396,8 +386,7 @@
                 "--mini"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -418,8 +407,7 @@
                 "qwen"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Qwen →⇢⇨ Ollama": {
@@ -429,8 +417,7 @@
                 "qwen"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Testing Agent": {
@@ -439,8 +426,7 @@
                 "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "AI_TERMINAL_LOG_LINES": "1"
             }
         },
         "Vibe": {
@@ -449,7 +435,6 @@
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
                 "LOG_LEVEL":"DEBUG"
             },
             // Mouse tracking: enables ?1000/1003/1006h (click + any-motion,

@@ -5236,6 +5236,18 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             return
         term.copy_mode = not term.copy_mode
         if term.copy_mode:
+            # TEMP DEBUG: this command is only reachable via the ctrl+alt+c
+            # keybinding (no menu/palette entry, no other run_command call
+            # anywhere in the codebase) -- yet it's been reported engaging
+            # without a deliberate ctrl+alt+c press (Kiro profile, plain
+            # ASCII typing, non-US layout ruled out). Logging the call stack
+            # to nail down the real trigger next time it reproduces; remove
+            # once root-caused (see ai/TODO.md).
+            print(
+                "[ai_terminal] copy_mode ON via toggle command — "
+                f"view={self.view.id()} name={self.view.name()!r}\n"
+                + "".join(traceback.format_stack()[-6:])
+            )
             sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
         else:
             # Hand caret control back to the PTY cursor -- otherwise the
@@ -5611,6 +5623,25 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # CLI's own idea of where the cursor belongs must never override
         # what the user actually did.
         keep_selection = bool(term is not None and getattr(term, "_user_owns_caret", False))
+        if keep_selection and term is not None and term._auto_follow:
+            # Self-heal a false latch: on_selection_modified's on-command-line
+            # check (_command_line_row_range / _live_cursor_row) can mis-fire
+            # for TUIs with no drawn input box and a fast-changing footer
+            # (e.g. Kiro's spinner during "Thinking...") -- two independent
+            # row reads taken a frame apart drift by more than the ±1
+            # tolerance, latching _user_owns_caret True even though the user
+            # never touched anything. Once latched, the caret never gets
+            # auto-positioned again (see below), so it stays frozen forever
+            # and typed output appears to vanish -- reported live testing
+            # Kiro (2026-08-11): "no command line... text types below
+            # everything but is hidden". A single empty caret with
+            # auto_follow still True (view not manually scrolled away) is
+            # never a deliberate selection worth protecting, so clear the
+            # latch and let normal auto-caret placement resume below.
+            sel = view.sel()
+            if len(sel) == 1 and sel[0].empty():
+                term._user_owns_caret = False
+                keep_selection = False
         if keep_selection:
             pass  # the user's own caret/selection stands; only scroll below
         elif cursor_offset is not None and int(cursor_offset) >= 0:
