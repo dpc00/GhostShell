@@ -2736,14 +2736,27 @@ def _plain_cells_signature(rows):
     return "".join(parts)
 
 
-def _clear_view_selection(view):
-    """Collapse to a single empty caret at the start of the buffer."""
+def _clear_view_selection(view, term=None):
+    """Collapse to a single empty caret at the start of the buffer.
+
+    When term is given, guarded by term._in_render so on_selection_modified
+    does not mistake this internal mutation for a user gesture and latch
+    term._user_owns_caret -- this runs from _do_render/_selection_paint_
+    blocked, outside AiTerminalRenderCommand's own _in_render window.
+    """
+    prev = None
+    if term is not None:
+        prev = getattr(term, "_in_render", False)
+        term._in_render = True
     try:
         sel = view.sel()
         sel.clear()
         sel.add(sublime.Region(0))
     except Exception:
         pass
+    finally:
+        if term is not None:
+            term._in_render = prev
 
 
 def _text_is_pad_only(text):
@@ -2799,6 +2812,9 @@ def _selection_is_spurious(view, term):
     return _text_is_pad_only(text)
 
 
+_SELECTION_PAINT_BLOCK_MAX_S = 2.5
+
+
 def _selection_paint_blocked(view, term):
     """True when a full paint would destroy an in-progress ST text selection.
 
@@ -2817,22 +2833,40 @@ def _selection_paint_blocked(view, term):
     if _view_lags_screen(term):
         try:
             if any(not s.empty() for s in view.sel()):
-                _clear_view_selection(view)
+                _clear_view_selection(view, term)
         except Exception:
-            _clear_view_selection(view)
+            _clear_view_selection(view, term)
         term._st_select_guard_until = 0.0
+        term._paint_block_since = None
         return False
 
     if _selection_is_spurious(view, term):
-        _clear_view_selection(view)
+        _clear_view_selection(view, term)
         term._st_select_guard_until = 0.0
+        term._paint_block_since = None
         return False
 
     try:
-        if any(not s.empty() for s in view.sel()):
-            return True
+        has_sel = any(not s.empty() for s in view.sel())
     except Exception:
-        pass
+        has_sel = False
+    if has_sel:
+        now = time.monotonic()
+        since = getattr(term, "_paint_block_since", None)
+        if since is None:
+            term._paint_block_since = now
+            return True
+        if now - since < _SELECTION_PAINT_BLOCK_MAX_S:
+            return True
+        # Blocked too long: a stale/abandoned selection must not freeze the
+        # view forever -- keystrokes keep reaching the PTY while blocked, so
+        # an unbounded block makes the view silently fall behind until
+        # something happens to collapse the selection (see ai/TODO.md,
+        # "Debug instrumentation baton"). Let the next paint through; the
+        # full-buffer replace will naturally take the selection with it.
+        term._paint_block_since = None
+        return False
+    term._paint_block_since = None
     guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
     return guard > 0.0 and time.monotonic() < guard
 
@@ -2871,31 +2905,8 @@ def _do_render(term):
     # Defer while selecting/copying: full-buffer replace + caret re-pin wipes it.
     # Poll until selection clears and the post-drag guard expires.
     if _selection_paint_blocked(view, term):
-        # TEMP DEBUG (2026-08-11): instrumenting a reported bug where
-        # keystrokes (backspace) reach the live app but the ST view stops
-        # visually updating until some later keypress, then catches up all
-        # at once -- exactly what an unbounded paint-block would produce.
-        # Logs once on entering the blocked state (not every poll tick) with
-        # enough state to diagnose why it's blocked. Remove once root-caused.
-        if not getattr(term, "_paint_block_logged", False):
-            term._paint_block_logged = True
-            term._paint_block_since = time.monotonic()
-            try:
-                sels = [(s.a, s.b) for s in view.sel()]
-            except Exception:
-                sels = None
-            guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
-            print(
-                f"[ai_terminal] PAINT BLOCKED view={view.id()} sel={sels} "
-                f"guard_until={guard:.2f} now={time.monotonic():.2f} "
-                f"dirty={getattr(term.screen, 'dirty', None)}"
-            )
         sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
         return  # leave _render_pending True so _schedule_render doesn't double-arm
-    if getattr(term, "_paint_block_logged", False):
-        term._paint_block_logged = False
-        dur = time.monotonic() - float(getattr(term, "_paint_block_since", 0.0) or 0.0)
-        print(f"[ai_terminal] PAINT UNBLOCKED view={view.id()} after {dur:.2f}s")
     term._render_pending = False
     _maybe_apply_osc_title(term)
     if not term.screen.dirty:
@@ -3091,7 +3102,12 @@ def _debug_log(data):
         pass
 
 
-_BOX_BORDER_CHARS = set("─╭╮╰╯")
+_BOX_BORDER_CHARS = set("─━═╌╍╭╮╰╯┌┐└┘┏┓┗┛╔╗╚╝")
+
+# A border row counts even with a title/hint label mixed in (e.g.
+# "╭─ Claude ─────╮" or a bottom row carrying a status hint) as long as most
+# of its non-space chars are border-drawing chars.
+_BOX_BORDER_ROW_MIN_FRACTION = 0.6
 
 
 def _command_line_row_range(term):
@@ -3102,7 +3118,10 @@ def _command_line_row_range(term):
     box-drawing border above and below it -- that's a reliable, app-agnostic
     signal for "this is the command line" vs. plain scrollback/response text.
     Plain shells (cmd.exe, PowerShell, bash) never draw such a box, so this
-    returns None for them and callers must leave copy_mode untouched.
+    returns None for them -- callers must fall back to a different signal
+    (e.g. _live_cursor_row) rather than leaving copy_mode/caret-ownership
+    untouched, since "no box" is the common case for plain shells, not a
+    rare edge case.
     """
     try:
         with term._lock:
@@ -3115,7 +3134,10 @@ def _command_line_row_range(term):
 
     def is_border_row(idx):
         chars = [c for c, _a in rows[idx] if c and c != " "]
-        return len(chars) >= 3 and all(ch in _BOX_BORDER_CHARS for ch in chars)
+        if len(chars) < 3:
+            return False
+        border = sum(1 for ch in chars if ch in _BOX_BORDER_CHARS)
+        return (border / len(chars)) >= _BOX_BORDER_ROW_MIN_FRACTION
 
     top = None
     for r in range(cy, max(cy - 30, -1) - 1, -1):
@@ -3130,6 +3152,22 @@ def _command_line_row_range(term):
     if top is None or bottom is None or top == bottom:
         return None
     return (top, bottom)
+
+
+def _live_cursor_row(term):
+    """Buffer row of the PTY's actual hardware cursor -- the live input line.
+
+    Fallback for _command_line_row_range when no drawn box is found (plain
+    shells: cmd.exe, PowerShell, bash never draw one). Deliberately not a
+    per-agent prompt-box scan -- the hardware cursor row is raw
+    terminal-protocol state every app reports the same way.
+    """
+    try:
+        with term._lock:
+            hist = 0 if term.screen.alt_screen else len(term.screen.history)
+            return hist + int(term.screen.y)
+    except Exception:
+        return None
 
 
 # ─── view event listener: keystroke forwarding + lifecycle ───────────────────
@@ -3269,12 +3307,19 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         if len(sel) != 1:
             return
         pt = sel[0].b
-        bounds = _command_line_row_range(term)
-        if bounds is None:
-            term._user_owns_caret = True
-            return
         row = view.rowcol(pt)[0]
-        if bounds[0] <= row <= bounds[1]:
+        bounds = _command_line_row_range(term)
+        if bounds is not None:
+            on_command_line = bounds[0] <= row <= bounds[1]
+        else:
+            # No drawn box (plain shells: cmd.exe, PowerShell, bash) -- fall
+            # back to comparing against the PTY's actual hardware cursor row
+            # instead of unconditionally latching term._user_owns_caret,
+            # which used to freeze the caret forever on the very first
+            # selection event in any such shell (see ai/TODO.md).
+            cursor_row = _live_cursor_row(term)
+            on_command_line = cursor_row is not None and abs(row - cursor_row) <= 1
+        if on_command_line:
             term._user_owns_caret = False
             # _do_render only repaints when term.screen.dirty -- i.e. on new
             # PTY bytes. A click back into the box hands tracking back to
@@ -3391,17 +3436,28 @@ def _route_click_to_cursor_fallback(view, term, event):
         return False
     col, row = cell  # 1-based
     screen = term.screen
-    py = _find_prompt_row(screen)
-    if py is None or screen.y != py or (row - 1) != py:
-        return False
-    start = _input_start_col(screen, py)
-    limit = _field_right_limit(screen, py)
-    target = min(max(col - 1, start), limit)
-    current = int(screen.x)
-    delta = target - current
+    # Locked: screen.x/y/private_modes/cols are mutated by the reader thread
+    # concurrently, and every other grid consumer (_command_line_row_range,
+    # _Terminal.kill, the render path) already takes this lock first -- an
+    # unlocked mid-scroll read here could compute delta against a torn
+    # screen.x and silently send arrow keys to the wrong column.
+    with term._lock:
+        py = _find_prompt_row(screen)
+        if py is None or screen.y != py or (row - 1) != py:
+            return False
+        start = _input_start_col(screen, py)
+        limit = _field_right_limit(screen, py)
+        target = min(max(col - 1, start), limit)
+        current = int(screen.x)
+        delta = target - current
+        application_mode = 1 in screen.private_modes
+        cols = int(screen.cols)
     if delta == 0:
         return True
-    application_mode = 1 in screen.private_modes
+    if abs(delta) > cols:
+        # A stale/torn screen.x would otherwise turn into a large visible
+        # cursor jump; treat an implausible delta as a no-op instead.
+        return False
     key = "right" if delta > 0 else "left"
     code = _get_key_code(key, application_mode=application_mode)
     term.send_string(code * abs(delta))
@@ -4893,17 +4949,6 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
         if term is None:
             return
         term.copy_mode = not term.copy_mode
-        # TEMP DEBUG (2026-08-11): instrumenting an unexplained spurious
-        # toggle reported during Claude responses / permission prompts,
-        # apparently without ctrl+alt+c being pressed. Logs every firing so
-        # the next occurrence is caught with a timestamp + call stack
-        # instead of guessing. Remove once root-caused.
-        import traceback
-        print(
-            f"[ai_terminal] copy_mode TOGGLE fired -> now {term.copy_mode} "
-            f"(view {self.view.id()}) stack:\n"
-            + "".join(traceback.format_stack(limit=8))
-        )
         if term.copy_mode:
             sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
         else:
@@ -4978,9 +5023,17 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 term._user_owns_caret = False
                 if last_auto is not None:
                     pos = min(last_auto, self.view.size())
-                    sel = self.view.sel()
-                    sel.clear()
-                    sel.add(sublime.Region(pos, pos))
+                    # Guarded: on_selection_modified must not see this as a
+                    # user gesture and re-latch _user_owns_caret via the
+                    # _command_line_row_range(None) fallback -- see there.
+                    prev_in_render = getattr(term, "_in_render", False)
+                    term._in_render = True
+                    try:
+                        sel = self.view.sel()
+                        sel.clear()
+                        sel.add(sublime.Region(pos, pos))
+                    finally:
+                        term._in_render = prev_in_render
                 _scroll_to_bottom(self.view)
                 term._auto_follow = True
                 sublime.status_message("Ai terminal: copy mode OFF")
