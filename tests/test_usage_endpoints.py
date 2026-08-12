@@ -146,13 +146,14 @@ class CodexFetchTests(unittest.TestCase):
             home = self._home(tmp, {"tokens": {}})
             self.assertIsNone(fetch_codex_usage(home))
 
-    def test_transport_failure_is_none(self):
+    def test_transport_failure_returns_error_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = self._home(tmp, {"tokens": {"access_token": "tok"}})
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("offline"))
             ):
-                self.assertIsNone(fetch_codex_usage(home))
+                usage = fetch_codex_usage(home)
+            self.assertIn("usage lookup failed", usage["error"])
 
 
 _CLAUDE_USAGE = {"five_hour": {"utilization": 25, "resets_at": "2026-08-02T03:00:00Z"}}
@@ -228,18 +229,19 @@ class ClaudeFetchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertIsNone(fetch_claude_usage(tmp))
 
-    def test_usage_call_failure_is_none(self):
+    def test_usage_call_failure_returns_error_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._creds(tmp, {"accessToken": "tok"})
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("nope"))
             ):
-                self.assertIsNone(fetch_claude_usage(tmp, now=1785630000))
+                usage = fetch_claude_usage(tmp, now=1785630000)
+            self.assertIn("usage lookup failed", usage["error"])
 
 
 class ClaudeRefreshTests(unittest.TestCase):
     def test_refresh_without_token_is_none(self):
-        self.assertIsNone(_refresh_claude_token("/nonexistent", {}))
+        self.assertEqual(_refresh_claude_token("/nonexistent", {}), (None, None))
 
     def test_rejected_grant_falls_back_to_a_concurrently_written_token(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,8 +252,9 @@ class ClaudeRefreshTests(unittest.TestCase):
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("409"))
             ):
-                result = _refresh_claude_token(path, {"refreshToken": "stale"})
+                result, warning = _refresh_claude_token(path, {"refreshToken": "stale"})
             self.assertEqual(result["accessToken"], "winner")
+            self.assertIsNone(warning)
 
     def test_rejected_grant_with_no_fresh_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,13 +262,17 @@ class ClaudeRefreshTests(unittest.TestCase):
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("409"))
             ):
-                self.assertIsNone(_refresh_claude_token(path, {"refreshToken": "x"}))
+                result, warning = _refresh_claude_token(path, {"refreshToken": "x"})
+            self.assertIsNone(result)
+            self.assertIn("token refresh failed", warning)
 
     def test_tokenless_response_is_none(self):
         with mock.patch("urllib.request.urlopen", _responder({"error": "invalid"})):
-            self.assertIsNone(
-                _refresh_claude_token("/nonexistent", {"refreshToken": "x"})
+            result, warning = _refresh_claude_token(
+                "/nonexistent", {"refreshToken": "x"}
             )
+        self.assertIsNone(result)
+        self.assertIn("no access_token", warning)
 
     def test_form_is_json_encoded_with_the_cli_client_id(self):
         urlopen = _responder({"access_token": "new"})
@@ -358,13 +365,14 @@ class KimiFetchTests(unittest.TestCase):
             self._creds(tmp, {"refresh_token": "r"})
             self.assertIsNone(fetch_kimi_usage(tmp))
 
-    def test_me_call_failure_is_none(self):
+    def test_me_call_failure_returns_error_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._creds(tmp, {"access_token": "tok"})
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("nope"))
             ):
-                self.assertIsNone(fetch_kimi_usage(tmp, now=1785630000))
+                usage = fetch_kimi_usage(tmp, now=1785630000)
+            self.assertIn("usage lookup failed", usage["error"])
 
 
 class KimiRefreshTests(unittest.TestCase):
@@ -373,22 +381,31 @@ class KimiRefreshTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "kimi-code.json")
             with mock.patch("urllib.request.urlopen", urlopen):
-                creds = _refresh_kimi_token(path, {"refresh_token": "r"})
+                creds, warning = _refresh_kimi_token(path, {"refresh_token": "r"})
         request = urlopen.requests[0]
         self.assertEqual(
             request.get_header("Content-type"), "application/x-www-form-urlencoded"
         )
         self.assertIn(b"grant_type=refresh_token", request.data)
         self.assertEqual(creds["access_token"], "new")
+        self.assertIsNone(warning)
 
     def test_missing_refresh_token_or_rejected_grant_is_none(self):
-        self.assertIsNone(_refresh_kimi_token("/nonexistent", {}))
+        self.assertEqual(_refresh_kimi_token("/nonexistent", {}), (None, None))
         with mock.patch(
             "urllib.request.urlopen", _responder(urllib.error.URLError("nope"))
         ):
-            self.assertIsNone(_refresh_kimi_token("/nonexistent", {"refresh_token": "r"}))
+            result, warning = _refresh_kimi_token(
+                "/nonexistent", {"refresh_token": "r"}
+            )
+        self.assertIsNone(result)
+        self.assertIn("token refresh failed", warning)
         with mock.patch("urllib.request.urlopen", _responder({"error": "invalid"})):
-            self.assertIsNone(_refresh_kimi_token("/nonexistent", {"refresh_token": "r"}))
+            result, warning = _refresh_kimi_token(
+                "/nonexistent", {"refresh_token": "r"}
+            )
+        self.assertIsNone(result)
+        self.assertIn("no access_token", warning)
 
     def test_persist_failure_is_swallowed(self):
         # Unwritable directory: the sweep must still finish with its token.
@@ -449,12 +466,13 @@ class OpenRouterFetchTests(unittest.TestCase):
                 self.assertIsNone(fetch_openrouter_usage(tmp))
             self.assertEqual(urlopen.requests, [])
 
-    def test_transport_failure_is_none(self):
+    def test_transport_failure_returns_error_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch(
                 "urllib.request.urlopen", _responder(urllib.error.URLError("nope"))
             ), mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-env"}):
-                self.assertIsNone(fetch_openrouter_usage(tmp))
+                usage = fetch_openrouter_usage(tmp)
+            self.assertIn("usage lookup failed", usage["error"])
 
 
 _CODEX_ROLLOUT_LINE = json.dumps({
