@@ -21,7 +21,16 @@ DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dl
 
 def load_library(path=None):
     path = path or os.environ.get("GHOSTTY_VT_DLL", DEFAULT_DLL_PATH)
-    return ctypes.CDLL(path)
+    try:
+        return ctypes.CDLL(path)
+    except OSError as e:
+        # CDLL's own message ("[WinError 126] The specified module could not be
+        # found") names neither the file nor the override, which is the whole
+        # useful content of this failure.
+        raise OSError(
+            "could not load libghostty-vt from %s (%s); set GHOSTTY_VT_DLL to "
+            "a working build" % (path, e)
+        ) from e
 
 
 # ---- types.h ----
@@ -32,6 +41,37 @@ OUT_OF_MEMORY = -1
 INVALID_VALUE = -2
 OUT_OF_SPACE = -3
 NO_VALUE = -4
+
+_RESULT_NAMES = {
+    SUCCESS: "SUCCESS",
+    OUT_OF_MEMORY: "OUT_OF_MEMORY",
+    INVALID_VALUE: "INVALID_VALUE",
+    OUT_OF_SPACE: "OUT_OF_SPACE",
+    NO_VALUE: "NO_VALUE",
+}
+
+
+class GhosttyError(RuntimeError):
+    """A libghostty-vt call returned a non-SUCCESS result."""
+
+    def __init__(self, call, result):
+        self.call = call
+        self.result = result
+        super().__init__(
+            "%s failed: %s (%d)"
+            % (call, _RESULT_NAMES.get(result, "unknown result"), result)
+        )
+
+
+def check(result, call):
+    """Raise GhosttyError unless ``result`` is SUCCESS; returns nothing.
+
+    Native results that go unchecked turn into blank cells, a frozen screen or
+    a cursor pinned to (0, 0) — a wrong terminal that looks like a working one.
+    """
+    if result != SUCCESS:
+        raise GhosttyError(call, result)
+
 
 GhosttyTerminal = ctypes.c_void_p
 GhosttyRenderState = ctypes.c_void_p
