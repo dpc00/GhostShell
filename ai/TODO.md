@@ -503,3 +503,65 @@ Devin PR (`devin/1786491335-error-handling`) rewrites that exact region
 (`start`/`_watch_process_exit`/`read`/`write`/`_close_handles`), so fixing
 it here risked a merge conflict. Revisit once that PR is reviewed/merged
 or closed.
+
+## One-frame redraw splatter during rapid multi-line tool output (2026-08-12) — ROOT-CAUSED, NOT A GHOSTSHELL BUG
+
+User asked to check the current session's own asciicast
+(`~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering/
+ai_2026-08-12_123931.cast`, the live Claude Code session recording itself)
+for rendering glitches. Replayed it offline through `pyte.Screen`/`pyte.Stream`
+(script not kept — ad hoc, in the session's scratchpad) and diffed sampled
+frames to find one.
+
+**Found:** a one-frame visual corruption around event ~10750-10850 in that
+cast, self-correcting by the next sampled frame. Two symptoms in the same
+frame: stale characters from a previous line bleeding into new text
+(`==iblog73button wiringo==ns)`), and a horizontal-rule divider's dashes
+punched through the middle of real text (`───==─ccstatusline-editor/
+app.py─button─wiring─==──────`).
+
+**Root-caused by reading the raw event bytes directly** (the `.cast` file's
+`"o"` events are the literal bytes the child process wrote to the PTY —
+inspected event 10781 verbatim rather than just the replayed screen).
+Found the exact write:
+
+```
+\x1b[13;1H  ⎿  == blog7 button wiring ==\r\n\x1b[K   -- row 13: content, \r\n, THEN \x1b[K (clears row 14)
+\x1b[15;6H== ccstatusline-editor/app.py button wiring ==\r\n   -- row 15: content, \r\n -- NO \x1b[K anywhere for row 15
+     526:@app.route(...)\x1b[K\r\n        -- row 16: content, THEN \x1b[K
+```
+
+Row 15 is the one line in this write with no erase-to-end-of-line. That
+exact row had previously held a full-width horizontal-rule divider from an
+earlier redraw; writing shorter text there without clearing first left the
+divider's trailing dashes surviving past the end of the new text — exactly
+the corruption observed.
+
+**Conclusion: this is not a GhostShell/libghostty-vt bug.** These bytes are
+Claude Code's own TUI output, written before GhostShell (or any terminal)
+ever sees them — GhostShell is rendering exactly what it was told to
+render. The missing erase-in-line on this one line is a bug in Claude
+Code's own redraw logic; any terminal (real Ghostty, Windows Terminal,
+iTerm) fed the identical bytes would show the same momentary splatter. No
+action needed here. Kept as a record so a future "GhostShell renders my
+prompt weirdly for a split second" report isn't re-investigated as a
+GhostShell issue without first checking whether the raw PTY bytes already
+contain the bug, the way this one did.
+
+**Empirically verified, not just read from code.** User was (reasonably)
+skeptical that a "real" console would ever show this. Replayed the full
+session transcript up through event 10781 (concatenated raw `"o"` event
+bytes from the `.cast` file, so row 15's prior content matches exactly)
+into a genuine standalone `conhost.exe` window — completely outside
+Sublime Text, GhostShell, and libghostty-vt — via a PowerShell script that
+writes the raw bytes directly to `[Console]::OpenStandardOutput()` (first
+attempt used Windows Terminal and got real mojibake from a codepage
+mismatch, a separate bug in the test methodology, not evidence either way;
+fixed by setting `chcp 65001` / `[Console]::OutputEncoding` before writing,
+and switching from `powershell.exe` — which Windows 11 opens as a new tab
+in the existing default Windows Terminal window — to launching
+`conhost.exe` directly for a true standalone console). Result: the
+identical corruption (`==iblog73button wiringo==ns)`, the dash-punctured
+`527:def shutdown():` line) appeared in the plain conhost window,
+byte-for-byte the same as in GhostShell. Confirms the conclusion above
+directly rather than by inference.
