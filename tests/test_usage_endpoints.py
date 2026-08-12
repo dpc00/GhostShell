@@ -97,7 +97,9 @@ class TailLinesTests(unittest.TestCase):
     def test_reads_only_the_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "rollout.jsonl")
-            with open(path, "w", encoding="utf-8") as handle:
+            # newline="" so Windows text mode does not turn \n into \r\n and
+            # throw off the byte-offset math max_bytes depends on below.
+            with open(path, "w", encoding="utf-8", newline="") as handle:
                 handle.write("first\nsecond\nthird\n")
             self.assertEqual(_tail_lines(path), ["first", "second", "third"])
             self.assertEqual(_tail_lines(path, max_bytes=6), ["third"])
