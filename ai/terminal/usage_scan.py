@@ -283,10 +283,20 @@ def scan_local_usage(home=None, now=None):
 
 # ─── live usage endpoints (the source of truth) ──────────────────────────────
 
+# Every response here is a small JSON document. Reading unbounded would let a
+# hostile or misbehaving endpoint (including a local server on the ollama port)
+# exhaust the plugin host's memory, so reads are capped.
+_MAX_RESPONSE_BYTES = 1 << 20
+
+
+def _read_json(response):
+    return json.loads(response.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
+
+
 def _http_json(url, headers, timeout=20):
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", "replace"))
+        return _read_json(response)
 
 
 def _live_error(exc):
@@ -560,7 +570,7 @@ def _refresh_claude_token(creds_path, oauth):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
+            payload = _read_json(response)
     except (urllib.error.URLError, OSError, ValueError) as e:
         latest = _read_claude_oauth(creds_path)
         if latest and not _claude_token_expired(latest):
@@ -646,7 +656,7 @@ def fetch_ollama_usage(base_url="http://localhost:11434", now=None):
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
+            payload = _read_json(response)
     except (urllib.error.URLError, OSError, ValueError):
         return None
     return parse_ollama_me(payload)
@@ -702,7 +712,7 @@ def _refresh_kimi_token(creds_path, creds):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
+            payload = _read_json(response)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return None, "token refresh failed: %s" % (getattr(e, "reason", None) or e,)
     access_token = payload.get("access_token")
