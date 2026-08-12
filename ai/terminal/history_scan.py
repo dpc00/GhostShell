@@ -126,14 +126,24 @@ def read_only_uri(db_path):
     return "file:%s?mode=ro" % path
 
 
-def _read_ollama_chats(db_path):
+def _sqlite_rows(db_path, query):
+    """All rows of `query` from a read-only connection to `db_path`.
+
+    Read-only matters: these are live databases owned by other, possibly
+    running apps, and this sweep must never write to or lock them.
+    """
     conn = sqlite3.connect(read_only_uri(db_path), uri=True)
     try:
-        return conn.execute(
-            "SELECT id, title, created_at FROM chats ORDER BY created_at DESC"
-        ).fetchall()
+        return conn.execute(query).fetchall()
     finally:
         conn.close()
+
+
+def _read_ollama_chats(db_path):
+    return _sqlite_rows(
+        db_path,
+        "SELECT id, title, created_at FROM chats ORDER BY created_at DESC",
+    )
 
 
 def scan_ollama(localappdata):
@@ -163,19 +173,16 @@ def scan_ollama(localappdata):
 
 
 def _read_t3_threads(db_path):
-    conn = sqlite3.connect(read_only_uri(db_path), uri=True)
-    try:
-        return conn.execute(
-            """
-            SELECT t.thread_id, t.title, t.updated_at, s.provider_name
-            FROM projection_threads t
-            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
-            WHERE t.deleted_at IS NULL
-            ORDER BY t.updated_at DESC
-            """
-        ).fetchall()
-    finally:
-        conn.close()
+    return _sqlite_rows(
+        db_path,
+        """
+        SELECT t.thread_id, t.title, t.updated_at, s.provider_name
+        FROM projection_threads t
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+        WHERE t.deleted_at IS NULL
+        ORDER BY t.updated_at DESC
+        """,
+    )
 
 
 def scan_t3(home):

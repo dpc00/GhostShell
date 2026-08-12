@@ -16,7 +16,7 @@ import urllib.error
 from unittest import mock
 
 from ai.terminal.usage_scan import (
-    _http_json,
+    _get_json,
     _iso_to_epoch,
     _openrouter_key_from_qwen,
     _persist_kimi_oauth,
@@ -78,12 +78,12 @@ _WHAM_PAYLOAD = {
 class HttpHelperTests(unittest.TestCase):
     def test_http_json_decodes_body(self):
         with mock.patch("urllib.request.urlopen", _responder({"ok": True})):
-            self.assertEqual(_http_json("https://x/y", {"Accept": "*/*"}), {"ok": True})
+            self.assertEqual(_get_json("https://x/y", {"Accept": "*/*"}), {"ok": True})
 
     def test_http_json_sends_headers(self):
         urlopen = _responder({})
         with mock.patch("urllib.request.urlopen", urlopen):
-            _http_json("https://x/y", {"Authorization": "Bearer t"})
+            _get_json("https://x/y", {"Authorization": "Bearer t"})
         self.assertEqual(urlopen.requests[0].get_header("Authorization"), "Bearer t")
 
     def test_iso_to_epoch(self):
