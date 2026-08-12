@@ -28,6 +28,7 @@ from ai.terminal import (
     view_point_to_cell,
 )
 from ai.terminal.colors import FAINT, REVERSE
+from ai.terminal.history_scan import read_only_uri
 
 
 class TestKeys(unittest.TestCase):
@@ -512,6 +513,19 @@ class TestSanitizePtyEnv(unittest.TestCase):
         out = sanitize_pty_env({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
         self.assertEqual(out["TERM"], "xterm-256color")
         self.assertEqual(out["COLORTERM"], "truecolor")
+
+
+class TestReadOnlyUri(unittest.TestCase):
+    def test_windows_path_is_read_only(self):
+        self.assertEqual(
+            read_only_uri("C:\\Users\\me\\Ollama\\db.sqlite"),
+            "file:C:/Users/me/Ollama/db.sqlite?mode=ro",
+        )
+
+    def test_question_mark_in_path_cannot_override_mode(self):
+        uri = read_only_uri("/home/me/db.sqlite?mode=rwc")
+        self.assertEqual(uri, "file:/home/me/db.sqlite%3Fmode%3Drwc?mode=ro")
+        self.assertEqual(uri.count("?"), 1)
 
 
 if __name__ == "__main__":
