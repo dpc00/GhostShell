@@ -8,8 +8,9 @@ arguments. That is the layer where the interesting bugs live (wrong argument
 names, an exception inside a row builder, off-by-one on the Browse row) and
 none of it is reachable from the pure tests.
 
-Stubs are installed into ``sys.modules`` before importing ``ai_terminal``,
-which cannot be imported outside Sublime otherwise.
+Stubs (``sublime_stub``, shared with tools/check_import.py) are installed into
+``sys.modules`` before importing ``ai_terminal``, which cannot be imported
+outside Sublime otherwise.
 
 Neither the launcher (agent/directory picker) nor the history command persist
 anything to disk: the picker rows are unranked (alphabetical / sidebar-folder
@@ -18,48 +19,16 @@ order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 
 import os
 import sys
-import types
 
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-
-# ─── stub Sublime API ────────────────────────────────────────────────────────
-
-
-class Kind(tuple):
-    pass
+from tests.sublime_stub import Settings, install as _install_stubs  # noqa: E402
 
 
-class QuickPanelItem:
-    def __init__(self, trigger, details="", annotation="", kind=None):
-        self.trigger = trigger
-        self.details = details
-        self.annotation = annotation
-        self.kind = kind
-
-    def __repr__(self):
-        return "QuickPanelItem(%r, %r, %r)" % (
-            self.trigger,
-            self.details,
-            self.annotation,
-        )
-
-
-class Settings(dict):
-    def get(self, k, d=None):
-        return dict.get(self, k, d)
-
-    def set(self, k, v):
-        self[k] = v
-
-    def add_on_change(self, *a, **k):
-        pass
-
-    def clear_on_change(self, *a, **k):
-        pass
+# ─── fake window/view the commands are driven through ────────────────────────
 
 
 class FakeView:
@@ -127,72 +96,8 @@ class FakeWindow:
         return FakeView(vid=998, file_name=path)
 
 
-def _install_stubs():
-    if "sublime" in sys.modules:
-        return sys.modules["sublime"]
-
-    m = types.ModuleType("sublime")
-
-    class Region:
-        def __init__(self, a, b=None):
-            self.a, self.b = a, b if b is not None else a
-
-    m.Region = Region
-    m.Settings = Settings
-    m.QuickPanelItem = QuickPanelItem
-    m.load_settings = lambda name: Settings()
-    m.save_settings = lambda name: None
-    m.packages_path = lambda: os.path.join(REPO, ".fake-packages")
-    m.cache_path = lambda: os.path.join(REPO, ".fake-cache")
-    m.executable_path = lambda: "sublime_text.exe"
-    m.set_timeout = lambda fn, ms=0: None
-    m.set_timeout_async = lambda fn, ms=0: None
-    m.cancel_timeout = lambda tok: None
-    m.status_message = lambda msg: _messages.append(("status", msg))
-    m.error_message = lambda msg: _messages.append(("error", msg))
-    m.message_dialog = lambda msg: _messages.append(("dialog", msg))
-    m.windows = lambda: []
-    m.active_window = lambda: None
-    m.run_command = lambda *a, **k: None
-    m.version = lambda: "4169"
-    m.platform = lambda: "windows"
-    m.arch = lambda: "x64"
-    m.expand_variables = lambda s, v: s
-    m.find_resources = lambda pattern: []
-    m.load_resource = lambda path: ""
-    m.get_clipboard = lambda: ""
-    m.DRAW_NO_OUTLINE = 256
-    m.DRAW_NO_FILL = 32
-    m.DRAW_EMPTY = 1
-    m.PERSISTENT = 16
-    m.HIDDEN = 128
-    m.LAYOUT_INLINE = 0
-    m.MONOSPACE_FONT = 1
-    m.HOVER_TEXT = 1
-    sys.modules["sublime"] = m
-
-    sp = types.ModuleType("sublime_plugin")
-
-    class _Base:
-        def __init__(self, arg=None):
-            self.window = arg
-            self.view = arg
-
-    for name in (
-        "WindowCommand",
-        "TextCommand",
-        "ApplicationCommand",
-        "EventListener",
-        "ViewEventListener",
-        "TextChangeListener",
-    ):
-        setattr(sp, name, type(name, (_Base,), {}))
-    sys.modules["sublime_plugin"] = sp
-    return m
-
-
 _messages = []
-_install_stubs()
+_install_stubs(message_sink=_messages)
 
 from ai import ai_terminal  # noqa: E402
 

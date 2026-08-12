@@ -283,6 +283,11 @@ def scan_local_usage(home=None, now=None):
 
 # ─── live usage endpoints (the source of truth) ──────────────────────────────
 
+# Everything a request/parse can raise across these endpoints: offline, DNS,
+# HTTP error status, a non-JSON body. Every fetcher treats them the same way
+# ("no data for this provider"), never as a failure worth propagating.
+_FETCH_ERRORS = (urllib.error.URLError, OSError, ValueError)
+
 # Every response here is a small JSON document. Reading unbounded would let a
 # hostile or misbehaving endpoint (including a local server on the ollama port)
 # exhaust the plugin host's memory, so reads are capped.
@@ -293,10 +298,49 @@ def _read_json(response):
     return json.loads(response.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
 
 
-def _http_json(url, headers, timeout=20):
-    request = urllib.request.Request(url, headers=headers)
+def _http_json(request, timeout=20):
+    """Decoded JSON body of `request` (a Request or a bare URL).
+
+    Raises on a transport/decode failure rather than swallowing it: callers
+    disagree on what a failure means here (an unconfigured provider vs. a
+    logged-in one that is unreachable -- see _live_error), so only the call
+    site knows which one applies.
+    """
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return _read_json(response)
+
+
+def _get_json(url, headers, timeout=20):
+    """GET `url` with `headers`, decoded as JSON. Raises like _http_json."""
+    return _http_json(urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+def _read_json_file(path):
+    """Parsed JSON at `path`, or None when it is missing/unreadable/invalid."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json_atomic(path, data):
+    """Replace `path` with `data` as JSON via a same-directory temp file.
+
+    Returns None on success, or a description of why the write failed. Never
+    swallowed: a caller persisting a rotated OAuth token needs to warn the
+    user rather than silently keep using the in-memory copy (the CLI itself
+    is now holding a refresh token the server has already rotated away).
+    """
+    directory = os.path.dirname(path) or "."
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        os.replace(tmp_path, path)
+    except OSError as e:
+        return str(e)
+    return None
 
 
 def _live_error(exc):
@@ -415,10 +459,8 @@ def fetch_codex_usage(codex_home="~/.codex", now=None):
     but the lookup failed (offline, token rejected).
     """
     auth_path = os.path.join(os.path.expanduser(codex_home), "auth.json")
-    try:
-        with open(auth_path, "r", encoding="utf-8") as handle:
-            auth = json.load(handle)
-    except (OSError, ValueError):
+    auth = _read_json_file(auth_path)
+    if not isinstance(auth, dict):
         return None
     tokens = auth.get("tokens") or {}
     access_token = tokens.get("access_token")
@@ -434,7 +476,7 @@ def fetch_codex_usage(codex_home="~/.codex", now=None):
     if account_id:
         headers["ChatGPT-Account-ID"] = account_id
     try:
-        payload = _http_json("https://chatgpt.com/backend-api/wham/usage", headers)
+        payload = _get_json("https://chatgpt.com/backend-api/wham/usage", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return _live_error(e)
     return parse_codex_wham_usage(payload, now=now)
@@ -506,7 +548,7 @@ def fetch_claude_usage(claude_home="~/.claude", now=None):
         "Accept": "application/json",
     }
     try:
-        payload = _http_json("https://api.anthropic.com/api/oauth/usage", headers)
+        payload = _get_json("https://api.anthropic.com/api/oauth/usage", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return _live_error(e)
     usage = parse_claude_oauth_usage(payload, now=now)
@@ -516,10 +558,8 @@ def fetch_claude_usage(claude_home="~/.claude", now=None):
 
 
 def _read_claude_oauth(creds_path):
-    try:
-        with open(creds_path, "r", encoding="utf-8") as handle:
-            creds = json.load(handle)
-    except (OSError, ValueError):
+    creds = _read_json_file(creds_path)
+    if not isinstance(creds, dict):
         return None
     oauth = creds.get("claudeAiOauth")
     return oauth if isinstance(oauth, dict) else None
@@ -569,8 +609,7 @@ def _refresh_claude_token(creds_path, oauth):
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = _read_json(response)
+        payload = _http_json(request, timeout=30)
     except (urllib.error.URLError, OSError, ValueError) as e:
         latest = _read_claude_oauth(creds_path)
         if latest and not _claude_token_expired(latest):
@@ -601,24 +640,17 @@ def _persist_claude_oauth(creds_path, oauth):
     but the CLI is now holding a refresh token the server has rotated away,
     so the user has to log in again — never worth hiding.
     """
-    try:
-        with open(creds_path, "r", encoding="utf-8") as handle:
-            creds = json.load(handle)
-    except (OSError, ValueError):
+    creds = _read_json_file(creds_path)
+    if not isinstance(creds, dict):
         creds = {}
     creds["claudeAiOauth"] = oauth
-    directory = os.path.dirname(creds_path) or "."
-    try:
-        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(creds, handle)
-        os.replace(tmp_path, creds_path)
-    except OSError as e:
+    error = _write_json_atomic(creds_path, creds)
+    if error:
         # Keeping the in-memory token still lets this sweep finish, so this is
         # a warning rather than a failure -- but never a silent one.
         return (
             "could not persist the rotated Claude tokens to %s (%s); the CLI "
-            "may need a fresh login" % (creds_path, e)
+            "may need a fresh login" % (creds_path, error)
         )
     return None
 
@@ -655,8 +687,7 @@ def fetch_ollama_usage(base_url="http://localhost:11434", now=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            payload = _read_json(response)
+        payload = _http_json(request, timeout=10)
     except (urllib.error.URLError, OSError, ValueError):
         return None
     return parse_ollama_me(payload)
@@ -711,8 +742,7 @@ def _refresh_kimi_token(creds_path, creds):
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = _read_json(response)
+        payload = _http_json(request, timeout=30)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return None, "token refresh failed: %s" % (getattr(e, "reason", None) or e,)
     access_token = payload.get("access_token")
@@ -735,16 +765,11 @@ def _persist_kimi_oauth(creds_path, creds):
     Returns None on success or a message describing the failure: as with
     Claude, a rotated refresh token that never reached disk logs the CLI out.
     """
-    directory = os.path.dirname(creds_path) or "."
-    try:
-        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(creds, handle)
-        os.replace(tmp_path, creds_path)
-    except OSError as e:
+    error = _write_json_atomic(creds_path, creds)
+    if error:
         return (
             "could not persist the rotated Kimi tokens to %s (%s); the CLI "
-            "may need a fresh login" % (creds_path, e)
+            "may need a fresh login" % (creds_path, error)
         )
     return None
 
@@ -760,10 +785,8 @@ def fetch_kimi_usage(kimi_home="~/.kimi-code", now=None):
     creds_path = os.path.join(
         os.path.expanduser(kimi_home), "credentials", "kimi-code.json"
     )
-    try:
-        with open(creds_path, "r", encoding="utf-8") as handle:
-            creds = json.load(handle)
-    except (OSError, ValueError):
+    creds = _read_json_file(creds_path)
+    if not isinstance(creds, dict):
         return None
     access_token = creds.get("access_token")
     if not access_token:
@@ -782,7 +805,7 @@ def fetch_kimi_usage(kimi_home="~/.kimi-code", now=None):
         access_token = refreshed["access_token"]
     headers = {"Authorization": "Bearer %s" % access_token, "Accept": "application/json"}
     try:
-        payload = _http_json("https://api.kimi.com/coding/v1/me", headers)
+        payload = _get_json("https://api.kimi.com/coding/v1/me", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return _live_error(e)
     usage = parse_kimi_me(payload)
@@ -825,10 +848,8 @@ def parse_openrouter_key(payload):
 def _openrouter_key_from_qwen(qwen_home):
     """The OpenRouter API key qwen persisted in its settings, or None."""
     settings_path = os.path.join(os.path.expanduser(qwen_home), "settings.json")
-    try:
-        with open(settings_path, "r", encoding="utf-8") as handle:
-            settings = json.load(handle)
-    except (OSError, ValueError):
+    settings = _read_json_file(settings_path)
+    if not isinstance(settings, dict):
         return None
     env = settings.get("env")
     if isinstance(env, dict):
@@ -850,7 +871,7 @@ def fetch_openrouter_usage(qwen_home="~/.qwen", now=None):
         return None
     headers = {"Authorization": "Bearer %s" % key, "Accept": "application/json"}
     try:
-        payload = _http_json("https://openrouter.ai/api/v1/key", headers)
+        payload = _get_json("https://openrouter.ai/api/v1/key", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
         return _live_error(e)
     return parse_openrouter_key(payload)

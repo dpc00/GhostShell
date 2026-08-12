@@ -20,17 +20,16 @@ if hasattr(sys.stdout, "reconfigure"):
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "ai", "terminal"))
 
-from agent_catalog import CATALOG  # noqa: E402
+from agent_catalog import CATALOG, profile_from_entry  # noqa: E402
 from profile_availability import command_exists  # noqa: E402
 
 DEFAULT_SETTINGS = os.path.join(REPO, "ai_terminal.sublime-settings")
 
 
 def _profile_json_snippet(command, entry):
-    profile = {"launch_command": entry["launch_command"], "spawn_env": entry["spawn_env"]}
-    if "mouse_handling" in entry:
-        profile["mouse_handling"] = entry["mouse_handling"]
-    return json.dumps({entry["display_name"]: profile}, indent=4)
+    return json.dumps(
+        {entry["display_name"]: profile_from_entry(entry)}, indent=4
+    )
 
 
 def scan(settings_path=DEFAULT_SETTINGS):
