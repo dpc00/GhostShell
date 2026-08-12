@@ -451,6 +451,40 @@ both are now fixed and the instrumentation removed:
    found, and both internal selection mutations are now guarded by
    `term._in_render` so they're never mistaken for a user gesture.
 
+## Copy-mode "turns on by itself" report (2026-08-11), Kiro profile — UNRESOLVED
+
+User reported testing the Kiro profile and hitting copy mode ON without a
+deliberate ctrl+alt+c press, needing ctrl+alt+c (the toggle) to get back to
+normal command-line typing. Investigated live via `sublime-mcp`:
+
+- Confirmed by full-file grep: `term.copy_mode` is only ever set `True` in
+  `AiTerminalToggleCopyModeCommand.run` (`ai_terminal.py`), and that command
+  has no menu/palette entry and no other `run_command("ai_terminal_toggle_copy_mode")`
+  call anywhere in the repo — the only way to reach it is the literal
+  `ctrl+alt+c` keybinding (`Default.sublime-keymap`).
+- Ruled out via user confirmation: not a deliberate press, not an AltGr/
+  accented-character composition (which on Windows arrives as a synthetic
+  ctrl+alt+<letter> keydown and would explain a silent trigger) — plain
+  ASCII typing.
+- Ruled out by reading the code: cursor/caret-placement logic
+  (`_command_line_row_range`, `_live_cursor_row`, `on_selection_modified`)
+  only ever touches `term._user_owns_caret`, a cosmetic caret-snap flag —
+  never `term.copy_mode` — so "cursor planted off the command line" cannot
+  by itself flip copy_mode, contrary to the user's working theory.
+- Checked `ai_terminal.sublime-settings` and `_Terminal.__init__` for a
+  startup-default explanation (user's other theory: "a setting which is on
+  at startup") — `self.copy_mode = False` is hardcoded, no settings key
+  feeds it.
+- The Kiro tab from the session that triggered this was already closed by
+  the time this was investigated, so no live state or console evidence from
+  the actual incident was recoverable; `get_console_log` showed nothing
+  copy-mode-related, just normal spawn/usage-sweep lines.
+
+**Not fixed — root cause not found.** Added TEMP DEBUG logging (call-stack
+dump) to `AiTerminalToggleCopyModeCommand.run`, gated on the ON transition,
+to catch the actual trigger next time this reproduces. Remove once
+root-caused.
+
 Also fixed in the same pass (found during the same review, all in
 `ai_terminal.py`):
 - `_route_click_to_cursor_fallback` now reads `term.screen` under
