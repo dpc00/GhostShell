@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from ai.terminal import usage_scan
 from ai.terminal.usage_scan import (
     _claude_token_expired,
     _persist_claude_oauth,
@@ -307,6 +308,38 @@ class ClaudeTokenHelperTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump({"claudeAiOauth": "not a dict"}, fh)
             self.assertIsNone(_read_claude_oauth(path))
+
+
+class GatherUsageErrorTests(unittest.TestCase):
+    """One provider blowing up must neither abort the sweep nor vanish."""
+
+    def _patch(self, name, value):
+        original = getattr(usage_scan, name)
+        setattr(usage_scan, name, value)
+        self.addCleanup(setattr, usage_scan, name, original)
+
+    def test_unexpected_raise_is_reported_and_others_still_scanned(self):
+        def boom(*args, **kwargs):
+            raise RuntimeError("kaboom")
+
+        self._patch("fetch_claude_usage", boom)
+        self._patch("fetch_codex_usage", lambda *a, **k: None)
+        self._patch("scan_codex_usage", lambda *a, **k: None)
+        self._patch(
+            "fetch_ollama_usage", lambda *a, **k: {"summary": "ok", "source": "live"}
+        )
+        self._patch("fetch_kimi_usage", lambda *a, **k: None)
+        self._patch("fetch_openrouter_usage", lambda *a, **k: None)
+
+        results = usage_scan.gather_usage(home="/nonexistent")
+        self.assertIn("RuntimeError", results["claude"]["error"])
+        self.assertIn("kaboom", results["claude"]["error"])
+        self.assertEqual(results["ollama"]["summary"], "ok")
+
+    def test_live_error_describes_failed_lookup(self):
+        err = usage_scan._live_error(OSError("connection refused"))
+        self.assertEqual(err["source"], "live")
+        self.assertIn("connection refused", err["error"])
 
 
 class HumanizeTests(unittest.TestCase):
