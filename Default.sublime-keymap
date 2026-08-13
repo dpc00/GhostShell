@@ -4,6 +4,7 @@
 	{"keys": ["ctrl+alt+h"], "command": "ai_terminal_history"},
 	{"keys": ["ctrl+alt+k"], "command": "ai_terminal_nuke", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},
 	{"keys": ["ctrl+alt+c"], "command": "ai_terminal_toggle_copy_mode", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},
+	{"keys": ["ctrl+alt+m"], "command": "ai_terminal_toggle_panel", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},
 
 	// ── ai_terminal: forward physical keys to the Claude TUI PTY ──
 	// ST does not fire on_text_command for unbound printable keys, so every
