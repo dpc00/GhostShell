@@ -5518,10 +5518,21 @@ class AiTerminalSwitchPanelCommand(sublime_plugin.WindowCommand):
             sublime.status_message("Ai terminal: no panels open")
             return
 
-        ai_panel_names = {
-            term.panel_name
-            for term in _term_registry().values()
-            if term.panel_name and term.view.window() == window
+        window_terms = [
+            term for term in _term_registry().values() if term.view.window() == window
+        ]
+        ai_panel_names = {term.panel_name for term in window_terms if term.panel_name}
+        # A terminal currently living in a TAB still owns its old panel (see
+        # AiTerminalTogglePanelCommand._to_tab -- deliberately not destroyed,
+        # so Sublime remembers its dragged height). That panel is real but
+        # inert: nothing renders into it while the terminal lives elsewhere,
+        # so merely show_panel-ing it just displays dead, stale content that
+        # can't accept keystrokes. Track it separately so picking it can
+        # actually reactivate the terminal instead of showing a corpse.
+        home_terms = {
+            term._panel_home_name: term
+            for term in window_terms
+            if term._panel_home_name and not term.panel_name
         }
         active = window.active_panel()
 
@@ -5531,6 +5542,9 @@ class AiTerminalSwitchPanelCommand(sublime_plugin.WindowCommand):
                 name = raw[len("output."):]
                 if name in ai_panel_names:
                     label, detail = "Ai Terminal — " + name, "Live PTY terminal"
+                elif name in home_terms:
+                    label = "Ai Terminal — " + name
+                    detail = "Open as a tab -- selecting moves it back to panel"
                 else:
                     label, detail = "Output — " + name, ""
             else:
@@ -5543,9 +5557,14 @@ class AiTerminalSwitchPanelCommand(sublime_plugin.WindowCommand):
             if idx < 0:
                 return
             raw = panels[idx]
-            window.run_command("show_panel", {"panel": raw})
             if raw.startswith("output."):
                 name = raw[len("output."):]
+                term = home_terms.get(name)
+                if term is not None:
+                    term.view.run_command("ai_terminal_toggle_panel")
+                    return
+            window.run_command("show_panel", {"panel": raw})
+            if raw.startswith("output."):
                 view = window.find_output_panel(name)
                 if view is not None:
                     window.focus_view(view)
