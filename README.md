@@ -5,6 +5,8 @@ ctypes against the Windows ConPTY (Pseudoconsole) API, plus a cursor-aware
 ANSI renderer (backed by libghostty-vt) tailored to the subset TUI agents
 (Claude Code, OpenCode, Codex, etc.) emit.
 
+![12 AI coding CLIs running natively in GhostShell terminal tabs](docs/screenshots/supported-clis.png)
+
 ## Supported CLIs
 
 Each one gets its own tuned profile in `ai_terminal.sublime-settings` —
