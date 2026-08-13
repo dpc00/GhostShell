@@ -190,12 +190,20 @@
         "Codex": {
             // Mouse tracking: never enables DEC ?1000/1002/1003 (34 recorded
             // asciicast sessions checked, 2026-08-11).
+            // page_keys_to_pty: Codex's Ctrl+T transcript pager is a real
+            // alt-screen sub-view (footer: "pgup/pgdn to page"), but the
+            // global force_main_screen strips its DECSET 1049 the same way
+            // it did for Grok, so _tui_like reads false and native
+            // PageUp/PageDown paged the ST viewport instead of the pager --
+            // confirmed live 2026-08-13 (viewport_position moved on
+            // PageDown while the pager was open, pty never saw it).
             "launch_command": [
                 "codex"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Codex →⇢⇨ Ollama": {
             "launch_command": [
