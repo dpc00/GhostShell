@@ -359,12 +359,23 @@
             // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
             // any-motion, SGR coords) -- confirmed across recorded asciicast
             // sessions (2026-08-11).
+            // page_keys_to_pty: sends real DECSET 1049h immediately on boot
+            // (confirmed live 2026-08-13 via GhosttyParser._strip_alt_screen
+            // instrumentation). Mimo is an explicit fork of OpenCode --
+            // "keeps all core OpenCode capabilities (multiple providers,
+            // TUI, LSP, MCP, plugins)" (github.com/XiaomiMiMo/MiMo-Code
+            // README) -- so it inherits OpenCode's pageup/pagedown ->
+            // messages_page_up/messages_page_down binding
+            // (opencode.ai/docs/keybinds). force_main_screen masks the
+            // alt-screen signal so native PageUp/PageDown would steal the
+            // key instead of reaching the PTY.
             "launch_command": [
                 "mimo"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "OpenCode": {
             // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
@@ -377,6 +388,8 @@
             // \x1b[?1049h), same as Grok, but force_main_screen strips
             // that signal so _tui_like reads false and native
             // PageUp/PageDown steal the key instead of reaching the PTY.
+            // Official docs confirm pageup/pagedown are bound to
+            // messages_page_up/messages_page_down (opencode.ai/docs/keybinds).
             // Same fix applied to all variants below (same binary).
             "launch_command": [
                 "opencode",
@@ -450,12 +463,21 @@
             // SGR coords; no bare 1000) -- confirmed across 25+ recorded
             // asciicast sessions (2026-08-11). Same for the →⇢⇨ Ollama
             // variant below (same binary).
+            // page_keys_to_pty: sends real DECSET 1049h on boot (confirmed
+            // live 2026-08-13 via GhosttyParser._strip_alt_screen
+            // instrumentation). Official docs confirm PgUp/PgDn page the
+            // conversation viewport and Virtualized History
+            // (ui.useTerminalBuffer) is enabled by default
+            // (qwenlm.github.io/qwen-code-docs -- keyboard-shortcuts).
+            // force_main_screen masks the alt-screen signal so native
+            // PageUp/PageDown would steal the key instead of the PTY.
             "launch_command": [
                 "qwen"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Qwen →⇢⇨ Ollama": {
             "launch_command": [
@@ -465,7 +487,8 @@
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Testing Agent": {
             "launch_command": [
