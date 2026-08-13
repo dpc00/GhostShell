@@ -23,6 +23,8 @@ from GhostShell.ai.ai_terminal import (
     AiTerminalSendStringWindowCommand,
     AiTerminalKeypressCommand,
     AiTerminalToggleCopyModeCommand,
+    AiTerminalTogglePanelCommand,
+    AiTerminalSwitchPanelCommand,
     AiTerminalRenderCommand,
     AiTerminalNukeCommand,
     AiTerminalNoopCommand,
