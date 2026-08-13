@@ -102,12 +102,22 @@
             // Mouse tracking: never enables DEC ?1000/1002/1003 (checked all
             // 5 recorded asciicast sessions, 2026-08-11) -- no PTY-side
             // receiver for a forwarded click; mouse_handling would be a no-op.
+            // page_keys_to_pty: its own `?` shortcuts panel explicitly lists
+            // "pgdown, shift+down  Page down" / "pgup, shift+up  Page up"
+            // (confirmed live 2026-08-13). Runs in Inline rendering mode
+            // inside ai_terminal (zero DECSET 1049 observed), so this isn't
+            // the force_main_screen masking bug -- it's the same category
+            // jcode's source code confirmed: an inline-rendered TUI can
+            // still bind PageUp/PageDown for its own scroll regardless of
+            // alt-screen use, and ST's default steal-for-native-page
+            // behavior breaks that just the same.
             "launch_command": [
                 "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Bash": {
             // Pin Git Bash — bare "bash" resolves to the WSL App Execution
@@ -328,12 +338,25 @@
         "jcode": {
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords)
             // -- confirmed across 18+ recorded asciicast sessions (2026-08-11).
+            // page_keys_to_pty: confirmed directly in source (not docs --
+            // the docs page didn't mention PageUp/PageDown at all and were
+            // misleading). github.com/1jehuang/jcode
+            // crates/jcode-tui/src/tui/app/input.rs:2725 -- the main input
+            // handler's default key match binds
+            // `KeyCode::Up | KeyCode::PageUp => app.scroll_up(10)` and the
+            // PageDown equivalent, unconditionally. jcode never enters
+            // alt-screen (zero DECSET 1049 confirmed live even mid-session),
+            // so this was never the force_main_screen masking bug -- it's a
+            // plain inline TUI that still owns PageUp/PageDown for its own
+            // transcript scroll, and ST's default steal-for-native-page
+            // behavior breaks that.
             "launch_command": [
                 "jcode"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Kimi": {
             // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
