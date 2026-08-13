@@ -235,18 +235,28 @@
             // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
             // SGR coords; no bare 1000) -- confirmed across 32+ recorded
             // asciicast sessions (2026-08-11).
-            // gotui streams real scrollback (log lines via tea.Println)
-            // instead of owning its own scroll/click region, and this host
-            // can't tell gotui's clickable footer rows apart from plain log
-            // rows sharing the same screen height -- mouse click routing
-            // for it isn't built (see git history around 2026-08-07).
-            // mouse_handling off => fully native ST scroll/select
-            // everywhere, keyboard-only for gotui itself (s r a i o ? q).
+            // 2026-08-12: mouse_handling turned on. gotui's own click math
+            // (handleTableMouse) was fixed to anchor to the viewport bottom
+            // instead of assuming msg.Y was frame-relative -- see
+            // pybackup ui/gotui/update.go. This host doesn't need to tell
+            // gotui's clickable rows apart from scrollback log rows itself:
+            // gotui does its own hit-testing once raw SGR click coords reach
+            // it, same as any real terminal.
+            // pin_viewport:false -- gotui streams real scrollback (tea.Println)
+            // instead of owning a fixed scroll region, so the hard-pin the
+            // mouse_tracking heuristic normally applies (for altscreen-style
+            // apps like Qwen/Vibe) must stay off; see _pin_viewport_enabled.
+            // wheel_to_pty:false -- keep the mouse wheel scrolling real ST
+            // scrollback (the shipped feature of the no-alt-screen redesign)
+            // rather than moving gotui's table cursor.
+            // drag_forwards_by_default stays at its global default (false,
+            // copy-first): drags still go to ST text-select; only taps/clicks
+            // forward to the PTY.
             // home_end_native opts in separately (see _home_end_native_enabled
             // in ai_terminal.py) since it's no longer tied to mouse_handling.
-            // For real mouse interactivity, run gotui directly in a real
-            // terminal (Windows Terminal) instead of through this profile.
-            "mouse_handling": false,
+            "mouse_handling": true,
+            "pin_viewport": false,
+            "wheel_to_pty": false,
             "home_end_native": true,
             "force_main_screen": false
         },
