@@ -2177,6 +2177,16 @@ class _Terminal:
         self.screen = screen
         self.parser = parser
         self.offset = 0
+        # None while living in a normal tab; the output-panel name (e.g.
+        # "Ai") while toggled into panel mode. See ai_terminal_toggle_panel /
+        # _migrate_terminal_view.
+        self.panel_name = None
+        # Sticky across tab<->panel round trips (unlike panel_name, never
+        # cleared back to None on returning to tab): reusing the same panel
+        # name/view every time is what lets Sublime remember the height the
+        # user last dragged it to. A fresh name each round trip would create
+        # a brand-new panel at ST's tiny default height every single time.
+        self._panel_home_name = None
         self.process = _ProcessProxy(pty)
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._lock = threading.Lock()
@@ -2710,7 +2720,14 @@ class _LayoutWatcher:
         try:
             window = view.window()
             if window is not None and window.active_panel():
-                return
+                # A terminal living in a panel (see ai_terminal_toggle_panel)
+                # is itself "the active panel" -- only skip the measure for
+                # some OTHER panel (find/console/build output) stealing
+                # vertical space, not our own.
+                own_panel = self.term.panel_name
+                mine = own_panel and window.active_panel() == "output." + own_panel
+                if not mine:
+                    return
         except Exception:
             pass
         try:
@@ -2827,10 +2844,22 @@ def _next_ai_name(window, prefix=None):
     return f"{pfx} {n}"
 
 
-def _terminal_view(window, name=None):
-    v = window.new_file()
-    v.set_name(name or _next_ai_name(window))
-    v.set_scratch(True)
+def _next_ai_panel_name(window, prefix=None):
+    """Panel-mode counterpart to _next_ai_name: 'prefix', then 'prefix 2', ...
+    unique among this window's currently-open output panels."""
+    pfx = prefix or _VIEW_NAME
+    if window.find_output_panel(pfx) is None:
+        return pfx
+    n = 2
+    while window.find_output_panel(f"{pfx} {n}") is not None:
+        n += 1
+    return f"{pfx} {n}"
+
+
+def _apply_terminal_view_settings(v):
+    """Settings/scheme shared by both the tab (new_file) and panel
+    (get_output_panel) terminal views. Caller sets the name/scratch flag,
+    which differ (or don't apply) between the two."""
     v.settings().set("word_wrap", False)
     v.settings().set("gutter", True)
     v.settings().set("line_numbers", True)
@@ -2908,7 +2937,97 @@ def _terminal_view(window, name=None):
     # move and forwards them to the PTY. Making the view read-only suppresses
     # keyboard `insert` before the listener fires, so real typing would do
     # nothing (only programmatic run_command("insert") bypasses the block).
+
+
+def _terminal_view(window, name=None):
+    v = window.new_file()
+    v.set_name(name or _next_ai_name(window))
+    v.set_scratch(True)
+    _apply_terminal_view_settings(v)
     return v
+
+
+def _terminal_panel_view(window, panel_name):
+    """Panel-mode counterpart to _terminal_view. get_output_panel returns a
+    cached view keyed by name -- reused as-is across toggles (the caller
+    forces a full render right after, so stale panel content never shows)."""
+    v = window.get_output_panel(panel_name)
+    _apply_terminal_view_settings(v)
+    return v
+
+
+def _dont_close_window_when_empty(func):
+    """Closing the last regular tab (moving it into a panel) must not take
+    the whole window with it. Mirrors Terminus's decorator of the same
+    purpose; the setting is restored a moment later so it doesn't leak into
+    the user's normal editing session."""
+    def f(*args, **kwargs):
+        s = sublime.load_settings("Preferences.sublime-settings")
+        prev = s.get("close_windows_when_empty")
+        s.set("close_windows_when_empty", False)
+        try:
+            func(*args, **kwargs)
+        finally:
+            if prev:
+                sublime.set_timeout(
+                    lambda: s.set("close_windows_when_empty", prev), 1000
+                )
+    return f
+
+
+def _forget_view_mouse_state(vid):
+    """Drop per-view mouse/hover bookkeeping keyed by a view id that's about
+    to stop existing. Mirrors _Terminal.kill's cleanup; migration doesn't
+    call kill() (the PTY survives), so this has to happen separately."""
+    _MOUSE_HOLD.pop(vid, None)
+    _MOUSE_LAST_CLICK.pop(vid, None)
+    _hover_last_cell.pop(vid, None)
+
+
+@_dont_close_window_when_empty
+def _migrate_terminal_view(term, new_view):
+    """Move a live terminal (PTY + Screen keep running) from its current
+    view to new_view, then close the old one.
+
+    Unlike Terminus, we don't capture/replay the old view's text: we own
+    the Screen (with scrollback) already, so forcing term.screen.dirty and
+    re-rendering paints new_view from the single source of truth. The
+    registry is re-keyed to new_view's id BEFORE the old view closes, so
+    AiTerminalViewListener.on_close's lookup misses on the old id and does
+    nothing -- no separate "don't kill the PTY" flag needed.
+    """
+    old_view = term.view
+    old_vid = old_view.id()
+    new_vid = new_view.id()
+
+    with _term_lock():
+        _term_registry().pop(old_vid, None)
+        _term_registry()[new_vid] = term
+
+    term.view = new_view
+    term.screen.dirty = True
+    # _do_render's skip_all fast path compares against these caches to avoid
+    # repainting unchanged content -- but they were populated by the paint
+    # into old_view. The new_view has never been painted, so without
+    # invalidating them here, the identical signature makes _do_render skip
+    # the paint entirely and the new view stays blank.
+    term._last_plain_sig = None
+    term._last_render_text = None
+    term._last_caret_off = None
+    # AiTerminalRenderCommand's auto-follow heuristic compares the view's
+    # current viewport y against term._last_vp_y to detect "user scrolled
+    # away" (see its "vp[1] < term._last_vp_y - lh*1.5" check). new_view
+    # always starts at vp (0, 0) while _last_vp_y still holds old_view's
+    # scroll position -- without resetting it here, that comparison reads as
+    # a scroll-away on the very first render and latches auto_follow False,
+    # stranding the view at the top instead of following to the cursor.
+    term._auto_follow = True
+    term._last_vp_y = 0.0
+    _schedule_render(term)
+
+    _forget_view_mouse_state(old_vid)
+    if old_view.is_valid():
+        old_view.close()
 
 
 def _measure(view):
@@ -3213,6 +3332,27 @@ def _do_render(term):
         rows, cy, cx = term.screen.render_cells()
         cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
+        if term.panel_name:
+            # In panel mode the Screen still holds the tab's full row count
+            # (force_main_screen pins rows -- see _LayoutWatcher._run -- so a
+            # plain shell's mostly-blank grid isn't reflowed just because the
+            # panel's viewport is much shorter). Rendering all of it forces
+            # scrolling through padding to reach the cursor. Trim trailing
+            # blank rows below the last real content or the cursor, whichever
+            # is deeper; a genuine full-screen TUI (status bars, `~` fill
+            # lines) has no blank tail to trim, so this is a no-op for those.
+            last_real = cy
+            for i in range(len(rows) - 1, cy, -1):
+                if any(ch.strip() for ch, _ in rows[i]):
+                    last_real = i
+                    break
+            # Sublime auto-sizes an output panel's height to its content
+            # (unlike a tab, which gets a fixed editing-group height), so
+            # trimming to bare content leaves a tiny sliver of a panel.
+            # Floor it at a third of the original tab's row count instead of
+            # dragging it taller by hand every time.
+            target = max(last_real + 1, len(rows) // 3)
+            rows = rows[:target]
         # Clear under the lock so a concurrent parser feed cannot set dirty
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
@@ -5275,6 +5415,144 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             _scroll_to_bottom(self.view)
             term._auto_follow = True
             sublime.status_message("Ai terminal: copy mode OFF")
+
+
+class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
+    """Move the live terminal between a normal tab and the bottom output
+    panel (like Sublime's own Find/Console), keeping the same PTY running.
+
+    Bound to ctrl+alt+p inside an Ai terminal view. No menu/palette entry --
+    the command only makes sense from inside the terminal it targets.
+    """
+
+    def is_enabled(self):
+        return _Terminal.from_id(self.view.id()) is not None
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None:
+            return
+        window = self.view.window()
+        if window is None:
+            return
+        if term.panel_name:
+            self._to_tab(window, term)
+        else:
+            self._to_panel(window, term)
+
+    def _to_panel(self, window, term):
+        # Reuse this terminal's own previous panel (same name -> same
+        # underlying panel view) whenever it has one, rather than minting a
+        # new name every round trip: window.get_output_panel() returns the
+        # SAME view for a name that already exists, and that's what lets
+        # Sublime remember the height the user last dragged it to. Only
+        # generate a fresh name the first time this terminal ever goes to
+        # panel mode (prefixed with the tab's own profile-specific name --
+        # "Claude", "Codex 2", a raw DOS-profile name, etc -- rather than the
+        # generic _VIEW_NAME default, so multiple agents/terminals don't all
+        # collapse into indistinguishable "Ai" panels).
+        panel_name = term._panel_home_name or _next_ai_panel_name(
+            window, prefix=term.view.name()
+        )
+        term._panel_home_name = panel_name
+        new_view = _terminal_panel_view(window, panel_name)
+        term.panel_name = panel_name
+        _migrate_terminal_view(term, new_view)
+        window.run_command("show_panel", {"panel": "output." + panel_name})
+        window.focus_view(new_view)
+        # Belt-and-suspenders: re-assert focus one tick later. Something in
+        # ST's own post-command housekeeping (around show_panel and/or the
+        # group-emptying side effects touched on in _migrate_terminal_view's
+        # docstring) steals focus back to the editing area after this
+        # command returns, leaving keystrokes to land nowhere useful (or
+        # spawn a new tab) until the user clicks the panel by hand. A
+        # second, deferred focus_view call is cheap insurance against that.
+        sublime.set_timeout(lambda: window.focus_view(new_view), 0)
+        sublime.status_message("Ai terminal: moved to panel")
+
+    def _to_tab(self, window, term):
+        panel_name = term.panel_name
+        if window.active_panel() == "output." + panel_name:
+            # Hide BEFORE migrating, not after: closing the panel's backing
+            # view inside _migrate_terminal_view (below) re-triggers the
+            # panel's visibility as a side effect if it's still shown at
+            # that point, silently undoing a hide_panel called afterward.
+            # Deliberately hide_panel, NOT destroy_output_panel (unlike an
+            # earlier version): destroying it wipes Sublime's memory of the
+            # height the user dragged it to, so the panel would reset to the
+            # tiny default every single time this terminal goes back to
+            # panel mode. But leaving it un-hidden means the terminal's old
+            # panel stays visibly on screen -- showing stale, no-longer-
+            # updating content and swallowing keystrokes -- right alongside
+            # the new tab it just moved into.
+            window.run_command("hide_panel", {"panel": "output." + panel_name})
+        new_view = _terminal_view(window, name=panel_name)
+        term.panel_name = None
+        _migrate_terminal_view(term, new_view)
+        window.focus_view(new_view)
+        sublime.status_message("Ai terminal: moved to tab")
+
+
+class AiTerminalSwitchPanelCommand(sublime_plugin.WindowCommand):
+    """List every open panel in this window (Console, Find, any Ai terminals
+    parked in panel mode, etc.) and bring the picked one to front.
+
+    Sublime has no built-in panel switcher -- reading the console or any
+    other panel silently steals focus from whatever panel was showing
+    before (e.g. an Ai terminal in panel mode), with no UI cue where it
+    went. Command palette: "Ai Terminal: Switch Panel...".
+    """
+
+    _BUILTIN_LABELS = {
+        "console": "Console",
+        "find": "Find",
+        "find_in_files": "Find in Files",
+        "replace": "Replace",
+        "incremental_find": "Incremental Find",
+    }
+
+    def run(self):
+        window = self.window
+        panels = window.panels()
+        if not panels:
+            sublime.status_message("Ai terminal: no panels open")
+            return
+
+        ai_panel_names = {
+            term.panel_name
+            for term in _term_registry().values()
+            if term.panel_name and term.view.window() == window
+        }
+        active = window.active_panel()
+
+        rows = []
+        for raw in panels:
+            if raw.startswith("output."):
+                name = raw[len("output."):]
+                if name in ai_panel_names:
+                    label, detail = "Ai Terminal — " + name, "Live PTY terminal"
+                else:
+                    label, detail = "Output — " + name, ""
+            else:
+                label = self._BUILTIN_LABELS.get(raw, raw.replace("_", " ").title())
+                detail = ""
+            annotation = "active" if raw == active else ""
+            rows.append(_quick_panel_item(label, detail, annotation, sublime.KIND_AMBIGUOUS))
+
+        def on_done(idx):
+            if idx < 0:
+                return
+            raw = panels[idx]
+            window.run_command("show_panel", {"panel": raw})
+            if raw.startswith("output."):
+                name = raw[len("output."):]
+                view = window.find_output_panel(name)
+                if view is not None:
+                    window.focus_view(view)
+
+        window.show_quick_panel(
+            rows, on_done, placeholder="Switch to panel", selected_index=0
+        )
 
 
 class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
