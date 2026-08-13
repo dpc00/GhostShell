@@ -1359,11 +1359,27 @@ def _wheel_to_pty_enabled(term):
     )
 
 
+def _page_keys_to_pty(term):
+    """Whether PageUp/PageDown should reach the PTY instead of paging the
+    Sublime view.
+
+    Default matches today's steal path: native ST page-scroll unless the
+    session is `_tui_like` (real alt-screen -- vim/less/htop own pagination).
+    `force_main_screen` keeps `screen.alt_screen` false even when the child
+    sent DECSET 1049 (ghostty strips those sequences), so a Grok-style TUI
+    is classified as a shell. Native page then moves a one-frame buffer and
+    the key looks dead. Profiles that paint in place and handle their own
+    scrollback (Grok Build) set "page_keys_to_pty": true.
+    """
+    if _tui_like(term):
+        return True
+    return _profile_bool(_term_profile_name(term), "page_keys_to_pty", False)
+
+
 def _home_end_native_enabled(term):
     """Whether Home/End should go to native ST navigation instead of the PTY
-    (PageUp/PageDown have their own always-on native-scroll path above this
-    function's call site and normally never reach here -- see the
-    _tui_like() check in AiTerminalKeypressCommand.run). Defaults to False --
+    (PageUp/PageDown go native unless `_page_keys_to_pty` / `_tui_like` --
+    see AiTerminalKeypressCommand.run). Defaults to False --
     most profiles run interactive readline-style apps (Claude, Codex, shells)
     that need these keys to reach the PTY and move the app's own input-line
     cursor. Only scrollback-viewer profiles with no real line-editing (e.g.
@@ -5383,10 +5399,10 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # terminal emulator (same motion as dragging the minimap) -- unlike
         # Home/End, no primary-screen readline-style CLI has a legitimate use
         # for PageUp/PageDown reaching its own input line, so this is correct
-        # default behavior, not an opt-in. The one exception is a fullscreen
-        # alt-screen app (vim, less, htop) that owns its own pagination and
-        # must receive the raw sequence instead of having ST steal it.
-        if not alt and key in ("pageup", "pagedown") and not _tui_like(term):
+        # default behavior, not an opt-in. Exceptions: a real alt-screen app
+        # (vim, less, htop) via `_tui_like`, or a profile that paints in
+        # place with no ST history (Grok) via `page_keys_to_pty`.
+        if not alt and key in ("pageup", "pagedown") and not _page_keys_to_pty(term):
             self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
             return
         # Profiles that explicitly opt in (real scrollback, no line-editing,

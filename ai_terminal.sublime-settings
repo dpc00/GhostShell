@@ -279,12 +279,23 @@
             // asciicast sessions (2026-08-11). Real PTY-side receiver exists;
             // this is the profile mouse_handling's click/tap-to-PTY path
             // (_route_mouse_click) targets (Grok trust dialog / buttons).
+            // page_keys_to_pty: Grok paints a full TUI in place (no real
+            // ANSI scroll, force_main_screen hides 1049 so _tui_like is
+            // false). Native PageUp/PageDown then page a one-frame ST
+            // buffer and look dead. Forward them like alt-screen apps;
+            // Claude stays on the default (native ST page) because it
+            // actually fills scrollback under CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN.
+            // user note:  in Grok tab key switches to scrollback manuevering, cursor 
+            // and page keys work then and manuever back into conversation, tab gets one back to command line
+            // it is actually an elegant design hard to under/over estimate it without lots of experience
+            // I wonder how many other CLI TUIs have this simple switch going on.
             "launch_command": [
                 "grok"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Junie": {
             // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
