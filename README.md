@@ -5,6 +5,32 @@ ctypes against the Windows ConPTY (Pseudoconsole) API, plus a cursor-aware
 ANSI renderer (backed by libghostty-vt) tailored to the subset TUI agents
 (Claude Code, OpenCode, Codex, etc.) emit.
 
+## Supported CLIs
+
+Each one gets its own tuned profile in `ai_terminal.sublime-settings` —
+mouse tracking, alt-screen handling, and page-key routing are calibrated
+per-agent, not guessed at generically:
+
+- **Claude Code** (Anthropic) — plus a `--chrome` variant
+- **Codex** (OpenAI)
+- **OpenCode**
+- **Grok Build** (xAI)
+- **Antigravity** (Google)
+- **Qwen Code** (Alibaba)
+- **Kimi Code** (Moonshot AI)
+- **Kiro** (AWS)
+- **Junie** (JetBrains)
+- **jcode**
+- **Mimo** (Xiaomi)
+- **Vibe** (Mistral)
+
+Claude Code, Codex, OpenCode, and Qwen Code each also have an
+`→⇢⇨ Ollama`-routed variant for running against Ollama's cloud model
+catalog instead of the provider's own backend.
+
+Plain shells (`Bash`, `PowerShell`, `WSL Bash`, `Dos Console`, `cmd.exe`)
+are supported too, as themselves — no agent-specific tuning applied.
+
 ## Layout
 
 ```
