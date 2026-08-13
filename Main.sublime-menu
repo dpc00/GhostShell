@@ -126,10 +126,6 @@
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Gemini" }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
                         "args": { "profile": "Grok Build" }
                     },
                     {
