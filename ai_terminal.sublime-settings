@@ -206,6 +206,12 @@
             "page_keys_to_pty": true
         },
         "Codex →⇢⇨ Ollama": {
+            // page_keys_to_pty: same underlying `codex` binary as the
+            // "Codex" profile, just pointed at a different model backend --
+            // the Ctrl+T transcript-pager PageUp/PageDown bug is a PTY/
+            // force_main_screen issue unrelated to the model, so it applies
+            // here too. See "Codex" profile comment for the confirmed repro
+            // (2026-08-13).
             "launch_command": [
                 "ollama",
                 "launch",
@@ -223,7 +229,8 @@
                 // "GOOGLE_CLOUD_LOCATION":"global",
                 // "GOOGLE_CLOUD_PROJECT":"project-67efc385-8bb5-493f-a81",
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
-            }
+            },
+            "page_keys_to_pty": true
         },
         "Dos Console": {
             "launch_command": [
