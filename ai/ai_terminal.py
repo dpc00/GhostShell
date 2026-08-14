@@ -3332,27 +3332,25 @@ def _do_render(term):
         rows, cy, cx = term.screen.render_cells()
         cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
-        if term.panel_name:
-            # In panel mode the Screen still holds the tab's full row count
-            # (force_main_screen pins rows -- see _LayoutWatcher._run -- so a
-            # plain shell's mostly-blank grid isn't reflowed just because the
-            # panel's viewport is much shorter). Rendering all of it forces
-            # scrolling through padding to reach the cursor. Trim trailing
-            # blank rows below the last real content or the cursor, whichever
-            # is deeper; a genuine full-screen TUI (status bars, `~` fill
-            # lines) has no blank tail to trim, so this is a no-op for those.
-            last_real = cy
-            for i in range(len(rows) - 1, cy, -1):
-                if any(ch.strip() for ch, _ in rows[i]):
-                    last_real = i
-                    break
-            # Sublime auto-sizes an output panel's height to its content
-            # (unlike a tab, which gets a fixed editing-group height), so
-            # trimming to bare content leaves a tiny sliver of a panel.
-            # Floor it at a third of the original tab's row count instead of
-            # dragging it taller by hand every time.
-            target = max(last_real + 1, len(rows) // 3)
-            rows = rows[:target]
+        # The Screen holds the tab's full pinned row count (force_main_screen
+        # pins rows -- see _LayoutWatcher._run -- so a plain shell's mostly-
+        # blank grid isn't reflowed just because there's less real content
+        # yet). Rendering all of it puts a wall of blank lines below the
+        # cursor in every terminal, tab or panel. Trim trailing blank rows
+        # below the last real content or the cursor, whichever is deeper; a
+        # genuine full-screen TUI (status bars, `~` fill lines) has no blank
+        # tail to trim, so this is a no-op for those.
+        last_real = cy
+        for i in range(len(rows) - 1, cy, -1):
+            if any(ch.strip() for ch, _ in rows[i]):
+                last_real = i
+                break
+        # No floor in either mode: trim to exactly the real content. An
+        # earlier version floored panel mode at a third of the tab's row
+        # count so it wouldn't feel cramped as new output arrived, but
+        # live testing showed exact-content trimming is what's wanted even
+        # there -- drag the panel taller by hand if more room is wanted.
+        rows = rows[: last_real + 1]
         # Clear under the lock so a concurrent parser feed cannot set dirty
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
@@ -5299,9 +5297,15 @@ def _append_host_scroll_pad(text):
     """Wrap TUI text in host-only pads so trackpad can pan both ways."""
     if text is None:
         text = ""
-    if text and not text.endswith("\n"):
-        text += "\n"
     pad = "\n" * _HOST_SCROLL_PAD_LINES
+    if pad:
+        # The bottom pad needs its own line to sit on -- only meaningful
+        # when there's an actual pad to attach. With _HOST_SCROLL_PAD_LINES
+        # at 0 (pad -- see its comment) this used to fire unconditionally
+        # anyway, appending a bare trailing blank line after the real last
+        # line (the command line) in every render, tab or panel.
+        if text and not text.endswith("\n"):
+            text += "\n"
     return pad + text + pad
 
 
