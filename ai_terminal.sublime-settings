@@ -283,7 +283,11 @@
             "pin_viewport": false,
             "wheel_to_pty": false,
             "home_end_native": true,
-            "force_main_screen": false
+            "force_main_screen": false,
+            // pybackup's own run logging routinely exceeds the global 300-line
+            // default (real GitPush/rclone output across many repos/folders),
+            // truncating the start of a run's log out of scrollback.
+            "scrollback_history_size": 2000
         },
         "Grok Build": {
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords,
