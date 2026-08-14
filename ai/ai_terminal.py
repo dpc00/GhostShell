@@ -1265,14 +1265,19 @@ def _setting_bool(key, default, profile_name=None, settings=None):
     return bool(s.get(key, default))
 
 
-def _setting_number(key, default, cast=int, settings=None):
-    """Numeric knob, falling back to `default` on a missing/garbage value.
+def _setting_number(key, default, cast=int, profile_name=None, settings=None):
+    """Numeric knob resolved profile-override first, then the global settings
+    key of the same name, then `default`.
 
     A hand-edited settings file is the only source here, so a bad value must
     never propagate as an exception into a render/resize tick.
     """
+    s = _settings_obj(settings)
+    profile = _profile_settings(profile_name, s)
     try:
-        return cast(_settings_obj(settings).get(key, default))
+        if profile is not None and key in profile:
+            return cast(profile[key])
+        return cast(s.get(key, default))
     except (TypeError, ValueError):
         return default
 
@@ -1429,9 +1434,14 @@ _DEFAULT_SPAWN_ENV = {
 }
 
 
-def _scrollback_size():
+def _scrollback_size(profile_name=None):
+    """Scrollback line cap: per-profile override (e.g. pybackup's launcher
+    profile logging past the global default) else the global setting."""
     return max(
-        0, _setting_number("scrollback_history_size", _DEFAULT_SCROLLBACK)
+        0,
+        _setting_number(
+            "scrollback_history_size", _DEFAULT_SCROLLBACK, profile_name=profile_name
+        ),
     )
 
 
@@ -2080,12 +2090,6 @@ def _on_settings_change():
     the new cap. Column bounds are picked up by the resize poller's next
     _measure (~750ms), so nothing to do here for cols."""
     _settings_debug_log(">>> _on_settings_change CALLED")
-    try:
-        cap = _scrollback_size()
-        _settings_debug_log(f"Parsed new scrollback_history_size cap: {cap}")
-    except Exception as e:
-        _settings_debug_log(f"ERROR: _scrollback_size failed: {e}\n{traceback.format_exc()}")
-        return
 
     with _term_lock():
         terms = list(_term_registry().values())
@@ -2095,7 +2099,12 @@ def _on_settings_change():
         try:
             view_id = t.view.id() if t.view else "unknown"
             view_name = t.view.name() if t.view else "unnamed"
-            _settings_debug_log(f"Processing terminal for view {view_id} ({view_name})")
+            # Per-terminal, not one cap for every terminal: a profile (e.g.
+            # pybackup's launcher) can override scrollback_history_size.
+            cap = _scrollback_size(getattr(t, "profile_name", None))
+            _settings_debug_log(
+                f"Processing terminal for view {view_id} ({view_name}), cap={cap}"
+            )
             _settings_debug_log(f"Acquiring t._lock for view {view_id}...")
             with t._lock:
                 _settings_debug_log(f"Acquired t._lock for view {view_id}. Calling t.screen.set_history_cap({cap})")
@@ -4792,7 +4801,7 @@ def _spawn(window, path, profile=None):
         view.close()
         return
     try:
-        screen = _Screen(cols, rows, history_cap=_scrollback_size())
+        screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
         parser = _make_parser(screen, _force_main_screen(profile_name))
     except Exception as e:
         # A missing or incompatible libghostty-vt used to raise here with the
