@@ -548,22 +548,7 @@ class _PosixPty:
 # ─── pure terminal core (testable without Sublime) ───────────────────────────
 # Screen, Parser, colours, keys, and text layout live in ai/terminal/*.
 # This file is the Sublime adapter: ConPTY, view I/O, commands, color-scheme.
-# Session logging (cast, text transcript, debug logs) lives in the STLogs package.
-
-
-def _ensure_stlogs():
-    """Make `import STLogs` work outside Sublime (unit tests, scripts)."""
-    try:
-        import STLogs  # noqa: F401
-        return
-    except ImportError:
-        pass
-    projects = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    if projects not in sys.path:
-        sys.path.insert(0, projects)
-
-
-_ensure_stlogs()
+# Session recordings (cast, text transcript, debug logs) live in ai/terminal/.
 
 try:
     from .terminal.colors import (
@@ -646,12 +631,12 @@ try:
         st_button_to_proto as _st_button_to_proto,
         view_point_to_cell as _view_point_to_cell,
     )
-    from STLogs.lib.log_paths import DEBUG as _DEBUG
-    from STLogs.lib.color_scheme_log import color_scheme_log as _color_scheme_log
-    from STLogs.lib.settings_debug_log import settings_debug_log as _settings_debug_log
-    from STLogs.lib.raw_debug_log import debug_log as _debug_log
-    from STLogs.lib.cast_recorder import CastRecorder
-    from STLogs.lib.session_text_log import SessionTextLog
+    from .terminal.log_paths import DEBUG as _DEBUG
+    from .terminal.color_scheme_log import color_scheme_log as _color_scheme_log
+    from .terminal.settings_debug_log import settings_debug_log as _settings_debug_log
+    from .terminal.raw_debug_log import debug_log as _debug_log
+    from .terminal.cast_recorder import CastRecorder
+    from .terminal.session_text_log import SessionTextLog
 except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
@@ -736,12 +721,12 @@ except ImportError as _term_imp_err:
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
-        from STLogs.lib.log_paths import DEBUG as _DEBUG
-        from STLogs.lib.color_scheme_log import color_scheme_log as _color_scheme_log
-        from STLogs.lib.settings_debug_log import settings_debug_log as _settings_debug_log
-        from STLogs.lib.raw_debug_log import debug_log as _debug_log
-        from STLogs.lib.cast_recorder import CastRecorder
-        from STLogs.lib.session_text_log import SessionTextLog
+        from ai.terminal.log_paths import DEBUG as _DEBUG
+        from ai.terminal.color_scheme_log import color_scheme_log as _color_scheme_log
+        from ai.terminal.settings_debug_log import settings_debug_log as _settings_debug_log
+        from ai.terminal.raw_debug_log import debug_log as _debug_log
+        from ai.terminal.cast_recorder import CastRecorder
+        from ai.terminal.session_text_log import SessionTextLog
     except ImportError:
         raise _term_imp_err
 
@@ -2047,8 +2032,8 @@ def _resolve_secret_refs(env):
 
 
 # ─── on-disk logs ────────────────────────────────────────────────────────────
-# Implementations live in STLogs.lib (log_paths, color_scheme_log,
-# settings_debug_log, raw_debug_log, cast_recorder, session_text_log).
+# Implementations live in ai/terminal/{log_paths,color_scheme_log,
+# settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py.
 # Same filenames, messages, and failure handling as the former inlined copies.
 
 
@@ -3009,27 +2994,23 @@ def _measure(view):
     else:
         ml = mr = margin
     usable_w = ex[0] - ml - mr
-    # word_wrap=False: ST's horizontal scroll range is (maxlen + 3) * cw -
-    # viewport (clamped at 0), NOT content overflow. The +3 = +1 end-of-line
-    # caret position (ST's layout_extent is (longest_line + 1) * cw) + ~2 chars
-    # of ST end-of-line padding that count toward the scroll range even when
-    # text fits. So cols = int(usable_w / cw) - 3 is required for a zero
-    # horizontal scrollbar; -2 or less still leaves a 1-char sliver.
+    # The ~4 blank columns after wrapped text are a bug in the *view*, not
+    # a feature. They exist because ST's layout width is (line + ~3) cells
+    # (EOL caret + padding), not the glyph count. If we report a wider PTY
+    # size, the TUI rewraps to that size (visible when you resize a tab and
+    # scroll back). Those longer lines then trip the H-scrollbar. The bar
+    # changes viewport_extent; we report width again. In no-alt-screen
+    # Claude that is a full conversation replay (~1000 lines) which repeats
+    # ~10 times. Do not "fix" the gap by sending more columns.
     #
-    # We deliberately do NOT use word_wrap=True to shrink the gap: word_wrap
-    # kills the horizontal scrollbar, yes, but it makes any single line that
-    # lands at the wrap threshold (box-drawing chars render slightly wider
-    # than em_width, a stale wide line left over from a shrink, or a
-    # transient overshoot during a TUI frame) soft-wrap to a new visual row,
-    # and one extra row = a full line-height of vertical scroll bar. That is
-    # more disruptive than the ~3c right gap we pay here. The gap is the cost
-    # of a non-wrapping terminal view with zero scrollbars.
-    # Floor/ceiling from settings (ai_terminal.sublime-settings ->
-    # min_columns / max_columns). Subtract 3.5 char widths to account
-    # for ST's scroll range math plus fractional em_width precision: the -3
-    # is needed for the +1 end-of-line caret and ~2 chars of ST padding.
-    # The +0.5 buffer prevents horizontal scrollbars from appearing and
-    # re-triggering the layout callbacks within the debounce window.
+    # A real fix has to make ST stop charging those extra cells (or hide
+    # the H-bar) so we can report a width that fills the view *and* still
+    # have no bar after the TUI rewraps. Until then the 4.0*cw subtract
+    # is a stopper, not a solution.
+    #
+    # word_wrap=True hides the H-bar but any line at the wrap threshold
+    # (box-drawing slightly wider than em_width) becomes an extra visual
+    # row and a vertical scrollbar.
     mn, mx = _cols_bounds()
     cols = max(mn, int((usable_w - 4.0 * cw) / cw))
     if mx is not None:
@@ -3479,12 +3460,12 @@ def _apply_color_regions(view, regs):
 
 
 # ─── debug / recording env gates ──────────────────────────────────────────────
-# Raw ANSI debug log: STLogs/lib/raw_debug_log.py (gated on _DEBUG).
-# Asciicast v3 recording: STLogs/lib/cast_recorder.py. On if
+# Raw ANSI debug log: ai/terminal/raw_debug_log.py (gated on _DEBUG).
+# Asciicast v3 recording: ai/terminal/cast_recorder.py. On if
 # AI_TERMINAL_LOG_LINES is set in spawn_env OR in ST's process env, or if
 # the record_asciicast setting is true (default). Per stext-settings-json-strict
 # the env toggle is NOT a top-level setting key; it lives in spawn_env.
-# Session text logs: STLogs/lib/session_text_log.py -- see _log_tab_text().
+# Session text logs: ai/terminal/session_text_log.py -- see _log_tab_text().
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
 
 
