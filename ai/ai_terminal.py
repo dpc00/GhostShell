@@ -548,6 +548,22 @@ class _PosixPty:
 # ─── pure terminal core (testable without Sublime) ───────────────────────────
 # Screen, Parser, colours, keys, and text layout live in ai/terminal/*.
 # This file is the Sublime adapter: ConPTY, view I/O, commands, color-scheme.
+# Session logging (cast, text transcript, debug logs) lives in the STLogs package.
+
+
+def _ensure_stlogs():
+    """Make `import STLogs` work outside Sublime (unit tests, scripts)."""
+    try:
+        import STLogs  # noqa: F401
+        return
+    except ImportError:
+        pass
+    projects = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if projects not in sys.path:
+        sys.path.insert(0, projects)
+
+
+_ensure_stlogs()
 
 try:
     from .terminal.colors import (
@@ -630,12 +646,12 @@ try:
         st_button_to_proto as _st_button_to_proto,
         view_point_to_cell as _view_point_to_cell,
     )
-    from .terminal.log_paths import DEBUG as _DEBUG
-    from .terminal.color_scheme_log import color_scheme_log as _color_scheme_log
-    from .terminal.settings_debug_log import settings_debug_log as _settings_debug_log
-    from .terminal.raw_debug_log import debug_log as _debug_log
-    from .terminal.cast_recorder import CastRecorder
-    from .terminal.session_text_log import SessionTextLog
+    from STLogs.log_paths import DEBUG as _DEBUG
+    from STLogs.color_scheme_log import color_scheme_log as _color_scheme_log
+    from STLogs.settings_debug_log import settings_debug_log as _settings_debug_log
+    from STLogs.raw_debug_log import debug_log as _debug_log
+    from STLogs.cast_recorder import CastRecorder
+    from STLogs.session_text_log import SessionTextLog
 except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
@@ -720,12 +736,12 @@ except ImportError as _term_imp_err:
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
-        from ai.terminal.log_paths import DEBUG as _DEBUG
-        from ai.terminal.color_scheme_log import color_scheme_log as _color_scheme_log
-        from ai.terminal.settings_debug_log import settings_debug_log as _settings_debug_log
-        from ai.terminal.raw_debug_log import debug_log as _debug_log
-        from ai.terminal.cast_recorder import CastRecorder
-        from ai.terminal.session_text_log import SessionTextLog
+        from STLogs.log_paths import DEBUG as _DEBUG
+        from STLogs.color_scheme_log import color_scheme_log as _color_scheme_log
+        from STLogs.settings_debug_log import settings_debug_log as _settings_debug_log
+        from STLogs.raw_debug_log import debug_log as _debug_log
+        from STLogs.cast_recorder import CastRecorder
+        from STLogs.session_text_log import SessionTextLog
     except ImportError:
         raise _term_imp_err
 
@@ -2031,8 +2047,8 @@ def _resolve_secret_refs(env):
 
 
 # ─── on-disk logs ────────────────────────────────────────────────────────────
-# Implementations live in ai/terminal/{log_paths,color_scheme_log,
-# settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py.
+# Implementations live in the STLogs package (log_paths, color_scheme_log,
+# settings_debug_log, raw_debug_log, cast_recorder, session_text_log).
 # Same filenames, messages, and failure handling as the former inlined copies.
 
 
@@ -3463,12 +3479,12 @@ def _apply_color_regions(view, regs):
 
 
 # ─── debug / recording env gates ──────────────────────────────────────────────
-# Raw ANSI debug log: ai/terminal/raw_debug_log.py (gated on _DEBUG).
-# Asciicast v3 recording: ai/terminal/cast_recorder.py. On if
+# Raw ANSI debug log: STLogs/raw_debug_log.py (gated on _DEBUG).
+# Asciicast v3 recording: STLogs/cast_recorder.py. On if
 # AI_TERMINAL_LOG_LINES is set in spawn_env OR in ST's process env, or if
 # the record_asciicast setting is true (default). Per stext-settings-json-strict
 # the env toggle is NOT a top-level setting key; it lives in spawn_env.
-# Session text logs: ai/terminal/session_text_log.py -- see _log_tab_text().
+# Session text logs: STLogs/session_text_log.py -- see _log_tab_text().
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
 
 
