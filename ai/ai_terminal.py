@@ -2185,6 +2185,15 @@ class _Terminal:
         self.pty = pty
         self.screen = screen
         self.parser = parser
+        # Route libghostty-vt's query responses (DA/kitty-flags/XTVERSION/
+        # size) through the same ordered write queue as real keystrokes --
+        # see _on_parser_write_pty. Bound here, before the child exists
+        # (_spawn constructs this object then prepare()'s the writer, and
+        # only then calls pty.start()). Grok's keyboard-handling probe
+        # (CSI ? u) fires the instant the process starts and is never
+        # retried in that session, so a late bind makes /doctor report
+        # "keyboard protocol is unavailable" for the whole session.
+        parser.bind_write_pty(self._on_parser_write_pty)
         self.offset = 0
         # None while living in a normal tab; the output-panel name (e.g.
         # "Ai") while toggled into panel mode. See ai_terminal_toggle_panel /
@@ -2280,7 +2289,16 @@ class _Terminal:
         with _term_lock():
             return _term_registry().get(view_id)
 
-    def start(self):
+    def prepare(self):
+        """Open session logs and start the writer. Call before pty.start().
+
+        Grok (and other TUIs) emit capability probes the instant the child
+        exists and do not retry a timed-out keyboard-handling probe in the
+        same session. The writer -- and the write_pty bind in __init__ --
+        must already be live so the first CSI ? u can be answered.
+        The reader cannot start yet: it needs the PTY handles that
+        pty.start() creates.
+        """
         # Recording patch: asciicast v3. Recording is on if
         # AI_TERMINAL_LOG_LINES is set in the spawn_env setting OR in ST's
         # process environment (_LOG_LINES). Checked per-spawn so a settings
@@ -2352,6 +2370,9 @@ class _Terminal:
                 self._text_log_file = None
                 self._notify("tab text logging disabled: could not open the log file")
         self._ensure_writer()
+
+    def start_reader(self):
+        """Begin reading PTY output. Call immediately after pty.start()."""
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -2442,9 +2463,10 @@ class _Terminal:
 
     def _write_loop(self):
         while True:
-            text = self._write_queue.get()
-            if text is None:
+            item = self._write_queue.get()
+            if item is None:
                 return
+            text, record = item
             try:
                 # Deliver input before touching the optional recorder.  A slow
                 # file flush or contention with the output recorder must never
@@ -2462,8 +2484,13 @@ class _Terminal:
                 continue
             # Recording has its own queue/thread.  In particular, never wait
             # here on _cast_lock after the first arrow while later arrows are
-            # queued for the PTY behind it.
-            self._input_cast_queue.put(text)
+            # queued for the PTY behind it. record=False (write_pty query
+            # responses -- see _on_parser_write_pty) skips this: nobody
+            # typed a DA/kitty-flags/size reply, and logging it as an "i"
+            # event would make a replayed .cast show the terminal "typing"
+            # escape sequences on its own.
+            if record:
+                self._input_cast_queue.put(text)
 
     def _cast(self, code, data):
         """Asciicast v3 event: [delta, code, data]. delta is seconds since the
@@ -2572,11 +2599,25 @@ class _Terminal:
             self._cast("o", text)
         _schedule_render(self)
 
-    def send_string(self, s):
+    def send_string(self, s, record=True):
         # A key command must do no I/O and acquire no recording locks on
         # Sublime's main plugin thread.  The ordered writer records and writes
-        # this text in sequence.
-        self._write_queue.put(s)
+        # this text in sequence. record=False for text nobody actually typed
+        # (see _on_parser_write_pty) -- it still gets written to the pty, just
+        # not logged as an input event.
+        self._write_queue.put((s, record))
+
+    def _on_parser_write_pty(self, data):
+        # Called synchronously from the parser's write_pty callback, which
+        # itself fires inside parser.feed() on the PTY reader thread (see
+        # _on_data), while self._lock is held. Must not write to the pty
+        # directly here -- that's a blocking Win32 WriteFile on a thread
+        # that also owns the read loop. Queue through the same ordered
+        # writer as real keystrokes instead. The response bytes are VT
+        # control sequences (ESC, digits, ASCII letters, ST's ESC \\) --
+        # always single-byte-clean, so decoding as latin-1 and letting
+        # send_string's utf-8 encode round-trip them is lossless.
+        self.send_string(data.decode("latin-1"), record=False)
 
     def resize(self, cols, rows):
         if getattr(self.parser, "force_main_screen", False) and self._last_rows is not None:
@@ -3510,7 +3551,7 @@ _DEBUG_PATH = os.path.join(_LOG_ROOT, "ai_terminal_raw_ansi_stream_debug_logs")
 _debug_lock = threading.Lock()
 # Asciicast v3 recording (recording patch): env-gated like _DEBUG. When on
 # (AI_TERMINAL_LOG_LINES set in spawn_env OR in ST's process env), each
-# _Terminal.start() opens a per-session .cast file under descriptive directory
+# _Terminal.prepare() opens a per-session .cast file under descriptive directory
 # and writes the v3 header; _on_data/send_string/resize/kill append
 # timed events. Recording at the stream layer (not scroll-off) means it is
 # faithful to what Claude emitted and does NOT duplicate on resume (a resume
@@ -4786,6 +4827,21 @@ def _spawn(window, path, profile=None):
     print(f"[ai_terminal] launch cwd: {path!r}")
     print(f"[ai_terminal] launch argv: {argv!r}")
 
+    # Build the VT engine *before* the child exists. Grok's keyboard-handling
+    # probe (CSI ? u) fires the instant the process starts and is never
+    # retried in that session -- /doctor then reports the cached miss. The
+    # previous order (pty.start, then parser, then bind, then writer/reader)
+    # left that first probe unanswered. Parser construction also loads the
+    # DLL, which is the slow part of bring-up.
+    try:
+        screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
+        parser = _make_parser(screen, _force_main_screen(profile_name))
+    except Exception as e:
+        print("[ai_terminal] VT engine init failed:\n%s" % traceback.format_exc())
+        sublime.error_message(f"ai_terminal: failed to initialize the VT engine:\n{e}")
+        view.close()
+        return
+
     if os.name != "nt":
         pty = _PosixPty(argv, path, cols, rows, env)
         print("[ai_terminal] Spawning PTY process using 'posix' backend.")
@@ -4793,25 +4849,6 @@ def _spawn(window, path, profile=None):
         pty = _Pty(argv, path, cols, rows, env)
         print("[ai_terminal] Spawning PTY process using 'conpty' backend.")
 
-    try:
-        pty.start()
-    except Exception as e:
-        print("[ai_terminal] PTY start failed:\n%s" % traceback.format_exc())
-        sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
-        view.close()
-        return
-    try:
-        screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
-        parser = _make_parser(screen, _force_main_screen(profile_name))
-    except Exception as e:
-        # A missing or incompatible libghostty-vt used to raise here with the
-        # child already running and nobody reading it: an orphaned process
-        # behind a tab that never printed anything.
-        print("[ai_terminal] VT engine init failed:\n%s" % traceback.format_exc())
-        pty.kill()
-        sublime.error_message(f"ai_terminal: failed to initialize the VT engine:\n{e}")
-        view.close()
-        return
     term = _Terminal(
         view,
         pty,
@@ -4820,9 +4857,21 @@ def _spawn(window, path, profile=None):
         spawn_env=extra_env,
         profile_name=profile_name,
     )
+    term.prepare()
+    try:
+        pty.start()
+    except Exception as e:
+        print("[ai_terminal] PTY start failed:\n%s" % traceback.format_exc())
+        try:
+            term.kill()
+        except Exception:
+            pass
+        sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
+        view.close()
+        return
     with _term_lock():
         _term_registry()[view.id()] = term
-    term.start()
+    term.start_reader()
 
 
 class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):

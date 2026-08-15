@@ -19,6 +19,7 @@ order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 
 import os
 import sys
+import threading
 
 import pytest
 
@@ -36,6 +37,8 @@ class FakeView:
         self._id = vid
         self._file_name = file_name
         self._settings = Settings()
+        self._name = "view-%d" % vid
+        self._closed = False
 
     def id(self):
         return self._id
@@ -46,8 +49,26 @@ class FakeView:
     def settings(self):
         return self._settings
 
+    def set_name(self, name):
+        self._name = name
+
     def name(self):
-        return "view-%d" % self._id
+        return self._name
+
+    def set_scratch(self, value):
+        pass
+
+    def is_valid(self):
+        return not self._closed
+
+    def close(self):
+        self._closed = True
+
+    def window(self):
+        return None
+
+    def run_command(self, name, args=None):
+        pass
 
 
 class FakeWindow:
@@ -58,6 +79,7 @@ class FakeWindow:
     def __init__(self, folders=(), active_view=None):
         self._folders = list(folders)
         self._active_view = active_view
+        self._views = []
         self.panels = []          # [(items, on_done, kwargs)]
         self.input_panels = []    # [(caption, initial, on_done)]
         self.commands = []        # [(name, args)]
@@ -88,8 +110,13 @@ class FakeWindow:
     def focus_view(self, view):
         self.commands.append(("focus_view", {"id": view.id()}))
 
+    def views(self):
+        return list(self._views)
+
     def new_file(self):
-        return FakeView(vid=999)
+        view = FakeView(vid=999)
+        self._views.append(view)
+        return view
 
     def open_file(self, path):
         self.commands.append(("open_file", {"path": path}))
@@ -404,3 +431,87 @@ def test_pick_cwd_then_reports_ambiguity_instead_of_a_picker():
     assert not picked, "must not silently guess between two ambiguous folders"
     assert not win.panels, "the picker must be gone entirely"
     assert any(kind == "status" for kind, _ in _messages)
+
+
+def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch):
+    """Grok sends CSI ? u at process start and never retests. If the child
+    exists before write_pty is bound and the writer is running, the probe
+    times out and `/doctor` reports keyboard protocol unavailable for the
+    whole session.
+    """
+    events = []
+    reader_entered = threading.Event()
+
+    class FakeParser:
+        def bind_write_pty(self, sink):
+            events.append("bind_write_pty")
+            self._sink = sink
+
+        def resize(self, cols, rows):
+            pass
+
+    class FakePty:
+        def __init__(self, argv, cwd, cols, rows, env):
+            self.argv = list(argv)
+            self.pid = 0
+            self._alive = True
+            events.append("pty_construct")
+
+        def start(self):
+            events.append("child_start")
+            self.pid = 1
+
+        def read(self, on_data):
+            events.append("reader_enter")
+            reader_entered.set()
+
+        def write(self, data):
+            events.append("write")
+
+        def resize(self, cols, rows):
+            pass
+
+        def is_alive(self):
+            return self._alive and self.pid
+
+        def kill(self):
+            self._alive = False
+
+    orig_ensure = ai_terminal._Terminal._ensure_writer
+
+    def wrapped_ensure(self):
+        events.append("writer_ready")
+        return orig_ensure(self)
+
+    monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
+    monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(
+        ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
+    )
+    monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
+    monkeypatch.setattr(
+        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+    )
+    monkeypatch.setattr(ai_terminal._Terminal, "_ensure_writer", wrapped_ensure)
+    monkeypatch.setattr(
+        sys.modules["sublime"], "load_settings",
+        lambda n: Settings({"record_asciicast": False, "profiles": PROFILES}),
+    )
+
+    try:
+        win = FakeWindow()
+        ai_terminal._spawn(win, ALPHA, profile="Claude")
+
+        assert reader_entered.wait(1.0), "reader thread never started"
+        assert "bind_write_pty" in events, events
+        assert "writer_ready" in events, events
+        assert "child_start" in events, events
+        assert "reader_enter" in events, events
+        assert events.index("bind_write_pty") < events.index("child_start"), events
+        assert events.index("writer_ready") < events.index("child_start"), events
+        assert events.index("child_start") < events.index("reader_enter"), events
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().clear()

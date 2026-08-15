@@ -186,5 +186,65 @@ class GhosttyVtBindingTests(unittest.TestCase):
             gvt.load_library("/nonexistent/ghostty-vt.dll")
 
 
+def _dll_available():
+    try:
+        gvt.load_library()
+        return True
+    except OSError:
+        return False
+
+
+# The gitignored DLL (ai/terminal/bin/ghostty-vt.dll, built from the ~/tools
+# ghostty checkout) isn't in the repo, so these tests skip cleanly wherever
+# it's absent rather than failing the suite.
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class WritePtyCallbackTests(unittest.TestCase):
+    """Covers the write_pty/size wiring that fixes a real hang: a startup
+    capability probe (DA/kitty-flags/XTVERSION/size query) that
+    libghostty-vt parses internally but, without these callbacks, has
+    nowhere to send a response -- so the child blocks forever waiting for
+    an answer that never comes. See ghostty_engine.py's GhosttyParser
+    docstrings on bind_write_pty/_on_size_query."""
+
+    def setUp(self):
+        from ai.terminal.screen import Screen
+        self.responses = []
+        self.parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        self.parser.bind_write_pty(self.responses.append)
+
+    def tearDown(self):
+        self.parser._g.terminal_free(self.parser._term)
+
+    def test_unbound_sink_is_a_noop_not_a_crash(self):
+        from ai.terminal.screen import Screen
+        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        try:
+            parser.feed("\x1b[c")  # DA1 query, sink never bound
+        finally:
+            parser._g.terminal_free(parser._term)
+        # No exception is the assertion; nothing else to check.
+
+    def test_kitty_flags_query_gets_a_response(self):
+        # This is the exact query Grok's client uses to detect Kitty
+        # keyboard protocol support (grok doctor: "keyboard protocol is
+        # unavailable" when it goes unanswered).
+        self.parser.feed("\x1b[?u")
+        self.assertEqual(self.responses, [b"\x1b[?0u"])
+
+    def test_device_attributes_query_gets_a_response(self):
+        self.parser.feed("\x1b[c")
+        self.assertEqual(len(self.responses), 1)
+        self.assertTrue(self.responses[0].startswith(b"\x1b[?"))
+
+    def test_size_query_reports_real_screen_dimensions(self):
+        self.parser.feed("\x1b[18t")
+        self.assertEqual(self.responses, [b"\x1b[8;24;80t"])
+
+    def test_size_query_after_resize_reports_new_dimensions(self):
+        self.parser.resize(100, 40)
+        self.parser.feed("\x1b[18t")
+        self.assertEqual(self.responses, [b"\x1b[8;40;100t"])
+
+
 if __name__ == "__main__":
     unittest.main()
