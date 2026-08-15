@@ -551,6 +551,23 @@ class TestSanitizePtyEnv(unittest.TestCase):
         self.assertEqual(out["TERM"], "xterm-256color")
         self.assertEqual(out["COLORTERM"], "truecolor")
 
+    def test_declares_ghostty_term_program_when_unset(self):
+        # Terminal-brand detection in Grok (and similar TUIs) is a static
+        # env-var lookup keyed on TERM_PROGRAM, not a live capability probe.
+        # Leaving it unset makes Windows-hosted clients guess "Windows
+        # Terminal", whose table entry lacks Kitty keyboard protocol support
+        # -- unrelated to what this embedded libghostty-vt terminal supports.
+        out = sanitize_pty_env({"PATH": "C:\\bin"})
+        self.assertEqual(out["TERM_PROGRAM"], "ghostty")
+
+    def test_term_program_profile_override_wins(self):
+        out = sanitize_pty_env({}, {"TERM_PROGRAM": "vscode"})
+        self.assertEqual(out["TERM_PROGRAM"], "vscode")
+
+    def test_keeps_existing_term_program(self):
+        out = sanitize_pty_env({"TERM_PROGRAM": "tmux"})
+        self.assertEqual(out["TERM_PROGRAM"], "tmux")
+
 
 class TestReadOnlyUri(unittest.TestCase):
     def test_windows_path_is_read_only(self):

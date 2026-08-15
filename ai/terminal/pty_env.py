@@ -30,6 +30,18 @@ def sanitize_pty_env(base_env, profile_env=None):
         env["TERM"] = "xterm-256color"
     if not env.get("COLORTERM"):
         env["COLORTERM"] = "truecolor"
+    # Terminal-brand detection (Grok and similar TUIs) is a static env-var
+    # lookup, not a live capability probe -- confirmed empirically: a full
+    # ai_terminal session produces zero CSI ?u (kitty-flags) queries either
+    # direction. With no brand marker set, Grok's Windows fallback guesses
+    # "Windows Terminal", whose table entry has no Kitty keyboard protocol
+    # support, regardless of what this terminal can actually do. This embeds
+    # libghostty-vt (see ghostty_engine.py/ghostty_vt.py) and genuinely
+    # answers kitty-flags queries and encodes Kitty-protocol keys once
+    # pushed, so "ghostty" is the accurate brand, not a spoof -- the same
+    # convention as reporting TERM=xterm-256color instead of an unknown value.
+    if not env.get("TERM_PROGRAM"):
+        env["TERM_PROGRAM"] = "ghostty"
     if profile_env:
         env.update(profile_env)
     return env
