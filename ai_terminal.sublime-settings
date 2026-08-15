@@ -313,6 +313,26 @@
             },
             "page_keys_to_pty": true
         },
+        "Grok Build --minimal": {
+            // --minimal is Grok's other rendering mode: finished blocks print
+            // as real linear output into native ST scrollback instead of the
+            // fixed-region full-screen repaint "Grok Build" above uses (see
+            // that profile's comment) -- confirmed live (2026-08-15): no
+            // ?1049 even with alt_screen="never" already set in
+            // ~/.grok/pager.toml, but still one \x1b[2J + hundreds of cursor-
+            // addressed (CUP) repaints per screen; --minimal is the only mode
+            // that actually changes that model. Tradeoff (Grok's own docs):
+            // ignores the theme setting and draws with the terminal's plain
+            // 16-color ANSI palette instead of the full TUI's richer colors.
+            "launch_command": [
+                "grok",
+                "--minimal"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            },
+            "page_keys_to_pty": true
+        },
         "Junie": {
             // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
             // in the project cwd — not the PyCharm plugin panel. Prefer full

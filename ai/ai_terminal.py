@@ -2209,6 +2209,12 @@ class _Terminal:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._lock = threading.Lock()
         self._render_pending = False
+        # CSI ?2026h/l ("synchronized output", DECSET mode 2026): a level,
+        # not a stack -- apps may (and Grok does: confirmed live, exactly
+        # 2 "h" per "l") send a redundant h while already open, since a
+        # repeated DECSET is a no-op per spec. See _on_data/_do_render.
+        self._sync_update_open = False
+        self._sync_defer_started = None
         self._reader = None
         # PTY writes must never run on Sublime's main plugin thread. Win32
         # WriteFile is synchronous and can block when ConPTY applies input
@@ -2597,6 +2603,11 @@ class _Terminal:
         # prevent .cast files from ballooning into hundreds of megabytes.
         if "executing hook" not in text.lower():
             self._cast("o", text)
+        # Level, not an edge: only the last h/l in this chunk matters, and a
+        # chunk with neither leaves the existing state untouched.
+        marks = _SYNC_UPDATE_RE.findall(text)
+        if marks:
+            self._sync_update_open = marks[-1] == "h"
         _schedule_render(self)
 
     def send_string(self, s, record=True):
@@ -3149,6 +3160,17 @@ def _measure(view):
 _RENDER_MS = 30
 _RENDER_MIN_INTERVAL_MS = 30
 
+# CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
+# A level (last-write-wins), not a stack: some apps (Grok --minimal and its
+# full TUI both, confirmed live 2026-08-15 via a raw pre-decode ReadFile
+# capture -- 136 "h" to 68 "l" in one session, in a perfectly regular
+# h,h,l,h,h,l,... order) send a redundant "h" while already open, which is a
+# spec-legal no-op for a boolean DECSET mode. Painting mid-batch shows a
+# genuinely incomplete frame that then gets corrected once "l" arrives --
+# the write-then-retract stutter. See _on_data (sets the flag) and
+# _do_render (defers while it's set).
+_SYNC_UPDATE_RE = re.compile(r"\x1b\[\?2026([hl])")
+
 
 def _schedule_render(term, delay_ms=None):
     """Arm a paint from PTY/screen dirty (Terminus-style: no pre-PTY caret)."""
@@ -3369,6 +3391,19 @@ def _do_render(term):
     if _selection_paint_blocked(view, term):
         sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
         return  # leave _render_pending True so _schedule_render doesn't double-arm
+    # Defer while the app is mid CSI ?2026h/l ("synchronized output") batch:
+    # painting now would show a genuinely incomplete frame that the next
+    # chunk corrects a moment later -- the write-then-retract stutter (see
+    # _SYNC_UPDATE_RE). Capped: a closing "l" that never arrives (crashed
+    # mid-batch, a client that forgets it) must not freeze the tab forever.
+    if term._sync_update_open:
+        started = getattr(term, "_sync_defer_started", None) or time.monotonic()
+        term._sync_defer_started = started
+        if time.monotonic() - started < 0.5:
+            sublime.set_timeout(lambda: _do_render(term), _RENDER_MS)
+            return  # leave _render_pending True, same as the selection case
+        term._sync_update_open = False  # safety valve: stop waiting, paint
+    term._sync_defer_started = None
     term._render_pending = False
     _maybe_apply_osc_title(term)
     if not term.screen.dirty:

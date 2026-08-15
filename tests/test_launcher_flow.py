@@ -515,3 +515,105 @@ def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().clear()
+
+
+def test_sync_update_regex_is_a_latch_not_a_stack():
+    """CSI ?2026h/l (DECSET mode 2026) is a boolean level per spec: a
+    repeated "h" while already open is a legal no-op, not a nested open.
+    Grok sends exactly this -- confirmed live, h twice per l, always in that
+    order -- so only the last mark in a chunk may decide the resulting
+    state, never a running open/close count (that would only increase and
+    the tab would stop rendering forever).
+    """
+    find = ai_terminal._SYNC_UPDATE_RE.findall
+
+    assert find("\x1b[?2026h\x1b[?2026h\x1b[?2026l")[-1] == "l"
+    assert find("\x1b[?2026h")[-1] == "h"
+    assert find("\x1b[?2026h\x1b[?2026h") == ["h", "h"]
+    assert find("no markers here") == []
+
+
+def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
+    """A chunk that opens CSI ?2026 with no closing "l" yet must not let
+    _on_data's paint show a half-written frame -- that is the write-then-
+    retract stutter this fix exists for.
+    """
+    events = []
+
+    class FakeParser:
+        def bind_write_pty(self, sink):
+            pass
+
+        def feed(self, text):
+            pass
+
+        def resize(self, cols, rows):
+            pass
+
+    class FakePty:
+        def __init__(self, argv, cwd, cols, rows, env):
+            self.pid = 0
+            self._alive = True
+
+        def start(self):
+            self.pid = 1
+
+        def read(self, on_data):
+            pass
+
+        def write(self, data):
+            pass
+
+        def resize(self, cols, rows):
+            pass
+
+        def is_alive(self):
+            return self._alive and self.pid
+
+        def kill(self):
+            self._alive = False
+
+    monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
+    monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(
+        ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
+    )
+    monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
+    monkeypatch.setattr(
+        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+    )
+    monkeypatch.setattr(
+        sys.modules["sublime"], "load_settings",
+        lambda n: Settings({"record_asciicast": False, "profiles": PROFILES}),
+    )
+    monkeypatch.setattr(
+        sys.modules["sublime"], "set_timeout",
+        lambda fn, ms=0: events.append(("set_timeout", ms)),
+    )
+
+    try:
+        win = FakeWindow()
+        ai_terminal._spawn(win, ALPHA, profile="Claude")
+        term = next(iter(ai_terminal._term_registry().values()))
+
+        term._on_data(b"\x1b[?2026h")
+        assert term._sync_update_open is True
+        assert term._render_pending is True
+
+        # _render_pending is already True (set by _schedule_render inside
+        # _on_data above) and stays True the whole time a paint is armed but
+        # not yet completed -- calling _do_render early (as its own
+        # rescheduled timer eventually would) must not clear it while the
+        # sync-update batch is still open.
+        ai_terminal._do_render(term)
+        assert term._render_pending is True, (
+            "must stay armed instead of painting a half-written frame"
+        )
+
+        term._on_data(b"some content\x1b[?2026l")
+        assert term._sync_update_open is False
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().clear()
