@@ -630,6 +630,12 @@ try:
         st_button_to_proto as _st_button_to_proto,
         view_point_to_cell as _view_point_to_cell,
     )
+    from .terminal.log_paths import DEBUG as _DEBUG
+    from .terminal.color_scheme_log import color_scheme_log as _color_scheme_log
+    from .terminal.settings_debug_log import settings_debug_log as _settings_debug_log
+    from .terminal.raw_debug_log import debug_log as _debug_log
+    from .terminal.cast_recorder import CastRecorder
+    from .terminal.session_text_log import SessionTextLog
 except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
@@ -714,6 +720,12 @@ except ImportError as _term_imp_err:
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
+        from ai.terminal.log_paths import DEBUG as _DEBUG
+        from ai.terminal.color_scheme_log import color_scheme_log as _color_scheme_log
+        from ai.terminal.settings_debug_log import settings_debug_log as _settings_debug_log
+        from ai.terminal.raw_debug_log import debug_log as _debug_log
+        from ai.terminal.cast_recorder import CastRecorder
+        from ai.terminal.session_text_log import SessionTextLog
     except ImportError:
         raise _term_imp_err
 
@@ -763,10 +775,6 @@ _BASE_SCHEME = {
 }
 _PENDING_RULES = []
 _WRITE_PENDING = False
-
-
-def _color_scheme_log(message):
-    _append_log_line("color_scheme.log", message)
 
 
 def _ensure_host_cursor_rule(scheme_data):
@@ -2022,67 +2030,10 @@ def _resolve_secret_refs(env):
     return out
 
 
-# ─── on-disk log locations and permissions ───────────────────────────────────
-#
-# Everything written under _LOG_ROOT is a verbatim record of an agent session:
-# raw ANSI, rendered transcripts, keystrokes. That routinely contains API keys,
-# OAuth codes and source code, so the tree is created owner-only and every log
-# file is opened 0600 (a no-op on Windows ACLs, load-bearing on POSIX).
-_LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))
-_DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
-
-
-def _makedirs_private(path):
-    os.makedirs(path, mode=0o700, exist_ok=True)
-
-
-def _open_private(path, mode="w", **kwargs):
-    """open() that creates the file readable/writable by its owner only."""
-    flags = os.O_WRONLY | os.O_CREAT
-    flags |= os.O_APPEND if "a" in mode else os.O_TRUNC
-    return os.fdopen(os.open(path, flags, 0o600), mode, **kwargs)
-
-
-def _append_log_line(filename, message):
-    """Append one timestamped, thread-tagged line to a diagnostic log.
-
-    Diagnostics only: every failure (unwritable path, disk full) is swallowed,
-    since losing a log line must never break a render or a settings reload.
-    """
-    try:
-        path = os.path.join(_LOG_ROOT, "ai_terminal", filename)
-        _makedirs_private(os.path.dirname(path))
-        with _open_private(path, "a", encoding="utf-8") as f:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            t_name = threading.current_thread().name
-            f.write(f"[{ts}] [{t_name}] {message}\n")
-    except Exception:
-        pass
-
-
-_SECRET_NAME = r"[A-Za-z0-9_\-]*(?:key|token|secret|password)[A-Za-z0-9_\-]*"
-_SECRET_SUBSTITUTIONS = (
-    # Bare key material (OpenAI/Anthropic/OpenRouter shapes).
-    (re.compile(r"(?i)\bsk-[A-Za-z0-9_\-]{8,}"), "***"),
-    # NAME=value / NAME: value.
-    (re.compile(r"(?i)(%s\s*[=:]\s*)\S+" % _SECRET_NAME), r"\1***"),
-    # --api-key value.
-    (re.compile(r"(?i)(--?%s\s+)\S+" % _SECRET_NAME), r"\1***"),
-)
-
-
-def _redact_secrets(text):
-    """Blank out key-shaped substrings so they are not persisted to a log."""
-    text = text or ""
-    for pattern, replacement in _SECRET_SUBSTITUTIONS:
-        text = pattern.sub(replacement, text)
-    return text
-
-
-def _settings_debug_log(message):
-    if not _DEBUG:
-        return
-    _append_log_line("settings_debug.log", message)
+# ─── on-disk logs ────────────────────────────────────────────────────────────
+# Implementations live in ai/terminal/{log_paths,color_scheme_log,
+# settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py.
+# Same filenames, messages, and failure handling as the former inlined copies.
 
 
 def _on_settings_change():
@@ -2280,11 +2231,8 @@ class _Terminal:
         # (file is None) => all _cast() calls are no-ops. One file per session
         # (timestamped filename), not per day, so a resume's replay is a
         # separate recording rather than appended duplicates.
-        self._cast_file = None
-        self._cast_lock = threading.Lock()
-        self._cast_t0 = 0.0       # session start (epoch seconds)
-        self._cast_last = 0.0     # timestamp of the previous event
-        self._text_log_file = None  # see _log_tab_text() / _on_retire_line
+        self._cast_recorder = CastRecorder(notify=self._notify)
+        self._text_log = SessionTextLog()  # see _log_tab_text() / _on_retire_line
         # Parser failures are reported once per terminal; see _on_data.
         self._feed_failed = False
         # Geometry watcher for standard terminal resize behavior.
@@ -2333,47 +2281,19 @@ class _Terminal:
                 pass
         if log_on:
             try:
-                _makedirs_private(_CAST_DIR)
-                self._cast_t0 = time.time()
-                self._cast_last = self._cast_t0
-                fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.cast"
-                path = os.path.join(_CAST_DIR, fname)
-                self._cast_file = _open_private(path, "w", encoding="utf-8", newline="")
-                header = {
-                    "version": 3,
-                    "term": {
-                        "cols": int(self.screen.cols),
-                        "rows": int(self.screen.rows),
-                        "type": "xterm-256color",
-                    },
-                    "timestamp": int(self._cast_t0),
-                    "title": "ai_terminal",
-                    # argv can carry an inline API key (a profile flag or a
-                    # $secret: value resolved at spawn), and this header is
-                    # persisted verbatim, so key-shaped words are redacted.
-                    "command": _redact_secrets(
-                        " ".join(self.pty.argv) if hasattr(self.pty, "argv") else ""
-                    ),
-                }
-                self._cast_file.write(json.dumps(header) + "\n")
-                self._cast_file.flush()
+                argv = self.pty.argv if hasattr(self.pty, "argv") else []
+                self._cast_recorder.open(self.screen.cols, self.screen.rows, argv)
             except Exception:
                 print("[ai_terminal] cast open failed:\n%s" % traceback.format_exc())
-                self._cast_file = None
+                self._cast_recorder = CastRecorder(notify=self._notify)
                 self._notify("recording disabled: could not open the .cast file")
-        self._text_log_file = None
         if _log_tab_text(self.profile_name):
             try:
-                _makedirs_private(_TEXT_LOG_DIR)
-                fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.log"
-                path = os.path.join(_TEXT_LOG_DIR, fname)
-                self._text_log_file = _open_private(
-                    path, "a", encoding="utf-8", newline="\n"
-                )
+                self._text_log.open(time.strftime("%Y-%m-%d_%H%M%S"))
                 self.screen.on_retire_line = self._on_retire_line
             except Exception:
                 print("[ai_terminal] text log open failed:\n%s" % traceback.format_exc())
-                self._text_log_file = None
+                self._text_log = SessionTextLog()
                 self._notify("tab text logging disabled: could not open the log file")
         self._ensure_writer()
 
@@ -2397,46 +2317,34 @@ class _Terminal:
         """Screen.on_retire_line callback: one scrollback line just became
         permanent. Append-and-flush so a crash loses at most the current
         in-flight write, not the session."""
-        f = self._text_log_file
-        if f is None:
+        log = getattr(self, "_text_log", None)
+        if log is None or log.file is None:
             return
         try:
-            f.write(text + "\n")
-            f.flush()
+            log.write_line(text)
         except Exception as e:
             # A write that failed once (full disk, deleted file) fails for
             # every remaining line, so stop logging instead of printing the
             # same error per line for the rest of the session.
             print("[ai_terminal] text log write failed:\n%s" % traceback.format_exc())
             self._notify("text log disabled after write failure: %s" % e)
-            self._text_log_file = None
             self.screen.on_retire_line = None
-            try:
-                f.close()
-            except Exception:
-                pass
+            log.close()
 
     def _close_text_log(self):
         """Flush whatever never scrolled off (the final live screen) and
         close. Safe to call more than once or before start()."""
-        f = getattr(self, "_text_log_file", None)
-        if f is None:
+        log = getattr(self, "_text_log", None)
+        if log is None or log.file is None:
             return
         try:
             with self._lock:
                 lines = self.screen.live_lines_text()
-            for line in lines:
-                if line:
-                    f.write(line + "\n")
-            f.flush()
+            log.flush_live_lines(lines)
         except Exception as e:
             print(f"[ai_terminal] text log final flush failed: {e}")
         finally:
-            try:
-                f.close()
-            except Exception:
-                pass
-            self._text_log_file = None
+            log.close()
 
     def _ensure_writer(self):
         """Create the ordered PTY writer, including for hot-reloaded terminals."""
@@ -2489,7 +2397,7 @@ class _Terminal:
                 self._notify("could not deliver input to the terminal: %s" % e)
                 continue
             # Recording has its own queue/thread.  In particular, never wait
-            # here on _cast_lock after the first arrow while later arrows are
+            # here on the recorder lock after the first arrow while later arrows are
             # queued for the PTY behind it. record=False (write_pty query
             # responses -- see _on_parser_write_pty) skips this: nobody
             # typed a DA/kitty-flags/size reply, and logging it as an "i"
@@ -2499,34 +2407,13 @@ class _Terminal:
                 self._input_cast_queue.put(text)
 
     def _cast(self, code, data):
-        """Asciicast v3 event: [delta, code, data]. delta is seconds since the
-        previous event (relative timing -- v3 change from v2's absolute
-        timestamps). One write per event under _cast_lock; flush so a crash
-        doesn't truncate the file. No-op when recording is off. Caller
-        passes `data` already as the right Python type: str for "o"/"i"/"x",
-        "{cols}x{rows}" for "r"."""
-        if self._cast_file is None:
+        """Asciicast v3 event: [delta, code, data]. No-op when recording is
+        off. Caller passes `data` already as the right Python type: str for
+        "o"/"i"/"x", "{cols}x{rows}" for "r"."""
+        rec = getattr(self, "_cast_recorder", None)
+        if rec is None:
             return
-        now = time.time()
-        delta = now - self._cast_last
-        self._cast_last = now
-        # Round to ms (v3 spec recommends error-diffusion for drift; simple
-        # rounding is fine for sessions of realistic length).
-        line = json.dumps([round(delta, 3), code, data])
-        with self._cast_lock:
-            try:
-                self._cast_file.write(line + "\n")
-                self._cast_file.flush()
-            except Exception as e:
-                # A recorder that keeps dropping events writes a .cast that
-                # replays as a shorter, wrong session; stop and say so instead.
-                print(f"[ai_terminal] cast write failed, recording stopped: {e}")
-                try:
-                    self._cast_file.close()
-                except Exception:
-                    pass
-                self._cast_file = None
-                self._notify("recording stopped after a write failure: %s" % e)
+        rec.write(code, data)
 
     def _read_loop(self):
         error = None
@@ -2596,8 +2483,8 @@ class _Terminal:
         # duplicate on resume (a resume is a new session = new .cast file).
         # The decoder is incremental; log the decoded text so the .cast is
         # valid UTF-8 JSON (v3 wants str data, not bytes). Written outside
-        # self._lock so the renderer isn't blocked on file I/O; _cast_lock
-        # serializes against send_string/resize/kill writes.
+        # self._lock so the renderer isn't blocked on file I/O; the recorder
+        # lock serializes against send_string/resize/kill writes.
         #
         # Filter out highly repetitive "Executing Hooks" status-bar repaints to
         # prevent .cast files from ballooning into hundreds of megabytes.
@@ -2701,14 +2588,9 @@ class _Terminal:
         # already captured everything Claude emitted, so there's no need
         # for a [final screen] dump -- the visible grid's content is in
         # the stream.
-        if self._cast_file is not None:
-            self._cast("x", "0")
-            with self._cast_lock:
-                try:
-                    self._cast_file.close()
-                except Exception:
-                    pass
-            self._cast_file = None
+        rec = getattr(self, "_cast_recorder", None)
+        if rec is not None:
+            rec.close()
         self._close_text_log()
         try:
             self.pty.kill()
@@ -3580,36 +3462,14 @@ def _apply_color_regions(view, regs):
     _LAST_COLOR_KEYS[vid] = used
 
 
-# ─── debug logging ────────────────────────────────────────────────────────────
-
-_DEBUG_PATH = os.path.join(_LOG_ROOT, "ai_terminal_raw_ansi_stream_debug_logs")
-_debug_lock = threading.Lock()
-# Asciicast v3 recording (recording patch): env-gated like _DEBUG. When on
-# (AI_TERMINAL_LOG_LINES set in spawn_env OR in ST's process env), each
-# _Terminal.prepare() opens a per-session .cast file under descriptive directory
-# and writes the v3 header; _on_data/send_string/resize/kill append
-# timed events. Recording at the stream layer (not scroll-off) means it is
-# faithful to what Claude emitted and does NOT duplicate on resume (a resume
-# is a new session = new .cast). Per stext-settings-json-strict the toggle is
-# NOT a top-level setting key; it lives in spawn_env where the user put it.
+# ─── debug / recording env gates ──────────────────────────────────────────────
+# Raw ANSI debug log: ai/terminal/raw_debug_log.py (gated on _DEBUG).
+# Asciicast v3 recording: ai/terminal/cast_recorder.py. On if
+# AI_TERMINAL_LOG_LINES is set in spawn_env OR in ST's process env, or if
+# the record_asciicast setting is true (default). Per stext-settings-json-strict
+# the env toggle is NOT a top-level setting key; it lives in spawn_env.
+# Session text logs: ai/terminal/session_text_log.py -- see _log_tab_text().
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
-_CAST_DIR = os.path.join(
-    _LOG_ROOT, "ai_terminal_asciinema_casts_for_troubleshooting_rendering"
-)
-# Plain-text, agent-readable counterpart to the .cast recordings above --
-# see _log_tab_text(). Same timestamped-per-session naming so a .cast and
-# its .log pair up, but content is clean rendered text, not raw ANSI events.
-_TEXT_LOG_DIR = os.path.join(_LOG_ROOT, "ai_terminal_session_text_logs")
-
-
-def _debug_log(data):
-    try:
-        _makedirs_private(_DEBUG_PATH)
-        with _open_private(os.path.join(_DEBUG_PATH, "raw.log"), "ab") as f:
-            with _debug_lock:
-                f.write(data)
-    except Exception:
-        pass
 
 
 _BOX_BORDER_CHARS = set("─━═╌╍╭╮╰╯┌┐└┘┏┓┗┛╔╗╚╝")
