@@ -211,10 +211,55 @@ TERMINAL_DATA_TITLE = 12  # OSC 0/2 window title (GhosttyString)
 TERMINAL_DATA_COLOR_PALETTE = 21
 TERMINAL_DATA_VIEWPORT_ACTIVE = 32
 
+TERMINAL_OPT_WRITE_PTY = 1
+TERMINAL_OPT_ENQUIRY = 3
+TERMINAL_OPT_SIZE = 6
+TERMINAL_OPT_COLOR_SCHEME = 7
 TERMINAL_OPT_COLOR_PALETTE = 14
 
 SCREEN_PRIMARY = 0
 SCREEN_ALTERNATE = 1
+
+# ---- device.h ----
+COLOR_SCHEME_LIGHT = 0
+COLOR_SCHEME_DARK = 1
+
+
+class GhosttySizeReportSize(ctypes.Structure):
+    """XTWINOPS size report data (size_report.h). cell_width/cell_height are
+    pixel dimensions of a single cell -- legitimately 0 ("unknown") when the
+    embedder has no real font-metric concept, e.g. a text-view-backed
+    terminal like this one."""
+    _fields_ = [
+        ("rows", ctypes.c_uint16),
+        ("columns", ctypes.c_uint16),
+        ("cell_width", ctypes.c_uint32),
+        ("cell_height", ctypes.c_uint32),
+    ]
+
+
+# terminal.h callback function types (GHOSTTY_TERMINAL_OPT_WRITE_PTY / SIZE /
+# ENQUIRY / COLOR_SCHEME). Signatures copied exactly from the header -- see
+# terminal.h's own doc comments for each callback's semantics.
+GhosttyTerminalWritePtyFn = ctypes.CFUNCTYPE(
+    None, GhosttyTerminal, ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+)
+GhosttyTerminalSizeFn = ctypes.CFUNCTYPE(
+    ctypes.c_bool, GhosttyTerminal, ctypes.c_void_p,
+    ctypes.POINTER(GhosttySizeReportSize),
+)
+GhosttyTerminalColorSchemeFn = ctypes.CFUNCTYPE(
+    ctypes.c_bool, GhosttyTerminal, ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_int),
+)
+# No GhosttyTerminalEnquiryFn: its C signature returns GhosttyString (a
+# struct) by value, and ctypes categorically refuses struct return types on
+# Python-defined callbacks ("invalid result type for callback function") --
+# confirmed empirically, not a guess. ENQUIRY (ENQ, 0x05) is left
+# unregistered; per terminal.h that means the library silently ignores ENQ
+# rather than answering it. Low-risk gap: ENQ isn't part of the DA/DSR/
+# kitty-flags/XTWINOPS probes real TUIs use for startup capability checks.
 
 # DEC private modes (ansi=false -> packed value == raw mode number,
 # see ghostty_mode_new() in modes.h: value | (ansi << 15)).

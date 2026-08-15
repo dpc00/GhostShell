@@ -83,6 +83,56 @@ class GhosttyParser:
             "ghostty_terminal_set(COLOR_PALETTE)",
         )
 
+        # write_pty is the linchpin: without it, libghostty-vt parses DA/
+        # kitty-flags/XTVERSION/size/enquiry queries internally but has
+        # nowhere to send the formatted response, so the child blocks
+        # forever on a startup capability probe (confirmed: Grok Build hung
+        # 43+ minutes on a plain "hello" until winpty faked these answers).
+        # Bound later via bind_write_pty() once the real pty exists -- see
+        # that method's docstring. The trampoline reads this slot at call
+        # time so it's a safe no-op before binding, not a crash.
+        self._write_pty_sink = None
+        self._write_pty_cb = gvt.GhosttyTerminalWritePtyFn(self._on_write_pty)
+        gvt.check(
+            self._g.terminal_set(
+                self._term, gvt.TERMINAL_OPT_WRITE_PTY,
+                ctypes.cast(self._write_pty_cb, ctypes.c_void_p),
+            ),
+            "ghostty_terminal_set(WRITE_PTY)",
+        )
+
+        # SIZE (XTWINOPS CSI 14/16/18 t) and ENQUIRY (ENQ 0x05) have no
+        # built-in library default -- unlike DA/XTVERSION/kitty-flags, which
+        # libghostty-vt answers sensibly on its own once WRITE_PTY exists,
+        # these are silently ignored unless a callback is registered. Either
+        # can be the specific query a TUI blocks its startup probe on.
+        self._size_cb = gvt.GhosttyTerminalSizeFn(self._on_size_query)
+        gvt.check(
+            self._g.terminal_set(
+                self._term, gvt.TERMINAL_OPT_SIZE,
+                ctypes.cast(self._size_cb, ctypes.c_void_p),
+            ),
+            "ghostty_terminal_set(SIZE)",
+        )
+
+        # ENQUIRY (ENQ 0x05) has no callback here -- see ghostty_vt.py's
+        # comment by the (absent) GhosttyTerminalEnquiryFn for why: ctypes
+        # cannot build a callback whose C return type is a struct-by-value.
+        # Left unregistered; the library silently ignores ENQ.
+
+        # Color scheme (CSI ? 996 n) isn't a hang risk (well-behaved clients
+        # tolerate silence), but it's cheap and unblocks apps that adapt
+        # their palette to light/dark. DARK is the correct default: this
+        # host has no live signal for ST's active color scheme's brightness.
+        self._color_scheme_cb = gvt.GhosttyTerminalColorSchemeFn(self._on_color_scheme)
+        gvt.check(
+            self._g.terminal_set(
+                self._term, gvt.TERMINAL_OPT_COLOR_SCHEME,
+                ctypes.cast(self._color_scheme_cb, ctypes.c_void_p),
+            ),
+            "ghostty_terminal_set(COLOR_SCHEME)",
+        )
+
         self._render_state = gvt.GhosttyRenderState()
         gvt.check(
             self._g.render_state_new(None, ctypes.byref(self._render_state)),
@@ -129,6 +179,46 @@ class GhosttyParser:
         gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
         self._last_scrollback_rows = -1
         self._sync()
+
+    def bind_write_pty(self, sink):
+        """Bind the callable that receives libghostty-vt's formatted query
+        responses (DA/kitty-flags/XTVERSION/size/enquiry) as raw bytes to
+        write back to the real pty.
+
+        Must be called before the child process starts (GhosttyParser
+        itself is constructed in _make_parser; _spawn binds this from
+        _Terminal.__init__, then prepare()'s the writer, then pty.start()).
+        Pass None to unbind (e.g. on teardown); the callback is then a
+        no-op rather than writing into a dead pty.
+        """
+        self._write_pty_sink = sink
+
+    def _on_write_pty(self, term, userdata, data, length):
+        sink = self._write_pty_sink
+        if sink is None:
+            return
+        try:
+            # Exceptions raised across a ctypes callback boundary don't
+            # propagate -- they print to stderr (nowhere useful under ST)
+            # and leave the native call in an undefined state. Swallowing
+            # here after logging is deliberate, not an oversight.
+            sink(bytes(data[:length]))
+        except Exception as e:
+            print("[ghostty_engine] write_pty sink failed: %s" % e)
+
+    def _on_size_query(self, term, userdata, out_size):
+        size = out_size.contents
+        size.rows = self.s.rows
+        size.columns = self.s.cols
+        # No real font-metric concept inside a Sublime text view; 0 is the
+        # spec-legal "unknown" answer, not a placeholder guess.
+        size.cell_width = 0
+        size.cell_height = 0
+        return True
+
+    def _on_color_scheme(self, term, userdata, out_scheme):
+        out_scheme.contents.value = gvt.COLOR_SCHEME_DARK
+        return True
 
     def encode_key(self, key, ctrl=False, alt=False, shift=False):
         """Encode a key event through libghostty-vt's key encoder.
