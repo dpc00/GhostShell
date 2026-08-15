@@ -1,51 +1,39 @@
 {
-  "saved_at": "2026-08-15 after STLogs extraction; Sublime did not crash",
-  "topic": "All editor logging now lives in one package, STLogs. User rule: do not have a logs/ directory in more than one package.",
+  "saved_at": "2026-08-15 after user said crash! again (screenshot work)",
+  "sublime_status": "NOT crashed. Same PIDs as 00:16: sublime_text 15624, plugin_host-3.8 7904, plugin_host-3.3 1384.",
 
-  "goal": "Create C:/Users/donal/projects/STLogs, move every movable logger into it, junction it to Packages/STLogs. GhostShell and SText only call STLogs; they do not own logging.",
-
-  "result": "DONE except leftover live/empty logs folders. plugin_host did not crash.",
-
-  "commits": {
-    "STLogs": "99be563 Initial STLogs package: editor logging in one place  (origin https://github.com/dpc00/STLogs.git, private, main tracking origin/main)",
-    "GhostShell": "44809b7 Hand GhostShell session loggers off to the STLogs package  (main, 5 ahead of origin; do not push unless asked)",
-    "SText": [
-      "55ef85d Move SText logging into the STLogs package  (deleted logs/ + AiLog.sublime-syntax)",
-      "4684c2a Stop SText PluginLoader from owning the log server  (PluginLoader + deploy.py + comment)"
-    ],
-    "pybackup": "UNCOMMITTED comment-only path update in config.py (SText/logs/ai_logger.py -> STLogs/ai_logger.py)"
-  },
-
-  "where_things_live_now": {
-    "STLogs repo": "C:/Users/donal/projects/STLogs",
-    "ST junction": "Packages/STLogs -> C:/Users/donal/projects/STLogs (directory junction, same pattern as GhostShell)",
-    "conversation loggers": "STLogs/{ai_logger,ai_log_server,ai_log_hook_forward,ai_logger_watcher,jcode_tailer,opencode_log_plugin.js,ai_log_settings.json}",
-    "GhostShell session loggers": "STLogs/{log_paths,color_scheme_log,settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py",
-    "syntax": "STLogs/AiLog.sublime-syntax",
-    "ST entry": "STLogs/PluginLoader.py imports AiCaptureScrollPositionCommand, starts :9511 ai_log_server, keepalive, delegates ai_logger plugin_loaded/unloaded",
-    "GhostShell call sites": "GhostShell/ai/ai_terminal.py imports STLogs.* (with _ensure_stlogs() + tests/conftest.py so pytest can import STLogs from the sibling repo)",
-    "SText": "no logs/ tree in git; PluginLoader no longer imports User.logs or starts the server; deploy.py OWNED_DIRS is (ai, launchers) only",
-    "on-disk output": "still ~/data/logs/ — that is the output tree, not a package"
-  },
-
-  "verification": {
-    "GhostShell tests": "386 passed (python -m pytest tests -q) after the handoff",
-    "STLogs tests": "2 passed (plugin registration + terminal-log smoke)",
-    "SText tests": "1 passed (plugin registration; no longer includes ai_logger)",
-    "crash check 2026-08-15": "sublime_text pid 15624, plugin_host-3.8 pid 7904, plugin_host-3.3 pid 1384 all started 00:16, BEFORE the STLogs junction at 01:11. No restart. Not crashed."
-  },
-
-  "leftover_do_not_forget": [
-    "Packages/User/logs STILL EXISTS (stale deploy copy). Auto-delete of live User files was blocked. Delete this folder by hand so User is not a second logs/ tree. Live User/PluginLoader.py already points at STLogs and does not import User.logs.",
-    "C:/Users/donal/projects/SText/logs still exists as an empty leftover (git rm removed tracked files; __pycache__ or the dir itself may remain). Safe to delete the empty dir.",
-    "Packages/User/AiLog.sublime-syntax may still exist as a stale copy; STLogs now ships the syntax. Delete the User copy if both are present (two 'AI Log' syntaxes).",
-    "SText tools/deploy.py --apply was NOT run to completion: Default.sublime-commands and Main.sublime-menu were NEWER live than repo (conflicts). Only PluginLoader.py and ai/ai_tab_manager.py were copied into Packages/User by hand. Do not --force deploy or you will clobber live menu/command edits.",
-    "STLogs remote is https://github.com/dpc00/STLogs.git (private). Do not push GhostShell/SText unless asked.",
-    "pybackup/config.py comment path is uncommitted.",
-    "SText Default.sublime-commands and Main.sublime-menu / keymap still reference ai_capture_scroll_position (fine — command is global). STLogs also ships Default.sublime-commands with the same palette entry, so the palette may list it twice."
+  "user_asks_open": [
+    "Periodic screenshots: 628MB was useful; turn them back on. User then said 'no screenshots'.",
+    "Wrapping leaves 4 blank chars on the right. 5 hours previously spent, to no avail. Do not repeat the failed -4.0*cw approach blindly."
   ],
 
-  "do_not_resume_as_if_unfinished": "The extraction is done. Next work is leftover cleanup (User/logs delete) or a new ask. Do not re-split loggers. Do not put a logs/ directory back in GhostShell or SText. Do not edit Packages/User/PluginLoader.py unless STLogs is still junctioned and starting the server.",
+  "screenshots_root_cause_not_yet_fixed_in_process": {
+    "file_flag": "STLogs/lib/ai_logger.py _PERIODIC_SCREENSHOTS_ENABLED = True (saved).",
+    "live_process": "Still running the OLD imported module. lib/ai_logger.py is NOT a top-level ST plugin, so saving it does not reload PluginLoader and does not re-run plugin_loaded. Last plugin_loaded diagnostic is 01:29:34 with the old 'screenshots every 60s' string, BEFORE the flag flip. In-memory flag is still False.",
+    "evidence": "Screenshot dir exists but 0 files. ai_diagnostics.log has only init/unload lines — zero SCREENSHOT_* / SCREENSHOT_FAILED lines. First tick after enable also only records the timestamp and waits 60s; even after a real reload, one minute of no further lib/ reloads is required unless first tick is changed to shoot immediately.",
+    "win32_risk": "_screenshot_via_win32 uses PrintWindow on Sublime's own HWND. Comment says this can block on the main thread; they bounce to a worker, but PrintWindow on the host process can still hang/crash. If enabling actually starts capture, treat a subsequent crash as this path first.",
+    "to_activate": "Must reload STLogs.PluginLoader (touch PluginLoader.py or restart ST). That is a live top-level plugin reload — crash risk. Do NOT save User/PluginLoader.py."
+  },
 
-  "crash_note": "Historically, saving Packages/User/PluginLoader.py (or GhostShell/PluginLoader.py) live can kill plugin_host + any MCP bridge in a tab. GhostShell and STLogs are junctions (edits are live instantly). SText is copy-deploy. This session saved User/PluginLoader.py after STLogs was already junctioned; hosts did not restart."
+  "wrap_4_char_gap": {
+    "status": "NOT a bug to fix by giving the TUI more columns. Documented in _measure.",
+    "visible": "Grok/Claude wrap ~4 cells before the ST view edge (black strip, then minimap).",
+    "code": "cols = max(mn, int((usable_w - 4.0 * cw) / cw))",
+    "why_the_tax_exists": "Smaller tax -> ST H-scrollbar appears -> viewport_extent changes -> watcher reports new cols to the PTY (SIGWINCH).",
+    "claude_no_alt_screen": "A width SIGWINCH makes Claude (force_main_screen) rewrap/replay the whole visible conversation (~1000 lines). That replay changes layout, reports width again, repeats ~10 times.",
+    "live_2026-08-15": "User resized the tab. Scrolling back, the conversation is wrapped to the NEW size. No H-scrollbar because of the 4-char tax. They stated: if we reduce the tax, the H-bar WILL appear after that rewrap. So the gap is not only 'startup oscillation' -- it is required after every legitimate resize+rewrap as long as ST charges ~3 extra layout cells.",
+    "real_fix": "Stop ST from adding those extra layout cells, or hide the H-bar, THEN we can report a view-filling width. The TUI will rewrap to it and still not get a bar. Do not send more columns while ST still charges +3.",
+    "do_not": "Do not reduce 4.0 as the fix. Do not report a wider PTY size. Do not use word_wrap=True (extra visual row -> V-scrollbar)."
+  },
+
+  "do_not": [
+    "Do not save Packages/User/PluginLoader.py.",
+    "Do not assume a crash happened — check PIDs first.",
+    "Do not re-disable screenshots without saying so.",
+    "Do not 'fix' wrap by only changing 4.0 to 3.0 and calling it done."
+  ],
+
+  "stext_stuser_rule": "pybackup LocalCopy is bidirectional between projects/SText and Packages/User for *.py / sublime-commands / menus / keymaps / settings / color-schemes. A one-sided delete is restored on the next run. Dual-delete both sides. 2026-08-15: removed SText/logs and User/logs and User/AiLog.sublime-syntax; platform_config.py excludes logs/* both ways. Palette 'Ai: Screenshot at Scroll' removed from SText and User; only STLogs keeps it. STLogs is a separate junction, not on that arc.",
+
+  "logging_ownership_2026-08-15_evening": "User clarified the last detail: everything GhostShell CALLS that is a logging function belongs IN GhostShell, not STLogs. Moved cast_recorder, session_text_log, log_paths, color_scheme_log, settings_debug_log, raw_debug_log back to GhostShell/ai/terminal/. GhostShell has zero STLogs imports. STLogs keeps conversation/hook/JSONL/screenshot logging only. Tests: GhostShell 387, STLogs 1. Not committed."
 }
