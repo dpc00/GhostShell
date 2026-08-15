@@ -646,12 +646,12 @@ try:
         st_button_to_proto as _st_button_to_proto,
         view_point_to_cell as _view_point_to_cell,
     )
-    from STLogs.log_paths import DEBUG as _DEBUG
-    from STLogs.color_scheme_log import color_scheme_log as _color_scheme_log
-    from STLogs.settings_debug_log import settings_debug_log as _settings_debug_log
-    from STLogs.raw_debug_log import debug_log as _debug_log
-    from STLogs.cast_recorder import CastRecorder
-    from STLogs.session_text_log import SessionTextLog
+    from STLogs.lib.log_paths import DEBUG as _DEBUG
+    from STLogs.lib.color_scheme_log import color_scheme_log as _color_scheme_log
+    from STLogs.lib.settings_debug_log import settings_debug_log as _settings_debug_log
+    from STLogs.lib.raw_debug_log import debug_log as _debug_log
+    from STLogs.lib.cast_recorder import CastRecorder
+    from STLogs.lib.session_text_log import SessionTextLog
 except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
@@ -736,12 +736,12 @@ except ImportError as _term_imp_err:
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
-        from STLogs.log_paths import DEBUG as _DEBUG
-        from STLogs.color_scheme_log import color_scheme_log as _color_scheme_log
-        from STLogs.settings_debug_log import settings_debug_log as _settings_debug_log
-        from STLogs.raw_debug_log import debug_log as _debug_log
-        from STLogs.cast_recorder import CastRecorder
-        from STLogs.session_text_log import SessionTextLog
+        from STLogs.lib.log_paths import DEBUG as _DEBUG
+        from STLogs.lib.color_scheme_log import color_scheme_log as _color_scheme_log
+        from STLogs.lib.settings_debug_log import settings_debug_log as _settings_debug_log
+        from STLogs.lib.raw_debug_log import debug_log as _debug_log
+        from STLogs.lib.cast_recorder import CastRecorder
+        from STLogs.lib.session_text_log import SessionTextLog
     except ImportError:
         raise _term_imp_err
 
@@ -2047,7 +2047,7 @@ def _resolve_secret_refs(env):
 
 
 # ─── on-disk logs ────────────────────────────────────────────────────────────
-# Implementations live in the STLogs package (log_paths, color_scheme_log,
+# Implementations live in STLogs.lib (log_paths, color_scheme_log,
 # settings_debug_log, raw_debug_log, cast_recorder, session_text_log).
 # Same filenames, messages, and failure handling as the former inlined copies.
 
@@ -3479,12 +3479,12 @@ def _apply_color_regions(view, regs):
 
 
 # ─── debug / recording env gates ──────────────────────────────────────────────
-# Raw ANSI debug log: STLogs/raw_debug_log.py (gated on _DEBUG).
-# Asciicast v3 recording: STLogs/cast_recorder.py. On if
+# Raw ANSI debug log: STLogs/lib/raw_debug_log.py (gated on _DEBUG).
+# Asciicast v3 recording: STLogs/lib/cast_recorder.py. On if
 # AI_TERMINAL_LOG_LINES is set in spawn_env OR in ST's process env, or if
 # the record_asciicast setting is true (default). Per stext-settings-json-strict
 # the env toggle is NOT a top-level setting key; it lives in spawn_env.
-# Session text logs: STLogs/session_text_log.py -- see _log_tab_text().
+# Session text logs: STLogs/lib/session_text_log.py -- see _log_tab_text().
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
 
 
