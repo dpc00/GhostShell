@@ -1,0 +1,51 @@
+{
+  "saved_at": "2026-08-15 after STLogs extraction; Sublime did not crash",
+  "topic": "All editor logging now lives in one package, STLogs. User rule: do not have a logs/ directory in more than one package.",
+
+  "goal": "Create C:/Users/donal/projects/STLogs, move every movable logger into it, junction it to Packages/STLogs. GhostShell and SText only call STLogs; they do not own logging.",
+
+  "result": "DONE except leftover live/empty logs folders. plugin_host did not crash.",
+
+  "commits": {
+    "STLogs": "99be563 Initial STLogs package: editor logging in one place  (origin https://github.com/dpc00/STLogs.git, private, main tracking origin/main)",
+    "GhostShell": "44809b7 Hand GhostShell session loggers off to the STLogs package  (main, 5 ahead of origin; do not push unless asked)",
+    "SText": [
+      "55ef85d Move SText logging into the STLogs package  (deleted logs/ + AiLog.sublime-syntax)",
+      "4684c2a Stop SText PluginLoader from owning the log server  (PluginLoader + deploy.py + comment)"
+    ],
+    "pybackup": "UNCOMMITTED comment-only path update in config.py (SText/logs/ai_logger.py -> STLogs/ai_logger.py)"
+  },
+
+  "where_things_live_now": {
+    "STLogs repo": "C:/Users/donal/projects/STLogs",
+    "ST junction": "Packages/STLogs -> C:/Users/donal/projects/STLogs (directory junction, same pattern as GhostShell)",
+    "conversation loggers": "STLogs/{ai_logger,ai_log_server,ai_log_hook_forward,ai_logger_watcher,jcode_tailer,opencode_log_plugin.js,ai_log_settings.json}",
+    "GhostShell session loggers": "STLogs/{log_paths,color_scheme_log,settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py",
+    "syntax": "STLogs/AiLog.sublime-syntax",
+    "ST entry": "STLogs/PluginLoader.py imports AiCaptureScrollPositionCommand, starts :9511 ai_log_server, keepalive, delegates ai_logger plugin_loaded/unloaded",
+    "GhostShell call sites": "GhostShell/ai/ai_terminal.py imports STLogs.* (with _ensure_stlogs() + tests/conftest.py so pytest can import STLogs from the sibling repo)",
+    "SText": "no logs/ tree in git; PluginLoader no longer imports User.logs or starts the server; deploy.py OWNED_DIRS is (ai, launchers) only",
+    "on-disk output": "still ~/data/logs/ — that is the output tree, not a package"
+  },
+
+  "verification": {
+    "GhostShell tests": "386 passed (python -m pytest tests -q) after the handoff",
+    "STLogs tests": "2 passed (plugin registration + terminal-log smoke)",
+    "SText tests": "1 passed (plugin registration; no longer includes ai_logger)",
+    "crash check 2026-08-15": "sublime_text pid 15624, plugin_host-3.8 pid 7904, plugin_host-3.3 pid 1384 all started 00:16, BEFORE the STLogs junction at 01:11. No restart. Not crashed."
+  },
+
+  "leftover_do_not_forget": [
+    "Packages/User/logs STILL EXISTS (stale deploy copy). Auto-delete of live User files was blocked. Delete this folder by hand so User is not a second logs/ tree. Live User/PluginLoader.py already points at STLogs and does not import User.logs.",
+    "C:/Users/donal/projects/SText/logs still exists as an empty leftover (git rm removed tracked files; __pycache__ or the dir itself may remain). Safe to delete the empty dir.",
+    "Packages/User/AiLog.sublime-syntax may still exist as a stale copy; STLogs now ships the syntax. Delete the User copy if both are present (two 'AI Log' syntaxes).",
+    "SText tools/deploy.py --apply was NOT run to completion: Default.sublime-commands and Main.sublime-menu were NEWER live than repo (conflicts). Only PluginLoader.py and ai/ai_tab_manager.py were copied into Packages/User by hand. Do not --force deploy or you will clobber live menu/command edits.",
+    "STLogs remote is https://github.com/dpc00/STLogs.git (private). Do not push GhostShell/SText unless asked.",
+    "pybackup/config.py comment path is uncommitted.",
+    "SText Default.sublime-commands and Main.sublime-menu / keymap still reference ai_capture_scroll_position (fine — command is global). STLogs also ships Default.sublime-commands with the same palette entry, so the palette may list it twice."
+  ],
+
+  "do_not_resume_as_if_unfinished": "The extraction is done. Next work is leftover cleanup (User/logs delete) or a new ask. Do not re-split loggers. Do not put a logs/ directory back in GhostShell or SText. Do not edit Packages/User/PluginLoader.py unless STLogs is still junctioned and starting the server.",
+
+  "crash_note": "Historically, saving Packages/User/PluginLoader.py (or GhostShell/PluginLoader.py) live can kill plugin_host + any MCP bridge in a tab. GhostShell and STLogs are junctions (edits are live instantly). SText is copy-deploy. This session saved User/PluginLoader.py after STLogs was already junctioned; hosts did not restart."
+}
