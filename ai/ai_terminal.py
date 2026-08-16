@@ -1970,6 +1970,23 @@ def _record_profile_usage(profile_name, text):
 
 _SECRETS_SETTINGS_NAME = "ai_terminal_secrets.sublime-settings"
 _SECRET_PREFIX = "$secret:"
+_ENV_PREFIX = "$env:"
+
+
+def _resolve_env_refs(env):
+    """Expand `$env:NAME` setting values from the host environment."""
+    out = dict(env)
+    for var, value in env.items():
+        if not isinstance(value, str) or not value.startswith(_ENV_PREFIX):
+            continue
+        ref = value[len(_ENV_PREFIX):]
+        name, sep, suffix = ref.partition("\\")
+        resolved = os.environ.get(name)
+        if resolved:
+            out[var] = os.path.join(resolved, suffix) if sep and suffix else resolved
+        else:
+            out.pop(var, None)
+    return out
 
 
 def _resolve_secret_refs(env):
@@ -4676,7 +4693,11 @@ def _spawn(window, path, profile=None):
         argv = _platform_argv(
             profile_data.get("launch_command", _DEFAULT_LAUNCH_COMMAND)
         )
-        extra_env = profile_data.get("spawn_env", {})
+        shared_env = s.get("shared_spawn_env", {})
+        if not isinstance(shared_env, dict):
+            shared_env = {}
+        extra_env = dict(shared_env)
+        extra_env.update(profile_data.get("spawn_env", {}))
     else:
         # Fallback to legacy single command settings
         argv = _launch_command()
@@ -4707,6 +4728,7 @@ def _spawn(window, path, profile=None):
     # Resolve "$secret:NAME" placeholders from the User-only secrets file, so
     # API keys reach the spawned agent without ever entering this (public)
     # repo or the ambient environment.
+    env = _resolve_env_refs(env)
     env = _resolve_secret_refs(env)
 
     try:
