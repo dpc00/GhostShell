@@ -1,44 +1,22 @@
 #!/usr/bin/env python3
-"""mock_agent_cli.py -- deterministic fake agent for ai_terminal caret/resize testing.
+"""mock_agent_cli.py -- fake agent for ai_terminal. Default is Codex replay.
 
-Usage (manually, outside ST):
-    python tests/mock_agent_cli.py [--cols N] [--rows N] [--legacy-resize]
+Usage:
+    python tests/mock_agent_cli.py            # replay flood (Testing Agent)
+    python tests/mock_agent_cli.py --box      # caret-tracking Ink box
+    python tests/mock_agent_cli.py --legacy-resize
 
-Usage inside SText:
-    ai_terminal profile "Testing Agent" already points at this script
-    (see ai_terminal.sublime-settings). Tools > Ai Utilities > New Ai
-    Terminal (Testing Agent), or the equivalent command palette entry.
+The Testing Agent profile launches this with no flags. Default mode
+replays the whole transcript on every Enter, the same way Codex does:
+CSI ?2026h, ESC[H, then every prior turn as new lines (taller than the
+PTY), then CSI ?2026l. Open the profile, press Enter a few times, and
+search the ST tab for TURN-00. One hit = scrollback is clean. N hits =
+the four-month flood is still there.
 
-Two modes
----------
-Box mode (default) -- an Ink-style bordered input box (like Claude Code's
-own prompt UI), with a real, single, deterministic input line. Every
-keystroke redraws and reprints a "[expect]" status line giving the exact
-(row, col, abs_offset) the ST caret should land on, computed independently
-of ai_terminal's own caret-mapping code. This exists because the caret
-tracking bugs (ai_terminal.py's cursor_offset / pad_row_for_caret /
-_command_line_row_range) could not be reliably diagnosed against a live
-Claude Code session -- every diagnostic tool call appends fresh content to
-that same session's own terminal view, shifting every row number between
-one read and the next. This harness never grows unboundedly and never
-writes anything ST/eval_python didn't ask for, so a caret readout taken via
-eval_python has a stable, known-correct value to compare against.
-
-    Keys:
-        printable  -> insert at cursor
-        left/right -> move cursor (arrow keys, real CSI sequences)
-        backspace  -> delete before cursor
-        home/end   -> jump to start/end of input
-        v          -> toggle DECTCEM cursor visibility (tests both the
-                      real-hardware-cursor path and the
-                      Ink-hides-cursor-and-reverses-the-cell path --
-                      see ai/terminal/caret.py's module docstring)
-        enter      -> clear input, back to empty prompt
+    Keys (replay):
+        Enter / s  -> add a turn and dump the full transcript
+        5          -> do that five times
         q / ^C     -> quit
-
-Legacy resize mode (--legacy-resize) -- the original scrolling/resize
-stress workload this file used to be exclusively. Kept for the resize bug
-this was first written for; unrelated to caret testing.
 """
 import argparse
 import os
@@ -70,6 +48,70 @@ def get_size():
 def _write(data):
     out.write(data.encode("utf-8", "replace"))
     out.flush()
+
+
+# ─── Replay mode (default): Codex home+dump of the whole transcript ─────────
+
+_LINES_PER_TURN = 28
+
+
+def make_turn_lines(n, body_lines=_LINES_PER_TURN):
+    """One unique turn. TURN-%02d is the search key in the ST tab."""
+    tag = "TURN-%02d" % n
+    lines = ["› user prompt %s" % tag]
+    for i in range(body_lines):
+        lines.append("• %s L%02d mock agent reply line %d" % (tag, i, n * 1000 + i))
+    return lines
+
+
+def encode_replay_frame(lines):
+    """Exact Codex paint: synchronized output, home, full dump, end sync."""
+    body = "\r\n".join(lines) + "\r\n"
+    return "\x1b[?2026h\x1b[?25l\x1b[H" + body + "\x1b[?2026l"
+
+
+class ReplayAgent:
+    """Grows a transcript and re-emits all of it on every turn."""
+
+    def __init__(self, seed_turns=3):
+        self.turns = []
+        for n in range(seed_turns):
+            self.turns.extend(make_turn_lines(n))
+        self._next = seed_turns
+        self._running = True
+
+    def _paint(self):
+        _write(encode_replay_frame(self.turns))
+        _log("replay turns=%d lines=%d" % (self._next, len(self.turns)))
+
+    def _add_turn(self):
+        self.turns.extend(make_turn_lines(self._next))
+        self._next += 1
+        self._paint()
+
+    def run(self):
+        cols, rows = get_size()
+        _log("replay-mode start cols=%s rows=%s seed_lines=%d" % (
+            cols, rows, len(self.turns)))
+        self._paint()
+        while self._running:
+            try:
+                ch = sys.stdin.read(1)
+            except Exception:
+                ch = ""
+            if not ch:
+                time.sleep(0.02)
+                continue
+            if ch in ("q", "Q", "\x03"):
+                self._running = False
+                break
+            if ch in ("s", "S", "\r", "\n"):
+                self._add_turn()
+            elif ch == "5":
+                for _ in range(5):
+                    self._add_turn()
+        _write("\x1b[?25h\r\n[mock_agent exited]\r\n")
+        _log("replay-mode exit")
 
 
 # ─── Box mode: deterministic Ink-style prompt, self-reporting ground truth ──
@@ -327,7 +369,12 @@ def main():
     parser.add_argument(
         "--legacy-resize",
         action="store_true",
-        help="Run the original scrolling/resize-stress workload instead of box mode.",
+        help="Original scrolling/resize-stress workload.",
+    )
+    parser.add_argument(
+        "--box",
+        action="store_true",
+        help="Caret-tracking Ink box (the old default).",
     )
     args = parser.parse_args()
 
@@ -339,8 +386,10 @@ def main():
 
     if args.legacy_resize:
         MockAgent(initial_cols=cols, initial_rows=rows).run()
-    else:
+    elif args.box:
         MockInkAgent(cols, rows).run()
+    else:
+        ReplayAgent().run()
 
 
 if __name__ == "__main__":

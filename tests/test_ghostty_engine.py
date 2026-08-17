@@ -246,5 +246,102 @@ class WritePtyCallbackTests(unittest.TestCase):
         self.assertEqual(self.responses, [b"\x1b[8;40;100t"])
 
 
+def _history_lines(screen):
+    return ["".join(ch for ch, _ in row).rstrip() for row in screen.history]
+
+
+def _visible_text(screen):
+    hist = "\n".join(_history_lines(screen))
+    live = "\n".join("".join(screen.grid[r]).rstrip() for r in range(screen.rows))
+    return hist + "\n" + live
+
+
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class HomeReplaceScrollTests(unittest.TestCase):
+    """Codex (and similar) home+dump a full transcript inside CSI ?2026.
+
+    Overflow must replace Screen.history, not append another copy. A
+    production change that went back to always-append would make LINE-00
+    appear twice after the second paint.
+    """
+
+    def setUp(self):
+        from ai.terminal.screen import Screen
+
+        self.screen = Screen(20, 4, history_cap=200)
+        self.parser = GhosttyParser(self.screen, force_main_screen=True)
+
+    def tearDown(self):
+        self.parser._g.terminal_free(self.parser._term)
+
+    def test_2026_home_dump_does_not_duplicate_transcript_in_history(self):
+        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
+        self.parser.feed(first)
+        replay = "\x1b[?2026h\x1b[H" + first + "LINE-99\n" + "\x1b[?2026l"
+        self.parser.feed(replay)
+        self.assertEqual(_visible_text(self.screen).count("LINE-00"), 1)
+
+    def test_split_2026_home_dump_does_not_duplicate(self):
+        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
+        self.parser.feed(first)
+        self.parser.feed("\x1b[?2026h\x1b[H" + first[:40])
+        self.parser.feed(first[40:] + "LINE-99\n\x1b[?2026l")
+        self.assertEqual(_visible_text(self.screen).count("LINE-00"), 1)
+
+    def test_fifty_testing_agent_dumps_keep_one_copy(self):
+        from ai.terminal.screen import Screen
+        from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
+
+        self.parser._g.terminal_free(self.parser._term)
+        self.screen = Screen(80, 24, history_cap=2000)
+        self.parser = GhosttyParser(self.screen, force_main_screen=True)
+        lines = []
+        for n in range(50):
+            lines.extend(make_turn_lines(n, body_lines=1))
+            self.parser.feed(encode_replay_frame(lines))
+        vis = _visible_text(self.screen)
+        self.assertEqual(vis.count("TURN-00"), 2)
+        self.assertEqual(vis.count("TURN-49"), 2)
+
+    def test_plain_scroll_without_home_still_appends(self):
+        self.parser.feed("AAA\nBBB\nCCC\nDDD\nEEE\n")
+        n1 = len(self.screen.history)
+        self.parser.feed("FFF\nGGG\n")
+        self.assertGreater(len(self.screen.history), n1)
+        joined = "\n".join(_history_lines(self.screen))
+        self.assertIn("AAA", joined)
+        self.assertIn("EEE", joined)
+
+
+class ReplaceScrollStateTests(unittest.TestCase):
+    def test_2026_then_home_marks_replace(self):
+        from ai.terminal.ghostty_engine import update_replace_scroll
+
+        open_, replace = update_replace_scroll(False, False, "\x1b[?2026h\x1b[Hhello")
+        self.assertTrue(open_)
+        self.assertTrue(replace)
+
+    def test_home_after_open_batch_from_prior_feed(self):
+        from ai.terminal.ghostty_engine import update_replace_scroll
+
+        open_, replace = update_replace_scroll(True, False, "\x1b[Hmore")
+        self.assertTrue(open_)
+        self.assertTrue(replace)
+
+    def test_replace_latches_across_chunks_until_2026_closes(self):
+        from ai.terminal.ghostty_engine import update_replace_scroll
+
+        open_, replace = update_replace_scroll(True, True, "LINE-00\nLINE-01\n")
+        self.assertTrue(open_)
+        self.assertTrue(replace)
+
+    def test_2026_without_home_does_not_replace(self):
+        from ai.terminal.ghostty_engine import update_replace_scroll
+
+        open_, replace = update_replace_scroll(False, False, "\x1b[?2026hspin\x1b[?2026l")
+        self.assertFalse(open_)
+        self.assertFalse(replace)
+
+
 if __name__ == "__main__":
     unittest.main()

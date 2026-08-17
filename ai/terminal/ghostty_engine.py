@@ -25,6 +25,30 @@ from .screen import BLANK
 # params -- TUIs emit these standalone in practice, so this doesn't try to
 # handle a mixed-params form like `?1000;1049h`).
 _ALT_SCREEN_RE = re.compile(r"\x1b\[\?(1049|1047|47)[hl]")
+# CUP home as Codex/Qwen emit it on a full-frame repaint. Do not treat
+# CUP to an arbitrary row (`ESC[12H`) as home.
+_CUP_HOME_RE = re.compile(r"\x1b\[(?:(?:0;0|1;1|1|0)?H)")
+_SYNC_HL_RE = re.compile(r"\x1b\[\?2026([hl])")
+
+
+def update_replace_scroll(sync_open, replace, text):
+    """Return (sync_open, replace) after scanning one PTY chunk.
+
+    `replace` latches True when CUP home occurs while DECSET 2026 is
+    open, and stays set until the caller clears it after 2026 closes.
+    A split dump (home in chunk 1, overflow in chunk 2) must not append.
+    """
+    replace = bool(replace)
+    events = [(m.start(), "sync", m.group(1)) for m in _SYNC_HL_RE.finditer(text)]
+    events.extend((m.start(), "home", None) for m in _CUP_HOME_RE.finditer(text))
+    events.sort()
+    open_ = bool(sync_open)
+    for _pos, kind, val in events:
+        if kind == "sync":
+            open_ = val == "h"
+        elif kind == "home" and open_:
+            replace = True
+    return open_, replace
 
 
 def _strip_alt_screen(text):
@@ -152,15 +176,25 @@ class GhosttyParser:
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
         self._last_scrollback_rows = -1
+        self._sync_open = False
+        self._replace_scroll = False
+        self._replace_origin = None
 
     def feed(self, text):
         if self.force_main_screen:
             text = _strip_alt_screen(text)
+        self._sync_open, self._replace_scroll = update_replace_scroll(
+            self._sync_open, self._replace_scroll, text
+        )
         data = text.encode("utf-8", "surrogateescape")
         # ghostty_terminal_vt_write returns void (see its restype in
         # ghostty_vt.py) -- nothing to check here.
         self._g.terminal_vt_write(self._term, data, len(data))
         self._sync()
+        # Next chunk starts clean unless 2026 is still open (split dump).
+        if not self._sync_open:
+            self._replace_scroll = False
+            self._replace_origin = None
 
     def resize(self, cols, rows):
         # Screen is resized only once the terminal agreed: the two sizes must
@@ -178,6 +212,9 @@ class GhosttyParser:
     def reset(self):
         gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
         self._last_scrollback_rows = -1
+        self._sync_open = False
+        self._replace_scroll = False
+        self._replace_origin = None
         self._sync()
 
     def bind_write_pty(self, sink):
@@ -549,7 +586,20 @@ class GhosttyParser:
         # incremental-append path below notifies genuinely new lines. This
         # mirrors Screen.resize()'s own scrollback-clip path, which rebuilds
         # s.history by appending directly rather than through _retire_line.
-        if 0 <= last < scrollback_rows:
+        if self._replace_scroll and last >= 0:
+            # Home+2026 dump, possibly split across feeds: pin the
+            # origin to the first overflow of this batch and rebuild
+            # history from that point so later chunks don't wipe the
+            # start of the transcript.
+            if self._replace_origin is None:
+                self._replace_origin = last
+            origin = self._replace_origin
+            if scrollback_rows <= origin:
+                return
+            s.history.clear()
+            start = origin
+            notify = False
+        elif 0 <= last < scrollback_rows:
             start = last
             notify = True
         else:

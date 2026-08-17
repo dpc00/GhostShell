@@ -68,6 +68,17 @@ CATALOG = {
             "box must win over earlier history lines starting with '> '."
         ),
     },
+    "ollama-dsh": {
+        "display_name": "dsh",
+        "launch_command": ["ollama", "launch", "dsh"],
+        "spawn_env": {
+            "AI_TERMINAL_LOG_LINES": "1",
+        },
+        "notes": (
+            "DeepSeek Harness launched through Ollama's managed integration. "
+            "Run `ollama launch dsh --config` to configure without launching."
+        ),
+    },
     "qwen": {
         "display_name": "Qwen",
         "launch_command": ["qwen"],
