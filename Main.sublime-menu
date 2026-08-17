@@ -125,8 +125,22 @@
                         "args": { "profile": "Antigravity" }
                     },
                     {
+                        "caption": "Grok Build",
+                        "children":
+                        [
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Grok Build" }
+                            },
+                            {
+                                "command": "ai_terminal_open_here",
+                                "args": { "profile": "Grok Build --minimal" }
+                            }
+                        ]
+                    },
+                    {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Grok Build" }
+                        "args": { "profile": "dsh" }
                     },
                     {
                         "command": "ai_terminal_open_here",
@@ -150,9 +164,15 @@
                     },
                     {
                         "command": "ai_terminal_open_here",
+                        "args": { "profile": "Pybackup Go TUI" }
+                    },
+                    {
+                        "caption": "Qwen",
+                        "command": "ai_terminal_open_here",
                         "args": { "profile": "Qwen" }
                     },
                     {
+                        "caption": "Qwen →⇢⇨ Ollama",
                         "command": "ai_terminal_open_here",
                         "args": { "profile": "Qwen →⇢⇨ Ollama" }
                     },
