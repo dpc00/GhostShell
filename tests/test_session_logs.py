@@ -57,3 +57,42 @@ def test_color_scheme_log_and_recorders_write_under_log_root(tmp_path, monkeypat
     rdl.debug_log(b"\x1b[31mraw")
     raw = Path(rdl.DEBUG_PATH) / "raw.log"
     assert raw.read_bytes() == b"\x1b[31mraw"
+
+
+def _open_text_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(stl, "TEXT_LOG_DIR", str(tmp_path))
+    log = SessionTextLog()
+    log.open("observe")
+    return log, tmp_path / "ai_observe.log"
+
+
+def test_observe_writes_new_tab_lines_once(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["hello", "world"])
+    assert path.read_text(encoding="utf-8") == "hello\nworld\n"
+    log.observe(["hello", "world"])
+    assert path.read_text(encoding="utf-8") == "hello\nworld\n"
+    log.observe(["hello", "world", "more"])
+    assert path.read_text(encoding="utf-8") == "hello\nworld\nmore\n"
+
+
+def test_observe_writes_a_line_when_it_changes_on_the_tab(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["a"])
+    log.observe(["ab"])
+    assert path.read_text(encoding="utf-8") == "a\nab\n"
+
+
+def test_observe_does_not_reprint_a_line_that_stayed_on_the_tab(
+    tmp_path, monkeypatch
+):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    chrome = "Grok 4.6 (high)"
+    log.observe([chrome, "a"])
+    log.observe([chrome, "ab"])
+    log.observe([chrome, "done"])
+    text = path.read_text(encoding="utf-8")
+    assert text.count(chrome) == 1
+    assert "a\n" in text
+    assert "ab\n" in text
+    assert "done\n" in text

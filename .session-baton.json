@@ -1,6 +1,6 @@
 {
-  "saved_at": "2026-08-18, before a deliberate user-initiated Sublime Text restart",
-  "reason": "User is restarting ST to pick up an uncommitted GhostShell fix live (reload risk was judged not worth taking on a running instance with other live agent tabs open). Grok's terminal tab was closed by the user just before this restart.",
+  "saved_at": "2026-08-18, after ST restart, Grok session 01a012c9-158a-7732-b7c6-b6cfde409e98",
+  "reason": "User cannot re-test Claude until 11pm. They then corrected Grok-as-proxy, stated no ST scrollback in Grok, said no-alt-screen is mandatory for mouseable long responses, and reported thinking/findings are not logged (Tab 2).",
 
   "sublime-mcp_repo_status": "Clean. All work from that session committed (3 commits: proof harness, production fixes for F1/F3-F11/F13, F11 live-runtime verification). AGENT_CHAT.md has full cross-agent handoff history. Nothing pending there.",
 
@@ -28,8 +28,44 @@
 
   "user_asks_open": [
     "Periodic screenshots: 628MB was useful; turn them back on. User then said 'no screenshots'.",
-    "Wrapping leaves 4 blank chars on the right. 5 hours previously spent, to no avail. Do not repeat the failed -4.0*cw approach blindly."
+    "Wrapping leaves 4 blank chars on the right. 5 hours previously spent, to no avail. Do not repeat the failed -4.0*cw approach blindly.",
+    "CLOSED 2026-08-18: Grok JSONL tail is live in jsonl_tail_transcripts. Thinking summaries land. User will not push encrypted_content (likely distillation lock). Do not try to decrypt or scrape fullscreen thinking.",
+    "2026-08-17 live hello: Vibe/Kiro-v2/Junie verified in jsonl_tail_transcripts (not hook daily). Gemini CLI IneligibleTierError. Default Kiro is sqlite. Junie is the GhostShell tab currently next to Grok.",
+    "No-alt-screen is mandatory for the user: the reason the terminal is in ST is to mouse long responses. Grok fullscreen defeats that. They currently PageUp/PageDown and read Tab 2."
   ],
+
+  "grok_vs_claude_scrollback_2026-08-18": {
+    "claude": "Primary screen (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1). Linear transcript into real ST scrollback. SIGWINCH rewraps/replays the conversation; that can change ST line-number gutter digits and start the 32<->33 accepted_cols attractor.",
+    "grok_fullscreen": "Enters ?1049h. force_main_screen only strips the display flag. Grok paints a fixed-region TUI. ST buffer is ~the pinned PTY grid (no linear ST scrollback). Line-number column cannot grow from a conversation replay because there is no replay.",
+    "grok_stable_chrome": "Grok has a stable command line and statusline (no Claude footer jiggle). That does not satisfy Claude users and is not a proxy for either live-verify.",
+    "alt_screen_never_is_still_fullscreen": "pager.toml already has [terminal] alt_screen = never. --no-alt-screen / alt_screen=never still counts as fullscreen (CUP on primary screen). Not Claude-style linear ST scrollback.",
+    "actual_st_scrollback_lever": "Grok minimal mode: --minimal, /minimal, or [ui] screen_mode = minimal. Existing GhostShell profile: Grok Build --minimal. config.toml is pinned screen_mode = fullscreen so plain grok stays fullscreen.",
+    "minimal_tradeoff": "16-color terminal palette; /theme /dashboard /timeline /find /jump hidden. Finished blocks go into native scrollback.",
+    "user_rejected_minimal": "User did reject --minimal. Reason: not all the status indicators appear. 2026-08-18 later: they want 'minimal without minimal bells and whistles' — native ST scrollback (mouse long responses) without --minimal's stripped experimental UI (missing status, 16-color, hidden dashboard/timeline). That third mode does not exist in Grok. Do not re-offer stock --minimal.",
+    "do_not": "Do not treat a quiet Grok pane as a Claude proxy. Do not call alt_screen=never no-alt-screen in the Claude sense. Do not push --minimal as if they have not tried it."
+  },
+
+  "thinking_not_logged_2026-08-18": {
+    "user": "All thinking is lost, not getting logged; important context and findings disappear.",
+    "tab2": "STLogs daily markdown (data/logs/YYYY-MM-DD.md) is prompt + final Grok answer + tools. No thinking.",
+    "grok_jsonl": "chat_history.jsonl has type=reasoning with a short plaintext summary[] plus encrypted_content. Full thinking is not recoverable from disk. events.jsonl only has phase_changed streaming_reasoning (no text).",
+    "stlogs_hooks": "~/.grok/hooks/stlogs.json has SessionStart/UserPromptSubmit/PrePostTool/Stop/SessionEnd. No AfterModel. AfterModel thinking capture in ai_log_server.py is Gemini-shaped (llm_response.candidates[].content.parts thought).",
+    "stlogs_jsonl_tailer": "ai_logger.py skips Claude content type=thinking (continue). Qwen/Gemini flatteners drop part.thought. No Grok type=reasoning adapter.",
+    "ghostshell_session_text": "SessionTextLog only writes lines that permanently retire from the PTY viewport. Fullscreen TUI thinking is painted then replaced; it never retires as ST lines.",
+    "stlogs_ledger": "docs/agent-logging-status.md marks Grok Verified on prompt/response/tools. Thinking was never a completion criterion.",
+    "live_verified_2026-08-18": "Next session after STLogs reload. Tab 2 is jsonl_tail_transcripts/2026-08-17.md. This turn's user line, Grok thinking summary, reply, and tools appeared as they happened.",
+    "user_will_not_push": "Encrypted full thinking stays encrypted. User: not going to push it; perhaps to stop Chinese distillation. Treat as closed. Do not decrypt, do not scrape the TUI frame, do not add AfterModel workarounds.",
+    "next": "Done. Summaries only. encrypted_content is out of scope."
+  },
+
+  "grok_jsonl_tail_missing_2026-08-18": {
+    "user": "grok is not doing jsonl tail logging",
+    "root_cause": "STLogs/lib/ai_logger.py never walks ~/.grok/sessions. Grok logging is hooks-only (stlogs-hook.cmd -> :9511 -> daily md). jsonl_tail_transcripts is Claude/Gemini/Codex/Qwen only.",
+    "native_file": "~/.grok/sessions/<cwd-slug>/<session-id>/chat_history.jsonl",
+    "do_not_tail": "events.jsonl, updates.jsonl, rewind_points.jsonl, prompt_history.jsonl",
+    "adapter_also_missing": "_native_record_to_lines has no Grok branch. Claude formatter would drop Grok assistant/user/reasoning shapes.",
+    "audit_false_comfort": "audit_agent_logging.py reports Grok native source exists; that is not evidence the tailer reads it."
+  },
 
   "screenshots_root_cause_not_yet_fixed_in_process": {
     "file_flag": "STLogs/lib/ai_logger.py _PERIODIC_SCREENSHOTS_ENABLED = True (saved).",

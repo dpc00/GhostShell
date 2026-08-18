@@ -1,10 +1,8 @@
-"""Plain-text, agent-readable transcript of one terminal tab.
+"""Tab text log: what was just painted on the Sublime tab.
 
-Counterpart to CastRecorder's .cast file -- same timestamped-per-session
-naming so a .cast and its .log pair up, but content is clean rendered text,
-not raw ANSI events. One line is appended the instant it permanently retires
-from the live viewport (never a duplicate, never a raw ANSI byte); whatever's
-still on-screen is flushed on close.
+Only input is the lines of that paint. The logger does not open or read
+any other file. Unchanged paints are ignored. A line is written when it
+is newly present on the tab compared with the previous paint.
 """
 import os
 
@@ -14,32 +12,52 @@ TEXT_LOG_DIR = os.path.join(LOG_ROOT, "ai_terminal_session_text_logs")
 
 
 class SessionTextLog:
-    """Owns one text-log file for one terminal session.
-
-    Raises on write failure rather than swallowing it -- callers (which know
-    about the screen callback and notify path) decide how to recover.
-    """
-
     def __init__(self):
         self.file = None
+        self._prev = []
+        self._last_written = None
 
     def open(self, filename_stamp):
         makedirs_private(TEXT_LOG_DIR)
-        path = os.path.join(TEXT_LOG_DIR, f"ai_{filename_stamp}.log")
+        path = os.path.join(TEXT_LOG_DIR, "ai_%s.log" % filename_stamp)
         self.file = open_private(path, "a", encoding="utf-8", newline="\n")
+        self._prev = []
+        self._last_written = None
 
     def write_line(self, text):
-        """Append-and-flush so a crash loses at most the current in-flight
-        write, not the session."""
+        if self.file is None:
+            return
+        text = text or ""
+        if not text.strip() or text == self._last_written:
+            return
         self.file.write(text + "\n")
         self.file.flush()
+        self._last_written = text
+
+    def observe(self, lines, now=None):
+        """`lines` is the current tab paint. `now` is ignored (kept so old calls work)."""
+        if self.file is None:
+            return
+        present = []
+        for ln in lines or ():
+            if not ln:
+                continue
+            text = ln.rstrip()
+            if text.strip():
+                present.append(text)
+        if present == self._prev:
+            return
+        seen = set(self._prev)
+        self._prev = present
+        for line in present:
+            if line not in seen:
+                self.write_line(line)
 
     def flush_live_lines(self, lines):
-        """Write whatever never scrolled off (the final live screen)."""
-        for line in lines:
-            if line:
-                self.file.write(line + "\n")
-        self.file.flush()
+        self.observe(lines)
+
+    def flush_held(self, force=True, now=None):
+        return
 
     def close(self):
         if self.file is None:
@@ -49,3 +67,4 @@ class SessionTextLog:
         except Exception:
             pass
         self.file = None
+        self._prev = []
