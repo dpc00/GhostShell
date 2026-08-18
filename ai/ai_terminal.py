@@ -1486,11 +1486,9 @@ def _close_tab_on_exit(profile_name=None):
 
 def _log_tab_text(profile_name=None):
     """Whether a plain-text, agent-readable transcript of this tab should be
-    kept alongside the .cast recording -- one line appended the instant it
-    permanently retires from the live viewport (never a duplicate, never a
-    raw ANSI byte), plus whatever's still on-screen flushed on close. Meant
-    to answer "what happened in that session" without needing to understand
-    ANSI or any per-agent transcript format. Default true, same posture as
+    kept alongside the .cast recording. After each tab paint, lines that
+    are newly visible (were not on the previous paint) are appended.
+    Source is the text just written to the Sublime tab. Default true, same posture as
     record_asciicast. A profile may set ``"log_tab_text": false`` to opt out.
     """
     return _setting_bool("log_tab_text", True, profile_name=profile_name)
@@ -2312,7 +2310,6 @@ class _Terminal:
         if _log_tab_text(self.profile_name):
             try:
                 self._text_log.open(time.strftime("%Y-%m-%d_%H%M%S"))
-                self.screen.on_retire_line = self._on_retire_line
             except Exception:
                 print("[ai_terminal] text log open failed:\n%s" % traceback.format_exc())
                 self._text_log = SessionTextLog()
@@ -2354,8 +2351,8 @@ class _Terminal:
             log.close()
 
     def _close_text_log(self):
-        """Flush whatever never scrolled off (the final live screen) and
-        close. Safe to call more than once or before start()."""
+        """Observe the final live screen, write anything still held, close.
+        Safe to call more than once or before start()."""
         log = getattr(self, "_text_log", None)
         if log is None or log.file is None:
             return
@@ -3285,6 +3282,20 @@ def _maybe_apply_osc_title(term):
         term.view.set_name(title)
 
 
+def _log_painted_tab(term, text):
+    """Write newly visible tab lines. `text` is what this paint put on the view."""
+    log = getattr(term, "_text_log", None)
+    if log is None or log.file is None:
+        return
+    try:
+        log.observe((text or "").splitlines())
+    except Exception as e:
+        print("[ai_terminal] text log write failed:\n%s" % traceback.format_exc())
+        term._notify("text log disabled after write failure: %s" % e)
+        term.screen.on_retire_line = None
+        term._text_log.close()
+
+
 def _do_render(term):
     view = term.view
     if not view or not view.is_valid():
@@ -3355,6 +3366,7 @@ def _do_render(term):
     if caret_off is not None:
         caret_off = caret_off + top_pad_chars
     text = _append_host_scroll_pad(text)
+    _log_painted_tab(term, text)
     # Drop any leftover HTML host-cursor phantoms from the prior experiment.
     _clear_host_cursor_phantom(view)
 
