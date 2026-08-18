@@ -74,6 +74,10 @@
     // or trailing blank PTY rows can hide real content on scroll-to-bottom
     // (confirmed: broke Claude Code's TUI after typing).
     "min_rows": 1,
+    // Snap-to-bottom can skip the last N buffer rows so a TUI whose
+    // footer height wobbles does not jiggle the viewport. Default 0
+    // (follow the real last line). Override per profile.
+    "follow_ignore_trailing_lines": 0,
     // Rename the ST tab to the app's OSC 0/2 window title (ssh, vim, npm
     // scripts, etc. all set one). Default false: the existing profile-name-
     // based tab titling is relied upon and must not change unless opted in.
@@ -127,6 +131,7 @@
             // 1003l) at startup, never enables -- confirmed across 100+
             // recorded asciicast sessions (2026-08-11). No PTY-side receiver
             // for a forwarded click.
+            "follow_ignore_trailing_lines": 2,
             "launch_command": [
                 "claude"
             ],
@@ -136,6 +141,7 @@
             }
         },
         "Claude --chrome": {
+            "follow_ignore_trailing_lines": 2,
             "launch_command": [
                 "claude",
                 "--chrome"
@@ -148,6 +154,7 @@
             }
         },
         "Claude →⇢⇨ Ollama": {
+            "follow_ignore_trailing_lines": 2,
             "launch_command": [
                 "ollama",
                 "launch",
@@ -169,6 +176,7 @@
             }
         },
         "Claude →⇢⇨ Ollama --chrome": {
+            "follow_ignore_trailing_lines": 2,
             "launch_command": [
                 "ollama",
                 "launch",
