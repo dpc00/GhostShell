@@ -609,12 +609,14 @@ try:
     )
     from .terminal import launcher as _launcher
     from .terminal import history_scan as _history_scan
+    from .terminal.layout import accepted_cols as _accepted_cols
     from .terminal.render import (
         HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
         build_text_and_regions as _build_text_and_regions_pure,
         cursor_text_offset as _cursor_text_offset,
         paint_host_cursor as _paint_host_cursor,
         punch_host_cursor_region as _punch_host_cursor_region,
+        trim_display_rows as _trim_display_rows,
     )
     from .terminal.caret import (
         adjust_display_caret as _adjust_display_caret,
@@ -699,12 +701,14 @@ except ImportError as _term_imp_err:
         )
         from ai.terminal import launcher as _launcher
         from ai.terminal import history_scan as _history_scan
+        from ai.terminal.layout import accepted_cols as _accepted_cols
         from ai.terminal.render import (
             HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
             build_text_and_regions as _build_text_and_regions_pure,
             cursor_text_offset as _cursor_text_offset,
             paint_host_cursor as _paint_host_cursor,
             punch_host_cursor_region as _punch_host_cursor_region,
+            trim_display_rows as _trim_display_rows,
         )
         from ai.terminal.caret import (
             adjust_display_caret as _adjust_display_caret,
@@ -2725,6 +2729,10 @@ class _LayoutWatcher:
         self._candidate = None
         self._candidate_count = 0
         cols, rows = size
+        # 32↔33 (and 99→100 gutter) attractor: never grow by exactly one
+        # column. See ai.terminal.layout.accepted_cols and ai/TODO.md
+        # "Status-line resize/rewrap loop".
+        cols = _accepted_cols(self.term._last_cols, cols)
         # In main-screen mode term.resize() pins rows and only ever forwards
         # column changes (see its docstring) -- so a pure row fluctuation
         # (e.g. dragging the pane shorter) must not count as "changed" here
@@ -3317,21 +3325,10 @@ def _do_render(term):
         # pins rows -- see _LayoutWatcher._run -- so a plain shell's mostly-
         # blank grid isn't reflowed just because there's less real content
         # yet). Rendering all of it puts a wall of blank lines below the
-        # cursor in every terminal, tab or panel. Trim trailing blank rows
-        # below the last real content or the cursor, whichever is deeper; a
-        # genuine full-screen TUI (status bars, `~` fill lines) has no blank
-        # tail to trim, so this is a no-op for those.
-        last_real = cy
-        for i in range(len(rows) - 1, cy, -1):
-            if any(ch.strip() for ch, _ in rows[i]):
-                last_real = i
-                break
-        # No floor in either mode: trim to exactly the real content. An
-        # earlier version floored panel mode at a third of the tab's row
-        # count so it wouldn't feel cramped as new output arrived, but
-        # live testing showed exact-content trimming is what's wanted even
-        # there -- drag the panel taller by hand if more room is wanted.
-        rows = rows[: last_real + 1]
+        # cursor. Trim trailing blanks; a cursor parked two or more rows
+        # below content (Claude last-row CUP + overflow \\n) is not kept.
+        # Empty prompt on the next line is. See trim_display_rows.
+        rows = _trim_display_rows(rows, cy)
         # Clear under the lock so a concurrent parser feed cannot set dirty
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
@@ -5308,16 +5305,45 @@ def _real_content_height(view):
     return max(0.0, float(le[1]) - 2 * _HOST_SCROLL_PAD_LINES * lh)
 
 
+def _follow_ignore_trailing_lines(term):
+    """How many trailing rows snap-to-bottom should skip. Default 0."""
+    if term is None:
+        return 0
+    n = _setting_number(
+        "follow_ignore_trailing_lines",
+        0,
+        profile_name=_term_profile_name(term),
+    )
+    try:
+        return max(0, int(n or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _follow_content_height(view, ignore_trailing=0):
+    """Content height snap-to-bottom should chase.
+
+    Subtracts follow_ignore_trailing_lines (a profile setting, default 0)
+    so a TUI whose last N rows wobble does not move the follow target.
+    """
+    lh = view.line_height() or 12.0
+    drop = max(0, int(ignore_trailing or 0))
+    return max(0.0, _real_content_height(view) - drop * lh)
+
+
 def _scroll_to_bottom(view):
     """Jump the viewport to the bottom of real terminal content (not the pad).
 
     Called on user input so typing brings the user back to the prompt after
     scrolling up to read scrollback. No-op when real content fits the viewport.
+    A profile may set follow_ignore_trailing_lines to leave the last N
+    rows out of the snap target.
     """
     ve = view.viewport_extent()
     lh = view.line_height() or 12.0
     top = _host_rest_y(view)
-    real_h = _real_content_height(view)
+    term = _Terminal.from_id(view.id()) if view is not None else None
+    real_h = _follow_content_height(view, _follow_ignore_trailing_lines(term))
     if real_h > ve[1]:
         # Bottom of real content = top pad + real_h
         view.set_viewport_position((0.0, top + real_h - ve[1]), False)
