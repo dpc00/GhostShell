@@ -124,6 +124,29 @@ def punch_host_cursor_region(regions, off, end=None):
     return out
 
 
+def trim_display_rows(rows, cy):
+    """Drop trailing blanks, including a cursor parked below the content.
+
+    Keep the last non-blank row. Also keep a blank cursor row when it is
+    the next line after that content (empty shell prompt). A cursor two
+    or more rows below — Claude parking on the last PTY line after a
+    last-row CUP + overflow \\n — is not kept.
+    """
+    if not rows:
+        return rows
+    last_nb = -1
+    for i, row in enumerate(rows):
+        if any(ch.strip() for ch, _ in row):
+            last_nb = i
+    if last_nb < 0:
+        keep = 0 if cy is None else max(0, min(cy, len(rows) - 1))
+        return rows[: keep + 1]
+    keep = last_nb
+    if cy is not None and last_nb < cy <= last_nb + 1:
+        keep = min(cy, len(rows) - 1)
+    return rows[: keep + 1]
+
+
 def build_text_and_regions(rows, scope_for=None):
     """Flatten structured rows into view text + [begin, end, scope] regions.
 

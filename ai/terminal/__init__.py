@@ -14,6 +14,7 @@ from .mouse import (
 )
 from .parser import Parser
 from .pty_env import sanitize_pty_env
+from .layout import accepted_cols, follow_line_count
 from .render import (
     HOST_CURSOR_SCOPE,
     build_text_and_regions,
@@ -21,6 +22,7 @@ from .render import (
     cursor_text_offset,
     paint_host_cursor,
     punch_host_cursor_region,
+    trim_display_rows,
 )
 from .screen import Screen
 from .caret import adjust_display_caret, pad_row_for_caret
@@ -39,6 +41,9 @@ __all__ = [
     "cell_needs_host_cursor",
     "cursor_text_offset",
     "punch_host_cursor_region",
+    "trim_display_rows",
+    "accepted_cols",
+    "follow_line_count",
     "HOST_CURSOR_SCOPE",
     "sanitize_pty_env",
     "encode_mouse",

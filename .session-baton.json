@@ -1,6 +1,30 @@
 {
-  "saved_at": "2026-08-15 after user said crash! again (screenshot work)",
-  "sublime_status": "NOT crashed. Same PIDs as 00:16: sublime_text 15624, plugin_host-3.8 7904, plugin_host-3.3 1384.",
+  "saved_at": "2026-08-18, before a deliberate user-initiated Sublime Text restart",
+  "reason": "User is restarting ST to pick up an uncommitted GhostShell fix live (reload risk was judged not worth taking on a running instance with other live agent tabs open). Grok's terminal tab was closed by the user just before this restart.",
+
+  "sublime-mcp_repo_status": "Clean. All work from that session committed (3 commits: proof harness, production fixes for F1/F3-F11/F13, F11 live-runtime verification). AGENT_CHAT.md has full cross-agent handoff history. Nothing pending there.",
+
+  "ghostshell_repo_status_uncommitted": {
+    "what": "Three fixes for the resize/rewrap + status-line jiggle family. Long diagnosis in ai/TODO.md; landing notes in ai_terminal_notes.md (2026-08-18 entry). Same family as wrap_4_char_gap below, not superseded by it.",
+    "files_changed": [
+      "ai/terminal/layout.py - accepted_cols() hysteresis (never grow PTY width by exactly one column); follow_line_count(total, ignore_trailing) generic trailer skip",
+      "ai/terminal/render.py - trim_display_rows(): last non-blank + blank cursor row only when it is the next line",
+      "ai/ai_terminal.py, ai/terminal/__init__.py - wired accepted_cols, trim_display_rows, follow_ignore_trailing_lines into _LayoutWatcher / _do_render / _scroll_to_bottom",
+      "ai_terminal.sublime-settings - follow_ignore_trailing_lines default 0; Claude-family profiles set to 2",
+      "tests/test_layout.py, tests/test_trim_display.py",
+      "ai/TODO.md, ai_terminal_notes.md"
+    ],
+    "verification": "211 unit tests OK. After the 2026-08-18 restart: accepted_cols live in-process; no 32<->33 chase at 123/124 or on 29/38 drags (console panel must be closed or the watcher will not measure). Idle caret no longer parks on the last line. follow_ignore_trailing_lines still needs a plugin reload to take effect. Strongest remaining check: ~32-col Claude pane with streaming output, line numbers on.",
+    "do_not_put_in_the_engine": "No TUI-specific chrome matching (auto mode / accept edits / pause glyphs). An earlier draft that did that was removed. Profile settings only.",
+    "not_done_on_purpose": "4-digit gutter reserve in _measure; update_replace_scroll / last-row overflow history append (needs a failing parser test on verbatim cast frames first); CCSTATUSLINE_WIDTH spawn env (upstream ccstatusline has no win32 width probe)."
+  },
+
+  "do_not_2026-08-18": [
+    "Do not touch/save Packages/User/PluginLoader.py or GhostShell/PluginLoader.py.",
+    "Do not assume a crash happened after restart -- check actual PIDs/process state first.",
+    "Do not re-revert the layout.py/render.py fix without an explicit instruction from the user; it was already reverted once by mistake and had to be redone.",
+    "Do not disable line numbers as 'the fix' -- that was the user's own manual workaround for symptom 1 before the real root cause (layout.py hysteresis) was found; the real fix should make line numbers safe to re-enable."
+  ],
 
   "user_asks_open": [
     "Periodic screenshots: 628MB was useful; turn them back on. User then said 'no screenshots'.",
