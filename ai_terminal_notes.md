@@ -3,6 +3,128 @@
 Running technical notes on ai_terminal.py internals that aren't obvious from
 the code alone. Newest entries at the top.
 
+## 2026-08-17 — Tab log is the Sublime paint only
+
+User: what I see on the ST tab goes in the log. No JSONL. No other files
+read while that is running. No guessing when a TUI line is "done".
+
+After each paint, `SessionTextLog.observe()` gets the same string just
+written to the view. Unchanged paints are ignored. A line is appended
+when it was not on the previous paint. That is the whole process.
+
+## 2026-08-17 — Session text log: write when it sits still
+
+Superseded the same day. HOLD_S / box-stripping was another guess. Removed.
+
+## 2026-08-17 — Session text log: finished lines, not scroll-off
+
+User: everything the agent puts out gets logged. Scroll-off was the wrong
+gate (Grok never retires lines). Per-chunk full-frame dumps were rejected
+as a duplicate mess. No menu / extra plugin.
+
+`SessionTextLog.observe()` runs after each PTY chunk (same stream as the
+`.cast`). Holds each live line; writes it once when it is replaced, leaves
+the screen, or the session closes. Prefix growth is one line. Flicker
+shorter than 0.25s is dropped. `_on_retire_line` still writes immediately
+for Claude scroll-off; consecutive-dedup covers overlap.
+
+Needs a GhostShell plugin reload (not User/PluginLoader.py) and a new
+tab to take effect. Tests: `tests/test_session_logs.py` observe cases;
+full suite 416 passed.
+
+## 2026-08-18 — Grok is not Claude scrollback; thinking is not in Tab 2
+
+User corrections after the ST restart (Claude live-verify blocked until 11pm).
+Grok session `01a012c9-158a-7732-b7c6-b6cfde409e98`. Also in
+`.session-baton.json` under `grok_vs_claude_scrollback_2026-08-18` and
+`thinking_not_logged_2026-08-18`.
+
+### Grok vs Claude rendering
+
+Claude is on the primary screen (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`).
+The conversation is real ST scrollback. A width SIGWINCH rewraps and replays
+it; that can move the line-number gutter across a digit boundary and feed
+the 32↔33 `accepted_cols` attractor.
+
+Grok enters alt-screen (`?1049h`). `force_main_screen` only strips our
+display flag. Grok paints one fixed frame. The Sublime buffer is the live
+PTY grid (~42 rows). There is **no ST scrollback**. PageUp/PageDown go to
+the PTY (`page_keys_to_pty: true`); Tab is Grok's own scrollback mode.
+A Grok resize cannot change line-number column width via conversation
+replay, because that replay never happens.
+
+Grok's stable command line and statusline are real. They are not a proxy
+for Claude's footer jiggle or the resize loop. Do not live-verify those
+on Grok.
+
+### "No-alt-screen" is not `alt_screen = never`
+
+`~/.grok/pager.toml` already has `[terminal] alt_screen = "never"`.
+`--no-alt-screen` / `alt_screen = "never"` is **still fullscreen**: same
+CUP TUI on the primary screen. Grok docs: `--no-alt-screen` still counts
+as fullscreen.
+
+The lever that puts finished blocks into native ST scrollback is **minimal
+mode**: `grok --minimal`, `/minimal`, or `[ui] screen_mode = "minimal"`.
+GhostShell already has profile **Grok Build --minimal**. `config.toml` is
+pinned `screen_mode = "fullscreen"`, so the default **Grok Build** profile
+stays one-frame. Tradeoff: 16-color palette; `/theme` `/dashboard`
+`/timeline` hidden.
+
+**User rejected `--minimal`.** Reason: not all the status indicators
+appear. Later the same day: they want **minimal without minimal bells
+and whistles** — linear ST scrollback you can mouse, not the
+experimental `--minimal` product (16-color, hidden status, hidden
+`/dashboard` `/timeline` `/theme`). Grok has no such third mode.
+`--no-alt-screen` / `alt_screen=never` is still the fullscreen TUI on
+the primary screen (CUP), not Claude-style linear print.
+
+User stated the entire reason for a terminal in ST is to mouse long
+responses. Fullscreen Grok defeats that. They PageUp/PageDown and read
+Tab 2 (STLogs daily markdown).
+
+### Thinking / findings not logged
+
+User: thinking is lost, not getting logged; findings disappear.
+
+What is actually on disk:
+
+- **Tab 2 / STLogs** (`~/data/logs/YYYY-MM-DD.md`): prompt, final answer,
+  tools. No thinking. Grok hooks never fire `AfterModel`. The only
+  thinking ingest in `STLogs/lib/ai_log_server.py` is Gemini-shaped.
+- **Claude JSONL tailer** (`STLogs/lib/ai_logger.py`): `type == "thinking"`
+  is `continue`. Qwen/Gemini flatteners drop `part.thought`.
+- **Grok `chat_history.jsonl`**: `type: reasoning` with a short plaintext
+  `summary[]` plus `encrypted_content`. Full thinking is not recoverable
+  from disk. `events.jsonl` only has `phase_changed` /
+  `streaming_reasoning` (no text).
+- **GhostShell `SessionTextLog`**: writes lines that permanently leave the
+  PTY viewport. Fullscreen thinking is painted then replaced; it never
+  retires as ST lines.
+
+STLogs ledger marks Grok Verified on prompt/response/tools. Thinking was
+never a completion criterion. Logging thinking is STLogs work, not a
+GhostShell render change.
+
+**User 2026-08-18: Grok is not doing JSONL tail logging.** Was correct.
+Adapter landed the same day in STLogs: walker takes
+`~/.grok/sessions/**/chat_history.jsonl` only; converter handles user
+(`<user_query>` unwrapped, synthetics skipped), assistant + tool_calls,
+reasoning.summary (not encrypted_content), and tool_result. Same poller
+now also tails Junie `events.jsonl`, Kiro `sessions/cli`, Vibe
+`messages.jsonl`. Tests: STLogs 15 passed. Live lines appear only after
+an STLogs reload and a newly appended record (first-seen offset is EOF).
+Do not save GhostShell/`User` PluginLoader.py to activate this.
+
+**Live-verified same evening, next Grok session.** Tab 2 is
+`jsonl_tail_transcripts/2026-08-17.md`. User prompt, thinking
+*summaries*, reply, and tools appear as the turn happens.
+
+**User will not push `encrypted_content`.** Reason given: likely a
+distillation lock. Closed. Do not decrypt, do not scrape the fullscreen
+thinking frame, do not add AfterModel workarounds. Summaries are the
+intended public trace.
+
 ## 2026-08-18 — Resize-loop hysteresis, trim, and follow-bottom trailer skip
 
 Three related fixes. None of them belong in TUI-specific string matching
