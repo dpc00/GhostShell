@@ -28,9 +28,7 @@ def test_color_scheme_log_and_recorders_write_under_log_root(tmp_path, monkeypat
         stl, "TEXT_LOG_DIR", os.path.join(td, "ai_terminal_session_text_logs")
     )
 
-    csl.color_scheme_log("hello-color")
-    color_path = Path(td) / "ai_terminal" / "color_scheme.log"
-    assert "hello-color" in color_path.read_text(encoding="utf-8")
+    csl.color_scheme_log("hello-color")  # no-op; must not raise
 
     rec = CastRecorder(notify=lambda m: None)
     rec.open(80, 24, ["claude", "--api-key", "sk-abcdefghijklmnop"])

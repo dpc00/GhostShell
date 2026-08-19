@@ -79,7 +79,7 @@ class GhosttyParser:
         self.force_main_screen = force_main_screen
         self._g = gvt.Ghostty(gvt.load_library(dll_path))
 
-        cap = screen.history.maxlen or 300
+        cap = screen.history_cap or 300
         self._term = gvt.GhosttyTerminal()
         opts = gvt.GhosttyTerminalOptions(
             cols=screen.cols, rows=screen.rows, max_scrollback=cap

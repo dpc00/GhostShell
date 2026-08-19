@@ -979,14 +979,15 @@ def _durable_scheme_backup(scheme_data):
         path = os.path.join(bdir, f"ai_terminal_{n}rules_{ts}.sublime-color-scheme")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(scheme_data, f, indent=None, separators=(",", ":"))
-        # Keep only the 5 newest backups
+        # Keep only the newest backup; each snapshot is a full ~400KB scheme
+        # file and only the latest one is ever useful for recovery.
         bak = sorted(
             (os.path.join(bdir, x) for x in os.listdir(bdir)
              if x.endswith(".sublime-color-scheme")),
             key=os.path.getmtime,
             reverse=True,
         )
-        for old in bak[5:]:
+        for old in bak[1:]:
             try:
                 os.remove(old)
             except Exception:
@@ -1320,9 +1321,53 @@ _DEFAULT_MIN_ROWS = 1
 # reach nothing; mouse wheel is the only way such an app can scroll at all.
 _MOUSE_HANDLING_ENABLED = False
 
+# Kill switch per user directive (2026-08-18): the auto-scroll/follow/pin
+# machinery -- _scroll_to_bottom, _pin_terminal_viewport, _pin_viewport_rest,
+# the render loop's do_follow write, and _clamp_vp_loop's several rest-pin
+# branches -- had accumulated enough interacting special cases (footer-size
+# assumptions, TUI-vs-shell branches, pan/latch state machines) that every
+# targeted fix broke a different case live. Rather than keep patching that
+# pile, every viewport write in this file now goes through the single
+# _set_viewport choke point below, gated on this flag. False = Sublime's
+# native viewport/scroll behavior applies everywhere; nothing in this engine
+# ever calls set_viewport_position. Flip True to restore the old behavior
+# once it's been redesigned, not patched further.
+_SCROLL_MANIPULATION_ENABLED = False
+
+
+def _set_viewport(view, pos, animate=False):
+    """Single choke point for every view.set_viewport_position() call in this
+    file -- see _SCROLL_MANIPULATION_ENABLED. No-op while disabled so the
+    user's own scroll position (wheel, drag, keyboard) is never overwritten."""
+    if not _SCROLL_MANIPULATION_ENABLED:
+        return
+    view.set_viewport_position(pos, animate)
+
 
 def _term_profile_name(term):
     return term.profile_name if term is not None else None
+
+
+def _set_auto_follow(term, value):
+    """Single choke point for every term._auto_follow assignment.
+
+    Mirrors the flag onto term.screen.trim_paused (the inverse): while the
+    user is scrolled back reading history (_auto_follow False), the engine
+    holds off evicting old scrollback lines instead of silently trimming
+    the buffer out from under the read position (2026-08-18 -- "if I am
+    scrolled back into the buffer, the text should not trim off the top").
+    The pause/resume + deferred-catchup logic itself lives in Screen
+    (ai/terminal/screen.py, pure/testable), not here -- this just keeps the
+    two flags in lockstep from the one place ai_terminal.py has both.
+    """
+    value = bool(value)
+    if term is None:
+        return value
+    term._auto_follow = value
+    screen = getattr(term, "screen", None)
+    if screen is not None and hasattr(screen, "set_trim_paused"):
+        screen.set_trim_paused(not value)
+    return value
 
 
 def _mouse_handling_enabled(term):
@@ -2229,8 +2274,14 @@ class _Terminal:
         # re-engages when the user scrolls back near the bottom or types. Fresh
         # per _spawn, so a restart opens at the prompt (bottom) instead of
         # sticking at the top showing the banner.
-        self._auto_follow = True
+        _set_auto_follow(self, True)
         self._last_vp_y = 0.0
+        # Snapshot of screen.retired_total / len(screen.history) as of the
+        # last render, so AiTerminalRenderCommand can tell exactly how many
+        # lines the maxlen history deque evicted from the top this frame
+        # (see _compensate_trim_scroll). None until the first render.
+        self._last_retired_total = None
+        self._last_history_len = None
         # Last PTY cell (1-based col,row) hit by a mouse click/drag. Used as
         # the wheel locus — ST's scroll_lines has no pointer coords, and the
         # caret is usually on the command line, which makes TUI scrollbars
@@ -2987,7 +3038,7 @@ def _migrate_terminal_view(term, new_view):
     # scroll position -- without resetting it here, that comparison reads as
     # a scroll-away on the very first render and latches auto_follow False,
     # stranding the view at the top instead of following to the cursor.
-    term._auto_follow = True
+    _set_auto_follow(term, True)
     term._last_vp_y = 0.0
     _schedule_render(term)
 
@@ -3589,20 +3640,20 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         if command == "insert":
             chars = (args or {}).get("characters", "")
             if chars:
-                term._auto_follow = True
+                _set_auto_follow(term, True)
                 _scroll_to_bottom(self.view)
                 term._last_vp_y = self.view.viewport_position()[1]
                 # Enter in ST is an insert of "\n"; TUIs expect CR.
                 term.send_string("\r" if chars == "\n" else chars)
             return ("ai_terminal_noop", {})
         if command == "left_delete":
-            term._auto_follow = True
+            _set_auto_follow(term, True)
             _scroll_to_bottom(self.view)
             term._last_vp_y = self.view.viewport_position()[1]
             term.send_string("\x7f")
             return ("ai_terminal_noop", {})
         if command == "right_delete":
-            term._auto_follow = True
+            _set_auto_follow(term, True)
             _scroll_to_bottom(self.view)
             term._last_vp_y = self.view.viewport_position()[1]
             term.send_string("\x1b[3~")
@@ -3660,7 +3711,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         if command == "insert" and isinstance(args, dict) and "characters" in args:
             chars = args["characters"]
             if chars and len(view.sel()) == 1 and view.sel()[0].empty():
-                term._auto_follow = True
+                _set_auto_follow(term, True)
                 _scroll_to_bottom(view)
                 term._last_vp_y = view.viewport_position()[1]
                 # Forward raw. \n submits in Claude Code's TUI (a pasted multi-line
@@ -3726,7 +3777,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             if term.copy_mode:
                 term.copy_mode = False
                 _scroll_to_bottom(view)
-                term._auto_follow = True
+                _set_auto_follow(term, True)
                 sublime.status_message("Ai terminal: command line")
         else:
             term._user_owns_caret = True
@@ -3762,7 +3813,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             vp = v.viewport_position()
             lh = v.line_height() or 12.0
             if le[1] - ve[1] <= lh and (vp[0] != 0.0 or vp[1] != 0.0):
-                v.set_viewport_position((0.0, 0.0), False)
+                _set_viewport(v, (0.0, 0.0), False)
         except Exception:
             pass
 
@@ -3958,7 +4009,7 @@ def _arm_or_cancel_copyfirst_tap(view, term, event):
         term._cf_tap_gen = gen
         term._cf_tap = (col, row, gen, proto)
         term._last_mouse_cell = (col, row)
-        term._auto_follow = False
+        _set_auto_follow(term, False)
         vid = view.id()
 
         def _fire(v_id=vid, g=gen, c=col, r=row, p=proto):
@@ -4045,7 +4096,7 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
     col, row = cell
     term._last_mouse_cell = (col, row)
     # User is interacting with the TUI chrome — don't yank viewport to bottom.
-    term._auto_follow = False
+    _set_auto_follow(term, False)
     sgr = term.screen.mouse_sgr
     vid = view.id()
     now = time.time()
@@ -4153,7 +4204,7 @@ def _route_mouse_wheel(view, term, amount):
     except (TypeError, ValueError):
         see_older = True
     n = _scroll_tick_count(amount)
-    term._auto_follow = False
+    _set_auto_follow(term, False)
     term._last_scroll_send_t = time.time()
 
     win32 = 9001 in term.screen.private_modes
@@ -4198,14 +4249,14 @@ def _pin_terminal_viewport(view, term):
         view.settings().set("scroll_past_end", True)
         if _tui_like(term):
             rest = _host_rest_y(view)
-            view.set_viewport_position((0.0, rest), False)
+            _set_viewport(view, (0.0, rest), False)
             return
         le = view.layout_extent()
         ve = view.viewport_extent()
         lh = view.line_height() or 12.0
         # Near-fit including pads: still use rest position
         if le[1] - ve[1] <= lh * (2 * _HOST_SCROLL_PAD_LINES + 1):
-            view.set_viewport_position((0.0, _host_rest_y(view)), False)
+            _set_viewport(view, (0.0, _host_rest_y(view)), False)
         elif term is not None and getattr(term, "_auto_follow", False):
             _scroll_to_bottom(view)
     except Exception:
@@ -5303,7 +5354,7 @@ def _pin_viewport_rest(view, rest=None, term=None):
     try:
         cur = view.viewport_position()[1]
         if abs(cur - rest) > 1.0:
-            view.set_viewport_position((0.0, rest), False)
+            _set_viewport(view, (0.0, rest), False)
         if term is not None:
             term._last_vp_y = rest
     except Exception:
@@ -5343,6 +5394,61 @@ def _follow_content_height(view, ignore_trailing=0):
     return max(0.0, _real_content_height(view) - drop * lh)
 
 
+def _compensate_trim_scroll(view, term, vp):
+    """Undo the visual shift caused by the history deque evicting old lines.
+
+    Not a follow/snap heuristic like the machinery gated behind
+    _SCROLL_MANIPULATION_ENABLED above -- that decides where the viewport
+    *should* go. This corrects for the buffer changing size under a
+    viewport that never moved: _do_render replaces the whole view text
+    every frame, and once screen.history is at its maxlen cap, each newly
+    retired line silently evicts the oldest one, shifting every remaining
+    line's position by one. The same fixed pixel offset then shows
+    different text than it did last frame -- the text moved, not the
+    viewport (confirmed live 2026-08-18). The eviction count is exact
+    (Screen.retired_total vs len(history) between two renders), so the
+    compensation is exact too: it keeps whatever was on screen on screen,
+    it never picks a target. Deliberately bypasses the kill switch.
+    """
+    if term is None or view is None:
+        return vp
+    screen = term.screen
+    total = getattr(screen, "retired_total", None)
+    if total is None or getattr(screen, "alt_screen", False):
+        return vp
+    hist_len = len(screen.history)
+    # getattr, not term._last_retired_total: an already-running terminal from
+    # before this code existed has no such attribute on its instance (a
+    # plugin reload only affects the class/module, not live objects'
+    # __dict__) -- confirmed live 2026-08-18, would otherwise crash every
+    # render for any tab opened before this landed.
+    last_total = getattr(term, "_last_retired_total", None)
+    last_len = getattr(term, "_last_history_len", None)
+    term._last_retired_total = total
+    term._last_history_len = hist_len
+    if last_total is None:
+        return vp
+    evicted = (total - last_total) - (hist_len - (last_len or 0))
+    if evicted <= 0:
+        return vp
+    lh = view.line_height() or 20
+    new_y = max(0.0, vp[1] - evicted * lh)
+    if new_y != vp[1]:
+        view.set_viewport_position((vp[0], new_y), False)
+        vp = (vp[0], new_y)
+        # Without this, the render loop's own "vp[1] < term._last_vp_y -
+        # lh*1.5" user-scroll detector (a few lines below this call site)
+        # reads this write as the user having scrolled up, disengages
+        # _auto_follow, which now also latches screen.trim_paused True --
+        # and with _SCROLL_MANIPULATION_ENABLED off, nothing ever moves the
+        # viewport back to "near bottom" to re-engage it, so one real
+        # eviction permanently stops all future trimming (confirmed live
+        # 2026-08-18: unbounded growth, 300 -> 1000+ lines in seconds).
+        if term is not None:
+            term._last_vp_y = new_y
+    return vp
+
+
 def _scroll_to_bottom(view):
     """Jump the viewport to the bottom of real terminal content (not the pad).
 
@@ -5358,9 +5464,9 @@ def _scroll_to_bottom(view):
     real_h = _follow_content_height(view, _follow_ignore_trailing_lines(term))
     if real_h > ve[1]:
         # Bottom of real content = top pad + real_h
-        view.set_viewport_position((0.0, top + real_h - ve[1]), False)
+        _set_viewport(view, (0.0, top + real_h - ve[1]), False)
     else:
-        view.set_viewport_position((0.0, top), False)
+        _set_viewport(view, (0.0, top), False)
 
 
 def _place_auto_caret(view, term, pos):
@@ -5427,7 +5533,7 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             # never really turned off.
             term._user_owns_caret = False
             _scroll_to_bottom(self.view)
-            term._auto_follow = True
+            _set_auto_follow(term, True)
             sublime.status_message("Ai terminal: copy mode OFF")
 
 
@@ -5660,7 +5766,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                     finally:
                         term._in_render = prev_in_render
                 _scroll_to_bottom(self.view)
-                term._auto_follow = True
+                _set_auto_follow(term, True)
                 sublime.status_message("Ai terminal: copy mode OFF")
                 return
             if not ctrl and not alt and key in ("up", "down", "left", "right", "pageup", "pagedown", "home", "end"):
@@ -5784,8 +5890,18 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             # viewport on every printable — that fought mid-line caret and
             # made the next char land at EOL. Pin to rest instead.
             tui = _tui_like(term)
-            if kl not in _NO_SCROLL_KEYS:
-                term._auto_follow = True
+            if kl in ("pageup", "pagedown"):
+                # Explicit scrollback navigation: same intent as a mouse
+                # wheel/click, which already disengage follow (see
+                # _auto_follow=False at the mouse handlers above). Without
+                # this, PageDown itself is a no-scroll key (correctly, per
+                # the comment below) but a stale True from prior typing
+                # survives it, so the very next streaming render snaps the
+                # viewport right back to the bottom -- PageDown "does
+                # nothing" from the user's perspective.
+                _set_auto_follow(term, False)
+            elif kl not in _NO_SCROLL_KEYS:
+                _set_auto_follow(term, True)
                 if tui:
                     # Only re-pin when drifted; set_viewport every key on Windows
                     # forces layout work and feels like lag/jumps on Grok.
@@ -5793,7 +5909,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         rest = _host_rest_y(self.view)
                         cur = self.view.viewport_position()[1]
                         if abs(cur - rest) > 1.0:
-                            self.view.set_viewport_position((0.0, rest), False)
+                            _set_viewport(self.view, (0.0, rest), False)
                         term._last_vp_y = rest
                     except Exception:
                         pass
@@ -5924,6 +6040,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         except Exception:
             pass
 
+        vp = _compensate_trim_scroll(view, term, vp)
+
         rest = _host_rest_y(view)
         real_h = _real_content_height(view)
         near_bottom = (vp[1] + ve[1]) >= (rest + real_h - lh * 2)
@@ -5931,9 +6049,9 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         tui_owns_scroll = _tui_like(term)
         if term is not None and not tui_owns_scroll:
             if vp[1] < term._last_vp_y - lh * 1.5:
-                term._auto_follow = False
+                _set_auto_follow(term, False)
             if near_bottom:
-                term._auto_follow = True
+                _set_auto_follow(term, True)
         do_follow = (
             (term is not None and term._auto_follow)
             if term is not None
@@ -6291,7 +6409,7 @@ def _clamp_vp_loop():
                     # with physical arrows. Do not turn Sublime's residual
                     # viewport drift into extra PTY arrows that pin selection.
                     if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                        v.set_viewport_position((0.0, rest), False)
+                        _set_viewport(v, (0.0, rest), False)
                     continue
                 # Spawn settle: pin only until viewport sits at rest once
                 # after a short grace. Sending pan→TUI keys on the first
@@ -6305,7 +6423,7 @@ def _clamp_vp_loop():
                         if age >= 0.4:
                             term._vp_pan_armed = True
                     elif abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                        v.set_viewport_position((0.0, rest), False)
+                        _set_viewport(v, (0.0, rest), False)
                     continue
                 # Treat viewport displacement as an edge, not a level. ST can
                 # retain a small fractional offset (observed: 4 px) even after
@@ -6332,7 +6450,7 @@ def _clamp_vp_loop():
                         term._vp_pan_latched = False
                         term._vp_pan_rest_frames = 0
                 if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                    v.set_viewport_position((0.0, rest), False)
+                    _set_viewport(v, (0.0, rest), False)
                 continue
 
             if near_fit:
@@ -6340,13 +6458,13 @@ def _clamp_vp_loop():
                 # them pinned, but do not reinterpret their tiny viewport drift
                 # as PTY arrow input.
                 if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                    v.set_viewport_position((0.0, rest), False)
+                    _set_viewport(v, (0.0, rest), False)
                 continue
 
             # Tall scrollback shell: only kill tiny overflow dips, don't steal
             # real user scrollback browsing.
             if le[1] - ve[1] <= lh and (dx != 0.0 or abs(dy_rest) >= 0.5):
-                v.set_viewport_position((0.0, rest), False)
+                _set_viewport(v, (0.0, rest), False)
     except Exception as e:
         print(f"[ai_terminal] clamp loop error: {e}")
     # 8ms: catch the brief pan before the next paint eats it

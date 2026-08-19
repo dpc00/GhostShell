@@ -112,15 +112,28 @@ class ScrollbackTests(unittest.TestCase):
 
     def test_history_cap_is_honoured(self):
         s = Screen(2, 1, history_cap=2)
-        for _ in range(5):
+        for ch in "abcde":
+            _fill_row(s, 0, ch)
             s.lf()
         self.assertEqual(len(s.history), 2)
+
+    def test_blank_lines_are_not_retired(self):
+        # A CLI "clearing the screen" via cursor-home + a newline flood
+        # (Claude Code's own technique, not a real erase) must not be able
+        # to evict real scrollback -- see _retire_line.
+        s = Screen(2, 1, history_cap=10)
+        for _ in range(5):
+            s.lf()
+        self.assertEqual(len(s.history), 0)
+        _fill_row(s, 0, "x")
+        s.lf()
+        self.assertEqual(len(s.history), 1)
 
     def test_set_history_cap_preserves_contents(self):
         s = Screen(2, 1, history_cap=10)
         s.history.append([("a", 0)])
         s.set_history_cap(5)
-        self.assertEqual(s.history.maxlen, 5)
+        self.assertEqual(s.history_cap, 5)
         self.assertEqual(len(s.history), 1)
 
     def test_set_history_cap_noop_when_unchanged(self):

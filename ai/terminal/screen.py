@@ -21,7 +21,33 @@ class Screen:
         # Scrollback: rows that scroll off the top are captured here.
         # Cap is a user setting (scrollback_history_size); does NOT auto-size
         # on window resize. Stored as rstripped [(ch, attr), ...] cell-lists.
-        self.history = collections.deque(maxlen=history_cap)
+        # Unbounded deque, not deque(maxlen=cap): a maxlen deque evicts on
+        # every append unconditionally, which is exactly wrong while
+        # trim_paused (see there) -- eviction is enforced explicitly by
+        # _enforce_history_cap() instead, only when not paused.
+        self.history = collections.deque()
+        self.history_cap = max(0, int(history_cap))
+        # True while a viewer is scrolled back into history (set by the
+        # owner, e.g. ai_terminal.py mirroring its own "user is reading
+        # scrollback, not following" state -- see set_trim_paused). While
+        # True, _retire_line still appends and still fires on_retire_line
+        # (a session log must not lose lines just because someone is
+        # reading), it just does not evict the oldest line to make room --
+        # the read position stays valid instead of the buffer shifting out
+        # from under it. Deferred trims are caught up the moment this flips
+        # back to False.
+        self.trim_paused = False
+        # Monotonic count of every line ever retired, including ones the
+        # maxlen deque above has since silently evicted. A renderer that
+        # replaces the whole view text each frame (ai_terminal.py's non-
+        # patched render path) needs this: once history is at cap, each new
+        # retirement drops the oldest line, so the *same* fixed viewport
+        # pixel offset now points at different text (the buffer moved, not
+        # the viewport) -- comparing this counter's growth against
+        # len(history)'s growth between two renders gives the exact number
+        # of lines evicted from the top, which is how many line-heights the
+        # viewport must be shifted to keep showing the same content.
+        self.retired_total = 0
         # Optional callback(text: str), fired exactly once per line the
         # instant it permanently retires from the live viewport into
         # history -- i.e. it will never be redrawn or changed again. Callers
@@ -74,7 +100,7 @@ class Screen:
         self.attrs = new_attrs
         # Clip scrollback rows to the new width when the screen shrinks.
         if cols < self.cols:
-            new_hist = collections.deque(maxlen=self.history.maxlen)
+            new_hist = collections.deque()
             for row_cells in self.history:
                 new_hist.append(rstrip_cells(row_cells[:cols]))
             self.history = new_hist
@@ -124,11 +150,36 @@ class Screen:
         return 1006 in self.private_modes
 
     def set_history_cap(self, cap):
-        """Swap the scrollback deque to a new maxlen, preserving contents."""
+        """Change the scrollback cap, preserving contents.
+
+        A live cap edit (settings reload) is a deliberate, explicit user
+        action distinct from the ordinary per-line trim, so it applies
+        immediately regardless of trim_paused -- unlike a normal retirement,
+        this is not something happening *while* someone is mid-read, it is
+        the user themselves changing the rule.
+        """
         cap = max(0, int(cap))
-        if cap == self.history.maxlen:
+        if cap == self.history_cap:
             return
-        self.history = collections.deque(self.history, maxlen=cap)
+        self.history_cap = cap
+        self._enforce_history_cap()
+
+    def set_trim_paused(self, paused):
+        """Hold off evicting old scrollback while a viewer is reading it.
+
+        See trim_paused on __init__ for why. Resuming (paused: True->False)
+        immediately catches up any trims deferred while paused, rather than
+        waiting for the next retirement.
+        """
+        paused = bool(paused)
+        was_paused = self.trim_paused
+        self.trim_paused = paused
+        if was_paused and not paused:
+            self._enforce_history_cap()
+
+    def _enforce_history_cap(self):
+        while len(self.history) > self.history_cap:
+            self.history.popleft()
 
     def _retire_line(self, raw_cells):
         """Choke point for pushing a genuinely new line into scrollback.
@@ -137,9 +188,36 @@ class Screen:
         plain text exactly once. Both VT engines' scroll paths (this
         module's own _scroll_up, and ghostty_engine's _sync_scrollback)
         must call this instead of self.history.append() directly.
+
+        Does not evict the oldest line to enforce history_cap while
+        trim_paused -- see trim_paused on __init__. on_retire_line still
+        fires unconditionally for real lines: a session log must not lose
+        lines just because someone is reading scrollback right now.
+
+        A blank line is not appended to history at all (does not consume
+        capacity, does not fire on_retire_line, does not count toward
+        retired_total). Some CLIs (confirmed: Claude Code) "clear the
+        screen" on resize not with a real erase but by homing the cursor
+        and flooding 30-100+ blank newlines to scroll the old frame off --
+        against a capped history, one such flood evicts most or all of a
+        long real conversation to make room for lines that carry no
+        content (confirmed live 2026-08-18: a single resize -> 300 real
+        lines down to double digits). Blank lines were never something a
+        user could read back anyway, so refusing to spend scrollback
+        capacity on them costs nothing while making that flood harmless
+        regardless of its size. Trade-off: an intentional blank paragraph
+        break in real output also won't survive into old scrollback once
+        it scrolls off-screen -- deliberately accepted, real content
+        surviving matters more than exact blank-line spacing in history
+        a user is not currently looking at.
         """
         line = rstrip_cells(raw_cells)
+        if not any(ch.strip() for ch, _attr in line):
+            return line
         self.history.append(line)
+        self.retired_total += 1
+        if not self.trim_paused:
+            self._enforce_history_cap()
         if self.on_retire_line is not None:
             try:
                 self.on_retire_line("".join(ch for ch, _attr in line))
