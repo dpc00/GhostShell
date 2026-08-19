@@ -131,6 +131,18 @@
             // 1003l) at startup, never enables -- confirmed across 100+
             // recorded asciicast sessions (2026-08-11). No PTY-side receiver
             // for a forwarded click.
+            // follow_ignore_trailing_lines: was 2, too small now that
+            // ccstatusline's footer grew to 6 lines below the prompt
+            // (divider, Ctx Used, Model, Session, Reset, auto-mode) --
+            // several of those recompute every render (cost/session/weekly
+            // %), so with only 2 ignored the auto-scroll target kept
+            // chasing them, worst while typing (2 scroll_to_bottom() calls
+            // per keystroke -- one on keypress, one on the next render).
+            // 6 clears exactly the footer band -- do NOT go higher, the
+            // prompt row itself sits right above it and 8 pushed the
+            // follow target above the prompt, obscuring the command line
+            // with auto-follow unable to hold anywhere else (confirmed live
+            // 2026-08-18).
             "follow_ignore_trailing_lines": 2,
             "launch_command": [
                 "claude"
@@ -589,8 +601,13 @@
     // the resize poller picks up new column bounds within ~750ms.
     // Number of lines kept in scrollback history (the `history` deque).
     // This is the minimap-fill knob: at font 14 / 685px viewport, 300 fills
-    // the minimap. Retune by eye against the minimap when you change the
-    // window height or font size. Decreasing it may improve performance.
+    // the minimap exactly -- rigorously tested, deliberate (the whole
+    // buffer top-to-bottom is always visible in the minimap at once). Do
+    // NOT raise this to "fix" trim-induced viewport jumps -- that's what
+    // trim_paused + _compensate_trim_scroll are for (2026-08-18); this
+    // number is a display-fit constant, not a jumpiness knob. Retune by
+    // eye against the minimap when you change the window height or font
+    // size. Decreasing it may improve performance.
     // Live: changing this swaps the live deque (trims oldest if smaller).
     "scrollback_history_size": 300,
     // claude --model gemini-2.5-pro
