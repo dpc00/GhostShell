@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
-.pytest_cache/
+.pytest*/
+
 
 # Built binary artifact -- keep on disk (required at runtime) but don't track in git.
 *.dll
@@ -15,6 +16,7 @@ ai_terminal_secrets.sublime-settings
 auth.json
 .env
 .env.*
+.mimo*/
 
 # Session recordings/transcripts are verbatim terminal output (keys, source).
 *.cast
