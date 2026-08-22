@@ -77,10 +77,13 @@ class Screen:
         # render.py).
         self.cursor_shape = "block"
         self.dirty = True
-        # Last hardware cursor column while on the `>` prompt row. Used by
-        # adjust_display_caret when Claude parks the cursor on the status bar
-        # so ST restores the exact input column (not end-of-text - 1).
+        # Last hardware cursor column/row while inside the (possibly
+        # multi-line) input field. Used by adjust_display_caret when Claude
+        # parks the cursor on the status bar so ST restores the exact input
+        # position (not end-of-text - 1, and not the first prompt row when
+        # the field spans several rows).
         self.input_caret_x = None
+        self.input_caret_row = None
         # DEC private modes the app enabled (e.g. 1000/1002/1003 mouse,
         # 1006 SGR coords, 2004 bracketed paste, 1049 alt screen). Parser
         # mutates this set; mouse routing reads it.
@@ -116,6 +119,7 @@ class Screen:
         self.x = self.y = 0
         self.private_modes.clear()
         self.input_caret_x = None
+        self.input_caret_row = None
         self.cursor_visible = True
         self.cursor_shape = "block"
         self.dirty = True

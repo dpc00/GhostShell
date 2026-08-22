@@ -3381,7 +3381,10 @@ def _do_render(term):
 
     with term._lock:
         rows, cy, cx = term.screen.render_cells()
-        cy, cx = _adjust_display_caret(term.screen, cy, cx)
+        # Bisection gate (ai_terminal.sublime-settings): raw hardware
+        # position when disabled, Terminus-style -- see settings comment.
+        if _setting_bool("caret_footer_pinning_enabled", False):
+            cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
         # The Screen holds the tab's full pinned row count (force_main_screen
         # pins rows -- see _LayoutWatcher._run -- so a plain shell's mostly-
@@ -3395,7 +3398,10 @@ def _do_render(term):
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
     plain_sig = _plain_cells_signature(rows)
-    if term.screen.cursor_visible:
+    # Bisection gate (ai_terminal.sublime-settings): when disabled, rely
+    # solely on the real ST caret + whatever reverse-video the app itself
+    # already sends, Terminus-style -- see settings comment.
+    if term.screen.cursor_visible and _setting_bool("host_cursor_paint_enabled", False):
         rows, _host_painted = _paint_host_cursor(rows, cy, cx, shape=term.screen.cursor_shape)
     else:
         # App hid the real cursor (DECTCEM off, ESC[?25l) -- fullscreen TUIs
@@ -3428,8 +3434,11 @@ def _do_render(term):
     # Burst typing / L-R cursor: PTY cells unchanged (plain_sig stable); only
     # host █ / reverse highlight + ST selection move. Mid-line reverse moves
     # keep the *text* identical — still a fast frame (regions + selection).
+    # Bisection gate (ai_terminal.sublime-settings): off = always full-buffer
+    # replace, no partial diff-patching -- see settings comment.
     fast_caret = (
-        prev_plain is not None
+        _setting_bool("fast_caret_patch_enabled", False)
+        and prev_plain is not None
         and prev_plain == plain_sig
         and prev_text is not None
         and (prev_text != text or prev_caret != caret_now)
@@ -4315,7 +4324,14 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
             # for modifier-drags (text selection) and multi-click (word/line
             # select) -- those are never cursor-placement gestures.
             tracked = _mouse_handling_enabled(term) and bool(term.screen.mouse_tracking)
-            if not modified and not multi and not tracked:
+            # Bisection gate (ai_terminal.sublime-settings): off by default --
+            # see settings comment.
+            if (
+                not modified
+                and not multi
+                and not tracked
+                and _setting_bool("click_to_cursor_fallback_enabled", False)
+            ):
                 _route_click_to_cursor_fallback(view, term, event)
             if not _mouse_handling_enabled(term):
                 return None
@@ -6067,7 +6083,14 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # a real click/nav outside our own render pass -- see there). A
         # CLI's own idea of where the cursor belongs must never override
         # what the user actually did.
-        keep_selection = bool(term is not None and getattr(term, "_user_owns_caret", False))
+        # Bisection gate (ai_terminal.sublime-settings): when disabled, the
+        # render loop always re-syncs to the PTY cursor every frame,
+        # unconditionally, Terminus-style -- see settings comment.
+        keep_selection = bool(
+            term is not None
+            and getattr(term, "_user_owns_caret", False)
+            and _setting_bool("user_owns_caret_enabled", False)
+        )
         if keep_selection and term is not None and term._auto_follow:
             # Self-heal a false latch: on_selection_modified's on-command-line
             # check (_command_line_row_range / _live_cursor_row) can mis-fire

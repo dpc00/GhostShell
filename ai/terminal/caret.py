@@ -172,6 +172,48 @@ def _clamp_live_col(screen, prompt_y, col):
     return min(max(int(col), start), limit)
 
 
+def _row_has_content(screen, y):
+    """True if row y has any non-blank cell (ignoring pure box borders)."""
+    row = screen.grid[y]
+    n = min(len(row), screen.cols)
+    for i in range(n):
+        ch = row[i]
+        if ch not in (" ", " "):
+            return True
+    return False
+
+
+def input_field_last_row(screen, py):
+    """Last row (>= py) that is still part of the (possibly multi-line) input.
+
+    A single-line prompt's field is just `py`. When the composer wraps a long
+    or literal multi-line prompt across several rows, those continuation rows
+    have no `>` marker of their own, so find_prompt_row can't see them — the
+    only signal available is that they are non-blank rows directly below py
+    with no gap. The field ends at the first blank row after py (the visual
+    separator Claude Code and friends draw before the status footer); a blank
+    row immediately at py + 1 means the field really is just the one row.
+    """
+    last = py
+    y = py + 1
+    while y < screen.rows and _row_has_content(screen, y):
+        last = y
+        y += 1
+    return last
+
+
+def _clamp_row_col(screen, y, py, col):
+    """Clamp a column on row y of the input field.
+
+    Row py has the `>` marker and right-side chrome to respect; continuation
+    rows (y > py) are plain wrapped text with no marker/border semantics, so
+    just keep the column inside the grid — trust the PTY's x on those rows.
+    """
+    if y == py:
+        return _clamp_live_col(screen, py, col)
+    return min(max(int(col), 0), screen.cols - 1)
+
+
 def adjust_display_caret(screen, cy, cx):
     """Map PTY cursor to ST caret; pin to prompt when parked on status footer."""
     py = find_prompt_row(screen)
@@ -179,27 +221,30 @@ def adjust_display_caret(screen, cy, cx):
         return cy, cx
 
     hist = 0 if screen.alt_screen else len(screen.history)
+    field_end = input_field_last_row(screen, py)
 
-    # Live on the prompt row: Terminus style — trust hardware cursor only.
-    if screen.y == py:
-        col = _clamp_live_col(screen, py, int(screen.x))
+    # Live somewhere inside the input field (single row, or any row of a
+    # wrapped/multi-line prompt): trust the hardware cursor's row and column.
+    if py <= screen.y <= field_end:
+        col = _clamp_row_col(screen, screen.y, py, int(screen.x))
         screen.input_caret_x = col
-        return hist + py, col
-    if screen.y == py + 1:
-        # Border under the input box — leave hardware as-is (rare).
-        return cy, cx
+        screen.input_caret_row = screen.y
+        return hist + screen.y, col
 
-    # Below the input box (status footer): Claude often parks here while the
-    # edit buffer is still on `>`. Pin display caret to the prompt so left/right
-    # are not dead. (Terminus does not do this; we keep a minimal pin only when
-    # hardware is clearly off the input row.)
-    if screen.y > py + 1:
+    # Below the input field (status footer): Claude often parks here while
+    # the edit buffer is still on the prompt. Pin display caret to the last
+    # known in-field position so left/right/up/down are not dead. (Terminus
+    # does not do this; we keep a minimal pin only when hardware is clearly
+    # off the input field.)
+    if screen.y > field_end:
+        row = getattr(screen, "input_caret_row", None)
         col = getattr(screen, "input_caret_x", None)
-        if col is None:
+        if row is None or col is None:
+            row = py
             col = content_end_col(screen, py)
         else:
-            col = _clamp_live_col(screen, py, col)
-        return hist + py, col
+            col = _clamp_row_col(screen, row, py, col)
+        return hist + row, col
 
     return cy, cx
 
