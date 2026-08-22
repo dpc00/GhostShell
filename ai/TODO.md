@@ -3,6 +3,172 @@
 Open/unresolved items only. Full dev-session history (root causes, fixes,
 verification detail) lives in [TODO-archive.md](TODO-archive.md).
 
+## Session baton (2026-08-21) — multi-line cursor fix landed, bisection gates added, character-splatter bug found (UNRESOLVED), restart required
+
+Long session (423K context at handoff). Three separate threads of work;
+read all three before touching anything here. Full prior-art history for
+the cursor/caret system (every change, why, revert-consideration per item)
+is written up separately in [CURSOR_SYSTEM_HISTORY.md](CURSOR_SYSTEM_HISTORY.md)
+— read that first, it's the map of everything this baton builds on.
+
+### 1. Multi-line prompt cursor bug — FIXED, live-reload-verified only
+
+**Root cause.** `caret.py`'s `adjust_display_caret` assumed the prompt is
+exactly one row (`find_prompt_row`'s `py`); anything more than one row below
+`py` was treated as "parked on the status footer" and pinned back up. A
+multi-line prompt's continuation lines are naturally >1 row below `py`, so
+editing line 2+ of your own typed text got misclassified as footer-park and
+the visible caret got yanked to the wrong row. Same assumption also broke
+the click-to-cursor router (`ai_terminal.py`, `_route_click_to_cursor_fallback`,
+gated off — item 3 below) and contributed to the block cursor intermittently
+not appearing at all (`render.py`'s `paint_host_cursor` silently no-ops on an
+out-of-range position instead of erroring).
+
+**Fix.** `caret.py`: added `_row_has_content`/`input_field_last_row` (scans
+downward from `py` while rows are non-blank — a wrapped/multi-line prompt's
+continuation lines count as still-input; the field ends at the first blank
+row, the real separator before the footer). `adjust_display_caret` now
+trusts the hardware cursor anywhere inside that field; only pins when
+genuinely past it. `screen.py` gained a companion `input_caret_row` (next to
+the existing `input_caret_x`) so the footer-pin remembers which row to
+restore, not just which column.
+
+**Verified:** live `importlib.reload()` of both modules in the running
+process confirmed the new code loads and `input_field_last_row` exists.
+**Not verified:** an actual restart + live multi-line-prompt edit test. Do
+that first.
+
+### 2. Terminus-deviation bisection gates — landed, current live state below
+
+Per explicit user direction: every GhostShell addition on top of Terminus's
+baseline cursor model (verified this session against Terminus's real source,
+`terminus/render.py` `focus_cursor` — ~10 lines, raw PTY position, no
+remapping/pinning/synthesis/override) should be independently gatable so a
+regression can be bisected by disabling everything and re-enabling one flag
+at a time.
+
+Five settings added to `ai_terminal.sublime-settings` (top of file, fully
+commented inline — read the comments there, not just this summary), wired
+into `ai_terminal.py` behind `_setting_bool(<key>, False)`, read fresh every
+render, no reload needed:
+
+- `caret_footer_pinning_enabled` — gates item 1's `adjust_display_caret`.
+- `host_cursor_paint_enabled` — gates `render.py`'s `paint_host_cursor`.
+- `click_to_cursor_fallback_enabled` — gates `_route_click_to_cursor_fallback`.
+- `user_owns_caret_enabled` — gates `term._user_owns_caret` read in
+  `AiTerminalRenderCommand._run`.
+- `fast_caret_patch_enabled` — gates the diff-patch shortcut in
+  `AiTerminalRenderCommand._run` (partial `view.replace` instead of full
+  buffer replace).
+
+**Current live values (as left this session):**
+`caret_footer_pinning_enabled: true`, everything else `false`. This is
+*not* the full Terminus baseline — it's the safest configuration found
+after two real incidents (below), not a deliberate bisection endpoint. Full
+bisection (all five false, retest, re-enable one at a time) has not
+actually been completed — it kept getting interrupted by real regressions.
+
+**Two incidents from testing this, both resolved by re-enabling a gate:**
+1. Disabling `caret_footer_pinning_enabled` fed `trim_display_rows`
+   (**not itself gated** — see "Still open" below) a raw `cy` that jumps to
+   Claude's footer; `trim_display_rows` treats a cursor parked away from
+   content as "drop everything below the last real row," so real scrollback
+   content (not just blank padding) got dropped — reported live as "300
+   lines missing, tab down to ~22 lines." Fixed by restoring
+   `caret_footer_pinning_enabled: true`. **`trim_display_rows` has a real,
+   undocumented-until-now dependency on this gate staying on.**
+2. Disabling `fast_caret_patch_enabled` caused visible "last line
+   add/subtract" jiggle (every footer token/cost update forcing a full-buffer
+   replace instead of a cheap patch) — cosmetic, not data-loss, left off
+   intentionally in the final state.
+
+### 3. Character-splatter bug — NOT RESOLVED, NOT explained, independent of items 1-2
+
+**Symptom:** pasting/reading back rendered terminal text shows individual
+characters wrong — spaces replaced by a stray letter/digit, or by long runs
+of `─` (U+2500) — confirmed via `get_view_content` direct buffer inspection,
+not just user-reported paste artifacts. Self-heals on the next full redraw
+(transient torn-frame, not persistent corruption).
+
+**Ruled out this session:**
+- Not solely caused by `caret_footer_pinning_enabled` being off (reproduced
+  with it back on).
+- Not solely caused by `fast_caret_patch_enabled` (reproduced with it both
+  on and off).
+- Not a missing-lock bug at the Python level in the paths actually audited:
+  every `term.screen.grid`/`render_cells()` access site found in
+  `ai_terminal.py` (`_do_render`, `snapshot`, `_command_line_row_range`, the
+  debug dump command) is correctly wrapped in `with term._lock:`/
+  `with self._lock:`, matching the PTY reader thread's own locking in
+  `_on_data`. This was a real audit (grepped every `term.screen.`/
+  `self.screen.` access site), not a guess.
+
+**User's working theory, not yet confirmed or refuted:** this exact
+splatter hasn't occurred in weeks; it resurfaced specifically after this
+session's gates were flipped off for the first time. If true, one of the still-off
+settings (`host_cursor_paint_enabled` is the only one of the three that
+touches painted text content at all — `click_to_cursor_fallback_enabled` and
+`user_owns_caret_enabled` only affect position/selection, not painted
+characters) may have been incidentally masking or timing-avoiding a
+pre-existing bug. **Not tested** — see "Still open" below for why.
+
+**Suspected deeper cause, not confirmed:** if it's concurrency-related at
+all, it's more likely inside the ctypes boundary to `libghostty-vt` (the
+native Zig library) than in Python-level lock discipline, given the audit
+above. `ghostty_vt.py`/`ghostty_engine.py`'s actual ctypes calls were not
+audited this session.
+
+**A stress-test attempt this session went wrong and must not be repeated
+the same way:** ran a two-thread (writer feeds known text / reader calls
+`render_cells()` in a tight loop) stress test via `eval_python` — i.e.
+*inside the live Sublime plugin_host process*, the same process as the
+user's actual live terminal rendering. It did not complete cleanly (appears
+hung or pathologically slow; `screen.render_cells()`/`GhosttyParser.feed()`
+may have a real hang under sustained concurrent load, itself a lead worth
+keeping) and leaked threads (39 active threads observed, up from a normal
+baseline) into the live process. The user then observed the character-
+splatter symptom live, immediately, plausibly *caused by* GIL/CPU
+contention from those leaked threads racing the real render thread — i.e.
+the test may have reproduced the bug's trigger condition by accident, for
+the wrong reason (self-inflicted resource contention), not by isolating the
+real cause. **A restart was already planned and is now also the only clean
+way to reap those leaked threads** (no clean kill API for raw Python
+threads).
+
+### Still open, in priority order
+
+1. **Restart Sublime.** Required to: pick up item 1's fix beyond the live
+   `importlib.reload()` already done; reap the leaked stress-test threads
+   from item 3; get a clean baseline before any further live testing.
+2. **Re-run the multi-line-prompt cursor test post-restart**, current gate
+   state (`caret_footer_pinning_enabled: true`, rest `false`). Confirm item 1
+   actually fixed the original complaint before doing anything else.
+3. **If pursuing the splatter bug further:** any stress/concurrency test
+   MUST run as a fully separate, isolated `python` subprocess (spawnable and
+   killable independently), never injected via `eval_python` into the same
+   process as the user's live Sublime/terminal session again. A
+   `tests/test_*.py`-style file using `Screen`/`GhosttyParser` directly
+   (both are pure-Python, no Sublime imports per their own docstrings) run
+   via a real `python -m pytest` subprocess is the correct shape for this,
+   not an in-process thread stress test.
+4. **`trim_display_rows` is not gated** despite touching cursor-adjacent
+   behavior (drops rows based on `cy`) — deliberately excluded from the
+   five bisection gates as "unrelated to cursor position," which incident 1
+   above disproved (it has a real dependency on `caret_footer_pinning_enabled`).
+   Consider whether it needs its own gate, now that the dependency is known
+   and documented (see the settings file comment on
+   `caret_footer_pinning_enabled`).
+5. **Complete the actual bisection** the gates were built for (all five
+   false, confirm clean, re-enable one at a time) — never actually finished;
+   every attempt got interrupted by a real regression (items 2's two
+   incidents, then the splatter bug, then the stress-test mistake). The user
+   explicitly does not want to "wait for an accident" — the isolated-
+   subprocess stress-test approach in (3) is the way to make this
+   deterministic instead of opportunistic.
+6. **Audit `ghostty_vt.py`/`ghostty_engine.py`'s ctypes calls** for
+   thread-safety, if (3)'s isolated stress test reproduces the splatter and
+   points at the native boundary rather than Python-level logic.
+
 ## Status-line resize/rewrap loop during active TUI output — CODE LANDED, PARTIAL LIVE-VERIFY (2026-08-18)
 
 Reported live by the user while a Claude Code session was actively

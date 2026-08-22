@@ -1,4 +1,65 @@
 {
+    // --- Cursor/caret deviation-from-Terminus bisection gates (2026-08-21) ---
+    // Terminus's entire cursor model (verified directly against its real
+    // source): take the PTY's raw cursor position, add the scrollback
+    // offset, place the ST caret there. No remapping, no pinning, no click-
+    // to-position synthesis, no manual-selection override. Everything below
+    // is a GhostShell addition on top of that baseline, each independently
+    // gatable so a command-line cursor/editing regression can be bisected by
+    // disabling all of them (the settings below), retesting, then flipping
+    // ONE back to true at a time and retesting until the offender surfaces.
+    // Live: read fresh every render, no reload needed.
+    //
+    // caret_footer_pinning_enabled: caret.py's adjust_display_caret --
+    // remaps/pins the display caret when the app parks its hardware cursor
+    // off the live prompt row (built to hide Claude's footer-repaint
+    // flicker). False = raw hardware (y, x) used directly, Terminus-style.
+    // RESTORED TO TRUE 2026-08-21: disabling this fed trim_display_rows
+    // (ai/CURSOR_SYSTEM_HISTORY.md item 6, not itself gated) a raw cy that
+    // jumps to Claude's footer -- trim_display_rows treats a cursor parked
+    // away from content as "drop everything below the last real row," which
+    // with an unpinned cy meant real scrollback content, not just blank
+    // padding, got dropped (reported: 300 lines missing, tab down to ~22-26
+    // lines and still shrinking). Leave this true until trim_display_rows
+    // itself is also gated and that combination is retested deliberately.
+    "caret_footer_pinning_enabled": true,
+    // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
+    // a visible block/bar/underline/hollow glyph or reverse-video cell on top
+    // of the plain rendered text. False = rely solely on the real ST caret
+    // (still positioned per caret_footer_pinning_enabled above) plus
+    // whatever reverse-video the app itself already sends.
+    "host_cursor_paint_enabled": false,
+    // click_to_cursor_fallback_enabled: _route_click_to_cursor_fallback --
+    // synthesizes Left/Right keypresses so a mouse click repositions the
+    // app's real PTY-side cursor for agents with no DEC mouse-tracking
+    // receiver (Claude Code, Gemini, Antigravity, Codex, Kimi, Kiro, Junie).
+    // False = clicking only moves ST's local selection, same as raw PTY
+    // click-to-position has always meant for these agents.
+    "click_to_cursor_fallback_enabled": false,
+    // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
+    // selection outside the live prompt row permanently hold the ST caret in
+    // place instead of the render loop re-snapping it to the PTY cursor every
+    // frame. False = the render loop always re-syncs the caret to the PTY
+    // cursor, every frame, unconditionally.
+    "user_owns_caret_enabled": false,
+    // fast_caret_patch_enabled: AiTerminalRenderCommand's diff-patch shortcut
+    // -- instead of replacing the whole view text every frame, it writes only
+    // the handful of cells that changed (built for paint_host_cursor's 0-2-
+    // cell glyph move). Its safety assumption is that cursor row/column stay
+    // stable frame to frame, which caret_footer_pinning_enabled normally
+    // guarantees; with that disabled, the raw hardware cursor can jump to
+    // Claude's footer and back, changing how much padding a row gets even
+    // when real content hasn't -- the diff-patch then writes a few
+    // characters at the wrong offsets (a visible splatter that self-heals on
+    // the next full-buffer render). False = always do the full-buffer
+    // replace, no partial patching, Terminus-style (Terminus does not have
+    // an equivalent optimization at all).
+    // REVERTED TO FALSE 2026-08-21, same session: character-splatter
+    // corruption still reproduced with caret_footer_pinning_enabled back on,
+    // disproving the "only unstable cx/cy" theory above -- the diff-patch is
+    // unreliable on its own, not just in combination with the other gate.
+    // Leave false: correctness over the cosmetic footer jiggle.
+    "fast_caret_patch_enabled": false,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {
