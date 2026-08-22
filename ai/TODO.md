@@ -35,8 +35,14 @@ restore, not just which column.
 
 **Verified:** live `importlib.reload()` of both modules in the running
 process confirmed the new code loads and `input_field_last_row` exists.
-**Not verified:** an actual restart + live multi-line-prompt edit test. Do
-that first.
+**Restart-verified 2026-08-21:** after a full Sublime restart, user
+confirmed the ST vertical-line caret sits in the correct place on the
+command line, and cursor-key positioning/insert is correct. No block
+cursor shown and mouse click doesn't reposition the PTY cursor — both
+expected, since `host_cursor_paint_enabled` and
+`click_to_cursor_fallback_enabled` are currently `false` (confirmed at
+the call sites, `ai_terminal.py:3404` and `ai_terminal.py:4333`), not a
+regression.
 
 ### 2. Terminus-deviation bisection gates — landed, current live state below
 
@@ -61,12 +67,270 @@ render, no reload needed:
   `AiTerminalRenderCommand._run` (partial `view.replace` instead of full
   buffer replace).
 
-**Current live values (as left this session):**
-`caret_footer_pinning_enabled: true`, everything else `false`. This is
-*not* the full Terminus baseline — it's the safest configuration found
-after two real incidents (below), not a deliberate bisection endpoint. Full
-bisection (all five false, retest, re-enable one at a time) has not
-actually been completed — it kept getting interrupted by real regressions.
+**Current live values (2026-08-21, post-restart session):**
+`caret_footer_pinning_enabled: true`, `host_cursor_paint_enabled: true`,
+`click_to_cursor_fallback_enabled: true`, `user_owns_caret_enabled: true`,
+`fast_caret_patch_enabled: false`. Changed from the prior baton's
+all-off-except-pinning state by live-testing the first two gates directly
+in this session's own terminal tab. This is still *not* the full Terminus
+baseline and still not a completed bisection — `caret_footer_pinning_enabled`
+and `fast_caret_patch_enabled` remain untouched because of the two
+incidents below.
+
+**`host_cursor_paint_enabled: true` — live-verified 2026-08-21.** Flipped
+via `sublime.load_settings/save_settings` (the plugin's own settings API,
+not a raw file edit). Screenshot before/after: prior state showed a thin
+ST vertical-line caret at the prompt; after enabling, a solid block glyph
+renders at the same position. No console errors.
+
+**`click_to_cursor_fallback_enabled: true` — live-verified 2026-08-21,
+first real test since this flag was added.** Direct verification of
+`_route_click_to_cursor_fallback` (`ai_terminal.py:3868`), not just gate
+wiring: typed known text into the live prompt via `ai_terminal_send_string`,
+then invoked the real `drag_select` command with a synthesized `event`
+dict targeting a point mid-string (Sublime's actual command dispatch, not
+OS-level input simulation). Result: `screen.x` (the PTY's real cursor
+column) moved from 18 to 7, matching the clicked target column (confirmed
+via a 0.5s poll, since the move requires a real PTY round-trip: keys
+written, child process processes them, re-renders).
+
+Also found while diagnosing this: the guard condition (`screen.y != py`)
+can fail because `_find_prompt_row`'s `❯` scan sometimes locks onto a
+stale scrollback line (e.g. a resolved permission dialog's "❯ 1. Yes")
+instead of the live input row — the first two click attempts silently
+no-op'd for this reason before one where `py` and `screen.y` genuinely
+matched. Not yet filed as its own bug; worth deciding whether
+`_find_prompt_row` should exclude menu/choice lines from its scan.
+
+**`user_owns_caret_enabled: true` — live-verified 2026-08-21.** Tests both
+directions of `AiTerminalViewListener.on_selection_modified` (`ai_terminal.py:3731`)
+against `_command_line_row_range` (`ai_terminal.py:3566`):
+- **Outside the drawn command-line box** (clicked well up in scrollback via
+  `drag_select`): `term._user_owns_caret` latched `True`, and the ST
+  selection genuinely stayed put across 3 polls of live, actively-streaming
+  render frames (`screen.dirty=True` each poll) — proving
+  `user_owns_caret_enabled`'s `keep_selection` gate
+  (`ai_terminal.py:6089-6093`) really does protect a manual selection from
+  being overridden, not just that the flag gets set.
+- **Inside the drawn command-line box**: `term._user_owns_caret` correctly
+  flips back to `False`, handing control back to the PTY cursor. Verifying
+  this directly via synthesized clicks proved unreliable — the box's row
+  bounds drift by 2+ rows between computing a target point and the real
+  Sublime-dispatched event firing, because this session's own output was
+  streaming into the same tab being tested (a genuine live-scroll race, not
+  a code bug). Resolved by instantiating `AiTerminalViewListener` and
+  calling `on_selection_modified()` directly in the same call as setting
+  `view.sel()`, eliminating the race; confirmed `_user_owns_caret` flips
+  `False` when the selection is genuinely inside fresh-computed bounds.
+
+Leaves only `caret_footer_pinning_enabled` and `fast_caret_patch_enabled`
+untouched from the prior baton's state, per their two documented incidents
+above (dropped scrollback content; unreliable diff-patch under an unstable
+cursor row) — not retested this session, deliberately.
+
+**Isolated-tab testing method established, 2026-08-21 — use this instead of
+testing in a live conversation tab.** Live-testing gates directly in the
+Sublime tab this very conversation renders through caused repeated
+collateral damage this session (a manual selection left mid-scrollback, a
+whole-buffer select, a caret pinned at row 0 that yanked the user's
+viewport to the top of the tab). Fix: spawn the existing `Testing Agent`
+profile (`tests/mock_agent_cli.py`, no flags — Codex-style full-transcript
+replay on every Enter, controllable via `ai_terminal_send_string` with
+`5
+`/`s
+`/etc.) in its own tab via `_spawn(window, path,
+profile="Testing Agent")`, and drive/inspect that tab's buffer instead.
+Bisection gate settings are global (`ai_terminal.sublime-settings`), so
+this tab runs under the exact same live gate state as any other profile —
+no loss of coverage, zero risk to a real conversation.
+
+**Splatter-bug follow-up, live-plugin repro attempt (2026-08-21).** The
+isolated `tests/test_splatter_stress.py` subprocess (see above) only
+exercises `Screen`/`GhosttyParser` directly, not the actual
+`AiTerminalRenderCommand`/`view.replace` render path — this was a first
+attempt to close that gap using the live plugin, safely, in the isolated
+Testing Agent tab. Found a **real duplicate-line artifact at initial
+spawn**: right after `_spawn`, before any input was sent, the buffer
+already contained `TURN-01 L11`/`L12` each appearing twice consecutively.
+Sending 5 more turns immediately after (`ai_terminal_send_string` with
+`"5"` then `"
+"` — this mock is line-buffered, not raw-keypress
+despite its docstring) added 5 clean turns with **zero** further
+duplication, and a full-buffer scan for the other splatter symptom (stray
+high-codepoint characters / long ─ runs) came back clean too. **Read as:**
+the duplication is specific to the very first replay/render right after
+spawn, not a steady-state per-turn bug — consistent with the TODO's
+existing "Not applied (on purpose)" note on `update_replace_scroll`/history-
+append dumps needing their own failing parser test, but not yet connected
+to that code path with certainty. Worth a dedicated repro (spawn, capture
+raw PTY bytes for just the first render, replay through `GhosttyParser`
+in isolation) before concluding more.
+
+**SUPERSEDED by a real splatter repro, same session, minutes later.**
+Continuing to drive the Testing Agent tab (spawn + one `5
+`, 7 turns
+total) surfaced genuine intra-line character-splatter, caught live by the
+user watching the tab and confirmed in `term.screen.history` directly
+(not just an ST-buffer/render-layer artifact — the corruption is baked
+into the Python `Screen.history` deque itself, index 30 of 216):
+
+    30 '› user prompt TURN-01ent reply line 7011'
+
+The real line is `› user prompt TURN-01`; `ent reply line 7011` is the
+tail of an unrelated `• TURN-07 L11 mock agent reply line 7011` line,
+spliced directly into it. TURN-07 did not exist yet when TURN-01 was first
+retired — this is old, already-retired content getting corrupted by a
+much later write, not a fresh line born wrong.
+
+**Narrowed past the point of vague ctypes suspicion:** checked
+`term.screen.retired_total` (2) against total history length (216) —
+almost every line came through `_sync_scrollback`'s **full-rebuild path**
+(`ghostty_engine.py:606-608,623`: `s.history.clear()` then rebuild every
+row via `terminal_grid_ref`/`_cell_from_grid_ref`, `notify=False`), not
+the incremental `start=last` diff path (that path's own
+`s.history.append(rstrip_cells(cells))`/`_retire_line` both build a fresh
+Python list per row — audited this session, no aliasing bug in either).
+This mock replays the full transcript on every Enter (Codex-style
+home+dump), so a full rebuild runs on every turn. Since the rebuild is
+single-threaded, entirely inside one `_sync_scrollback` call, under
+`term._lock`, with no Python-level list aliasing in the path — the
+splice must be happening in the native call sequence itself:
+`self._g.terminal_grid_ref(self._term, pt, ctypes.byref(ref))` /
+`_cell_from_grid_ref(ref, palette)` (`ghostty_engine.py:613-619`)
+returning wrong content for some `(x, y)` during a 216-row rebuild loop.
+**This is now the concrete, reproducible trigger condition the TODO's
+priority-6 ctypes audit ("if an isolated stress test reproduces the
+splatter and points at the native boundary") was waiting for** — a full-
+transcript-replay TUI (Codex-style, or this mock) driving a large
+scrollback rebuild, not raw concurrent feed/render load (which
+`test_splatter_stress.py` tested and found clean).
+
+**Next step, concrete and no longer speculative:** write an isolated
+subprocess test (same shape as `test_splatter_stress.py`) that feeds a
+`GhosttyParser`/`Screen` pair a Codex-style repeated full-transcript-dump
+pattern (CSI ?2026h, CSI H, N turns of content, CSI ?2026l, repeated with
+growing N) and asserts every retired history line matches its known
+source text exactly. If it reproduces there, the bug is confirmed inside
+`terminal_grid_ref`/`_cell_from_grid_ref` or the native library itself,
+not this plugin's Python code, and the fix path is either a workaround
+in `_sync_scrollback` (defensive re-validation before overwriting
+already-retired history) or a report upstream to libghostty-vt. 
+
+**Isolated repro attempt result, 2026-08-21 — did NOT reproduce the exact
+splice, but found a DIFFERENT, real, more serious bug: silent content
+loss.** Wrote `tests/test_splatter_replay_rebuild.py`: feeds a
+`GhosttyParser`/`Screen` (80x24, `history_cap=2000`) the exact
+`mock_agent_cli.py` `ReplayAgent` byte pattern (seed 3 turns, then 5 more
+turns each re-sending the WHOLE growing transcript). At these dimensions,
+no cross-turn splice occurred (the `spliced` check — a history line
+containing more than one `TURN-NN` tag — came back empty), so the exact
+live splice is dimension/timing-sensitive and not yet reproduced
+byte-for-byte in isolation.
+
+**What it found instead, deterministically, every run:** `TURN-00`'s
+entire 29-line block (prompt + 28 replies) vanishes completely from both
+`screen.grid` and `screen.history` the moment the FIRST post-seed turn is
+added (turn 3's full-transcript re-dump) — not evicted gradually, gone in
+one step. The numbers do not reconcile: `parser._last_scrollback_rows`
+(native-reported total) jumps from 64 to 157 after that one feed, but
+Python's rebuilt `history + grid` only totals 117 lines (93 history + 24
+grid) — **40 rows are unaccounted for**, despite `history_cap=2000` being
+nowhere near exceeded (`_enforce_history_cap` never had a reason to evict
+anything at 93 lines). `screen.retired_total` stays 0 throughout (matching
+the live session's near-zero count) — confirms this is entirely the
+full-rebuild path (`ghostty_engine.py:606-608,623`), which faithfully
+mirrors whatever `terminal_grid_ref` reports at sync time. If native's own
+scrollback already evicted TURN-00 internally before Python ever asks, the
+rebuild is just reporting reality accurately — meaning the actual loss
+happens **inside libghostty-vt itself**, either not honoring the
+`max_scrollback` passed to `terminal_new` (`ghostty_engine.py:84-90`),
+or hitting an internal limit when a single `terminal_vt_write` call
+contains a very large paste-style dump (the seed dump is ~87 lines onto a
+24-row screen; the first post-seed dump is ~116 lines in one call).
+
+**Next step:** vary one variable at a time to isolate the trigger — (a)
+confirm/deny `max_scrollback` is honored by checking native scrollback
+capacity directly (if the API exposes it) rather than inferring from
+Python-side symptoms, (b) shrink `_LINES_PER_TURN` to see if a
+smaller single-dump byte volume avoids the loss (byte-volume-triggered
+vs. row-count-triggered), (c) try feeding the seed and first growth turn
+as SEPARATE smaller `feed()` calls instead of one another to see if
+splitting the write avoids it. This is a different, likely more consequential
+finding than the original character-splice symptom — a full-replay TUI
+(Codex-style) with a long conversation could silently drop entire early
+turns from scrollback/logging, not just show a cosmetic glitch. Worth its
+own priority-1 slot alongside the splice, not folded into item 6's
+audit as a footnote.
+
+**BOTH bugs root-caused, 2026-08-21 — this is no longer speculative.**
+Isolated the mechanism for both symptoms by querying native rows directly
+via `terminal_grid_ref`/`_cell_from_grid_ref`, bypassing `_sync_scrollback`
+entirely, immediately after the seed(3)+turn(3) repro above.
+
+**Content-loss bug — plain Python logic bug, easy fix, NOT native.**
+Direct query of native rows y=0-9 (right after the second feed, when
+Python-side `screen.history` was already missing TURN-00) still returned
+TURN-00's exact correct text. The native library never lost it. The loss
+is entirely inside `_sync_scrollback`'s `self._replace_scroll` branch
+(`ghostty_engine.py:590-601`, the "home+2026 dump" reconstruction path,
+which fires because this replay pattern IS exactly a home+sync dump):
+
+    if self._replace_origin is None:
+        self._replace_origin = last          # e.g. 64, the row count before this dump
+    origin = self._replace_origin
+    ...
+    s.history.clear()                        # wipes rows [0, origin) too
+    start = origin                            # ...but only rebuilds [origin, scrollback_rows)
+    notify = False
+
+`s.history.clear()` discards everything, including the already-correct
+rows `[0, origin)`, but the rebuild loop right after only re-fetches
+`[origin, scrollback_rows)` — rows before `origin` are never repopulated.
+The premise of pinning `origin` is "only the tail changed, old rows are
+already correct in `s.history`" — true, but contradicted by clearing
+`s.history` first. **Fix is straightforward:** either don't clear
+`s.history` in this branch (keep the existing prefix, only append/replace
+`[origin, scrollback_rows)`), or if a clear is genuinely needed, rebuild
+from `0`, not `origin`. Not applied yet this session — flagging as a
+confirmed, scoped, low-risk fix for next session rather than rushing it
+in in the middle of investigation.
+
+**Splice bug — confirmed real and native-level, reproduced deterministically,
+independent of any Python-side logic.** The same direct native query (no
+Python history/branch logic involved at all) returned, for row 64 right
+after the second feed:
+
+    64: '› user prompt TURN-00ent reply line 2005'
+
+The real content at row 64 should be `• TURN-02 L05 mock agent reply line
+2005` (confirmed from rows 60-63's correct sequential content). What came
+back instead is row 0's ENTIRE real text (`› user prompt TURN-00`, 22
+chars — a long-since-scrolled-away line from the very first frame)
+prepended directly onto the TAIL of row 64's real text, with the middle
+of row 64's own text missing entirely. This is a buffer-length/offset
+error signature (a partial copy from one location followed by a copy
+resuming at the wrong offset in another), inside the ctypes call chain
+`self._g.terminal_grid_ref`/`_cell_from_grid_ref` (`ghostty_engine.py:
+613-619`) or libghostty-vt itself — not this plugin's Python code, which
+was proven uninvolved by querying around it entirely.
+
+**Reproduction is now fully deterministic and scriptable** (seed 3 turns,
+add 1 more turn, both via the exact `ReplayAgent`/`encode_replay_frame`
+byte pattern, then walk `terminal_grid_ref` for y=0..scrollback_rows-1
+directly) — this closes out the open question in priority item 6 below:
+the isolated stress test (concurrency-shaped) found nothing, but THIS
+shape (large single-write home+dump replays) reliably reproduces both the
+content-loss and the splice. Next session: (1) apply the one-line content-
+loss fix and verify with a regression test, (2) narrow the splice further
+by bisecting frame size / row count to find the exact threshold that
+triggers the buffer error, then either work around it in
+`_sync_scrollback` (re-validate/re-fetch a row before trusting it, if a
+cheap sanity check exists) or file it upstream against libghostty-vt with
+this exact repro script attached.
+
+Repro was found in the isolated "Testing Agent" tab (see method note
+above) — zero risk to any real conversation, safe to keep iterating
+there.
 
 **Two incidents from testing this, both resolved by re-enabling a gate:**
 1. Disabling `caret_footer_pinning_enabled` fed `trim_display_rows`
@@ -135,39 +399,179 @@ real cause. **A restart was already planned and is now also the only clean
 way to reap those leaked threads** (no clean kill API for raw Python
 threads).
 
+**Correction, same session, 2026-08-21 — checked against actual Ghostty
+source (`~/tools/ghostty`), not just inference. The "file upstream" framing
+above was too strong; revising it.** Verified our ctypes bindings
+(`GhosttyGridRef`, `GhosttyPoint`/`GhosttyPointCoordinate`/`_GhosttyPointValue`
+in `ghostty_vt.py`) match the real C struct layouts in
+`include/ghostty/vt/grid_ref.h` and `point.h` field-for-field, including
+padding — not a struct-alignment/ABI bug on our side. `POINT_TAG_SCREEN`
+("full screen including scrollback") is also the semantically correct tag
+for what `_sync_scrollback` is doing.
+
+Traced `ghostty_terminal_grid_ref` into the actual Zig source
+(`src/terminal/c/terminal.zig:810-821`): it's a thin wrapper around
+`t.screens.active.pages.pin(zig_pt)` — Ghostty's core page-list pin
+mechanism, used throughout the whole terminal (selection, mouse hover,
+tracked refs), not some obscure corner. A fundamental bug there is
+genuinely unlikely given how battle-tested it is, which is a fair
+objection to "Ghostty has a bug" on its face.
+
+**What's much more likely, and still worth pursuing:** `grid_ref.h`'s own
+docs say plainly: "the grid reference APIs are not meant to be used as the
+core of a render loop. They are not built to sustain the framerates needed
+for rendering large screens. Use the render state API for that." (This
+plugin already does use the render_state API — `_cell_from_render_cells`
+— for the *active* grid; `_cell_from_grid_ref`/`grid_ref` is used
+specifically for scrollback/history rebuilds.) `_sync_scrollback` calls
+`grid_ref` in a tight loop across potentially hundreds of rows on **every
+single replay-dump** for a Codex-style full-transcript-replay TUI — a
+genuinely unusual, heavy-duty bulk-query pattern most Ghostty consumers
+(mouse hover, one-off selection lookups) never stress this hard. The
+untracked-ref lifetime contract ("valid only until the next mutating
+terminal call... snapshot immediately") is also worth re-checking against
+whether repeated `pin()` calls for a large scrollback range could
+themselves trigger page-list maintenance (allocation, defragmentation)
+that the docs might not fully spell out as "mutating" from the caller's
+perspective.
+
+**DECISIVE, 2026-08-21 — the minimal C repro was done, and it clears
+Ghostty entirely.** Built `repro.c` (scratch, not committed) against
+`~/tools/ghostty`'s local build via `zig cc`, linking directly against
+`zig-out/lib/ghostty-vt.lib` — confirmed byte-identical to GhostShell's
+vendored `ai/terminal/bin/ghostty-vt.dll` (matching SHA256). Zero Python,
+zero ctypes: plain C calling `ghostty_terminal_vt_write` /
+`ghostty_terminal_grid_ref` / `ghostty_grid_ref_graphemes` directly,
+replicating the exact seed-3-turns-then-add-1-turn home+dump pattern and
+walking every row via `POINT_TAG_SCREEN`. Result:
+
+    cols=80 rows=24 scrollback_extent(max_y)=181
+    TURN-00 content found anywhere in scrollback: YES
+    total splices found: 0
+
+**Neither the content loss nor the splice reproduces in pure C against the
+real library.** This proves both bugs are entirely within GhostShell's own
+Python/ctypes usage — not Ghostty, not libghostty-vt, full stop. The
+content-loss bug was already independently root-caused as a pure Python
+logic bug (the `s.history.clear()` + `start=origin` bug in
+`_sync_scrollback`'s replace_scroll branch, see above) — this C repro is
+additional confirmation, not new information, for that one. The splice is
+the one still needing work: it was observed via a hand-rolled manual
+Python walk script (not committed, passed `palette=None` and skipped
+style resolution) that differs from `_cell_from_grid_ref`'s real code path
+(which calls `grid_ref_style` before `grid_ref_graphemes`, then resolves
+colors against a real palette) — that reimplementation gap is now closed:
+re-ran the identical seed(3)+turn(3) scenario calling the REAL
+`_cell_from_grid_ref` (real palette, real `grid_ref_style` call included)
+directly against `parser._term`. **Also zero splices.** So the splice has
+now failed to reproduce in THREE separate careful, controlled attempts:
+pure C, Python via the real function with 1 addition, and the earlier
+`test_splatter_replay_rebuild.py` pytest run with 5 sequential additions
+(that one only ever found the content-loss mismatch, never a splice).
+
+**Where this leaves the splice bug, honestly:** the ORIGINAL live
+observation is still a confirmed real event, not dismissed — it was read
+directly out of `term.screen.history[30]` in the actual running plugin
+process, not inferred from a rendering artifact. But its trigger has not
+been isolated: my first ad-hoc manual-walk script (the one that DID show a
+splice) skipped `grid_ref_style`/palette resolution, so it can no longer
+be trusted as clean evidence of a specific mechanism — it may have had its
+own bug, separate from the real splice. **What's left as the most likely
+remaining explanation:** the live incident happened under REAL threading
+(the actual PTY reader thread feeding real conpty-scheduled output over
+real wall-clock time, at real terminal dimensions ~107x47, via 1+5
+separate `_on_data` calls arriving close together) — none of which any
+single-threaded, synchronous-script repro (C or Python) has replicated.
+**Next step, if pursued further:** don't try to force this via another
+isolated script — go back to the isolated "Testing Agent" tab (method
+established above) under the real plugin's real threading, and watch for
+recurrence directly, since that's the one condition common to the only
+confirmed sighting and absent from every attempt that failed to
+reproduce it.
+
 ### Still open, in priority order
 
-1. **Restart Sublime.** Required to: pick up item 1's fix beyond the live
-   `importlib.reload()` already done; reap the leaked stress-test threads
-   from item 3; get a clean baseline before any further live testing.
-2. **Re-run the multi-line-prompt cursor test post-restart**, current gate
-   state (`caret_footer_pinning_enabled: true`, rest `false`). Confirm item 1
-   actually fixed the original complaint before doing anything else.
-3. **If pursuing the splatter bug further:** any stress/concurrency test
-   MUST run as a fully separate, isolated `python` subprocess (spawnable and
-   killable independently), never injected via `eval_python` into the same
-   process as the user's live Sublime/terminal session again. A
-   `tests/test_*.py`-style file using `Screen`/`GhosttyParser` directly
-   (both are pure-Python, no Sublime imports per their own docstrings) run
-   via a real `python -m pytest` subprocess is the correct shape for this,
-   not an in-process thread stress test.
-4. **`trim_display_rows` is not gated** despite touching cursor-adjacent
-   behavior (drops rows based on `cy`) — deliberately excluded from the
-   five bisection gates as "unrelated to cursor position," which incident 1
-   above disproved (it has a real dependency on `caret_footer_pinning_enabled`).
-   Consider whether it needs its own gate, now that the dependency is known
-   and documented (see the settings file comment on
-   `caret_footer_pinning_enabled`).
-5. **Complete the actual bisection** the gates were built for (all five
-   false, confirm clean, re-enable one at a time) — never actually finished;
-   every attempt got interrupted by a real regression (items 2's two
-   incidents, then the splatter bug, then the stress-test mistake). The user
-   explicitly does not want to "wait for an accident" — the isolated-
-   subprocess stress-test approach in (3) is the way to make this
-   deterministic instead of opportunistic.
+1. ~~Restart Sublime.~~ **DONE 2026-08-21.**
+2. ~~Re-run the multi-line-prompt cursor test post-restart.~~ **DONE
+   2026-08-21, PASSED** — see item 1 above ("Restart-verified"). Gate state
+   unchanged (`caret_footer_pinning_enabled: true`, rest `false`); leaked
+   stress-test threads reaped by the restart.
+3. ~~If pursuing the splatter bug further~~ **PARTIAL, 2026-08-21.** Wrote
+   `tests/test_splatter_stress.py`: isolated subprocess (not injected via
+   `eval_python`), replicates the real production lock pattern (one writer
+   thread `parser.feed()`, one reader thread `screen.render_cells()`, both
+   under one shared lock, matching `term._lock` in `ai_terminal.py`'s
+   `_on_data`/render path exactly). Run via
+   `python -m pytest tests/test_splatter_stress.py -v -s` with the
+   process's own 90s watchdog (`os._exit`) as a second safety net beyond
+   pytest's own runner, since a hang under load was the prior lead.
+   **Result: PASSED.** 10s run, 2278 feed iterations / 6 render iterations
+   (writer starves reader under a tight loop + shared lock — expected, not
+   itself a bug), zero splatter, zero hang, both threads exited cleanly.
+   **This is a negative result under one specific stress shape, not proof
+   the bug is fixed or Python-level.** It rules out plain lock contention
+   causing a hang, and this exact tight feed/render interleave causing
+   splatter. It does NOT rule out: bursty/paced writes closer to real PTY
+   timing, a third thread (recorder/logger also reading `screen.` state),
+   or corruption specifically inside libghostty-vt's ctypes boundary under
+   different timing than this test exercises. If the bug resurfaces live,
+   next step is widening this same isolated-subprocess test to match the
+   actual burst pattern from a `.cast` capture of the incident, not
+   auditing ctypes calls in the abstract.
+4. ~~`trim_display_rows` is not gated~~ **RESOLVED, 2026-08-21 — no new
+   gate needed.** Checked the actual call site (`ai_terminal.py:3382-3396`):
+   `_trim_display_rows(rows, cy)` is called with the *same* `cy` that
+   `caret_footer_pinning_enabled` already governs one line above it (line
+   3386-3387, `_adjust_display_caret`). There is no code path where
+   `trim_display_rows` sees an independent cursor value — it is already
+   fully downstream of the existing gate. A dedicated 6th toggle would
+   duplicate `caret_footer_pinning_enabled` with zero added bisection
+   power. Leave as-is; the settings-file comment on
+   `caret_footer_pinning_enabled` documenting the dependency is sufficient.
+5. ~~Complete the actual bisection~~ **DONE, 2026-08-21 — via a new
+   mechanism, safely.** The real blocker on every prior attempt was that
+   these five settings are global — flipping them off for testing risked
+   the live conversation tab itself (confirmed: doing this live, briefly,
+   dropped `caret_footer_pinning_enabled` under Tab 1 and its
+   `screen.history` immediately hit the 300-line cap — reverted within
+   seconds, no lasting damage, but real risk). Fixed properly instead of
+   worked around: all five `_setting_bool(...)` call sites
+   (`ai_terminal.py:3386,3404,3440,4333,6092`) now pass
+   `profile_name=_term_profile_name(term)` — `_setting_bool` already
+   supported profile overrides (used elsewhere, e.g.
+   `osc_title_updates_tab`), these five just weren't wired to use it.
+   Verified live via `importlib.reload()`: both `_Terminal` instances
+   (Claude tab, Testing Agent tab) survived the reload with PTYs intact,
+   and the same setting now resolves differently per tab
+   (`caret_footer_pinning_enabled` → `True` for Claude, `False` for
+   Testing Agent). Added a per-profile override block to the `"Testing
+   Agent"` profile in `ai_terminal.sublime-settings` (all five `false`) —
+   this profile is now a permanent, safe, isolated Terminus-baseline
+   control tab; the global values (whatever they are for real agent
+   profiles) are never touched by testing there again.
+
+   **Bisection result, all five false, driven via the isolated tab:** fed
+   5 more replay turns (`mock_agent_cli.py`, matching the splatter
+   investigation's method) under the all-off baseline. `nonblank grid
+   rows` held exactly steady (46 before, 46 after) while history grew
+   normally — **the documented "300 lines missing, ~22-26 lines visible"
+   incident (item 2 above) did NOT reproduce** with this mock agent. Read
+   as: that incident is likely specific to real Claude Code's exact
+   footer/cursor-parking byte pattern, not a universal hazard of the
+   Terminus baseline for any TUI — worth confirming next session by
+   running an actual `Claude` profile through the SAME isolated-tab
+   all-off test (still zero risk, since it'd be a throwaway tab, not the
+   conversation's own tab) before concluding the two-incidents caution
+   from item 2 needs to stay a blanket "leave these two enabled forever."
 6. **Audit `ghostty_vt.py`/`ghostty_engine.py`'s ctypes calls** for
    thread-safety, if (3)'s isolated stress test reproduces the splatter and
-   points at the native boundary rather than Python-level logic.
+   points at the native boundary rather than Python-level logic. **Update,
+   2026-08-21: partially superseded** — a pure-C repro against the same
+   DLL (see item 3's "DECISIVE" update above) already cleared Ghostty/
+   libghostty-vt itself for both the content-loss and splice bugs found
+   this session. This audit item is really about GhostShell's OWN ctypes
+   call sequencing now (GIL/threading across `_sync_scrollback`'s bulk
+   `grid_ref` loop), not the native library.
 
 ## Status-line resize/rewrap loop during active TUI output — CODE LANDED, PARTIAL LIVE-VERIFY (2026-08-18)
 
