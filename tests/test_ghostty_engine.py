@@ -246,6 +246,14 @@ class WritePtyCallbackTests(unittest.TestCase):
         self.assertEqual(self.responses, [b"\x1b[8;40;100t"])
 
 
+def _cells(text):
+    return [(ch, 0) for ch in text]
+
+
+def _row_texts(rows):
+    return ["".join(ch for ch, _ in row).rstrip() for row in rows]
+
+
 def _history_lines(screen):
     return ["".join(ch for ch, _ in row).rstrip() for row in screen.history]
 
@@ -311,6 +319,108 @@ class HomeReplaceScrollTests(unittest.TestCase):
         joined = "\n".join(_history_lines(self.screen))
         self.assertIn("AAA", joined)
         self.assertIn("EEE", joined)
+
+    def test_growing_replay_dumps_keep_earliest_turn_once(self):
+        from ai.terminal.screen import Screen
+        from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
+
+        self.parser._g.terminal_free(self.parser._term)
+        self.screen = Screen(80, 24, history_cap=2000)
+        self.parser = GhosttyParser(self.screen, force_main_screen=True)
+        lines = []
+        for n in range(3):
+            lines.extend(make_turn_lines(n))
+        self.parser.feed(encode_replay_frame(lines))
+        for n in range(3, 5):
+            lines.extend(make_turn_lines(n))
+            self.parser.feed(encode_replay_frame(lines))
+        present = set(_history_lines(self.screen)) | {
+            "".join(self.screen.grid[r]).rstrip() for r in range(self.screen.rows)
+        }
+        missing = [line for line in lines if line not in present]
+        self.assertEqual(missing, [], "earliest-turn lines dropped from history+grid")
+        vis = _visible_text(self.screen)
+        self.assertEqual(vis.count("› user prompt TURN-00"), 1)
+        self.assertEqual(vis.count("TURN-00"), 29)
+
+    def test_home_dump_preserves_unrelated_prior_scrollback(self):
+        from ai.terminal.screen import Screen
+
+        self.parser._g.terminal_free(self.parser._term)
+        self.screen = Screen(80, 4, history_cap=200)
+        self.parser = GhosttyParser(self.screen, force_main_screen=True)
+        prior = "\n".join("UNIQUE-%02d" % i for i in range(8)) + "\n"
+        self.parser.feed(prior)
+        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
+        self.parser.feed("\x1b[?2026h\x1b[H" + first + "\x1b[?2026l")
+        vis = _visible_text(self.screen)
+        self.assertIn("UNIQUE-00", vis)
+        self.assertEqual(vis.count("LINE-00"), 1)
+
+
+class ReplaceScrollMergeTests(unittest.TestCase):
+    """Home+dump history merge: keep unique old rows, drop reproduced ones.
+
+    A production change that kept the whole prior history would duplicate
+    LINE-00; one that cleared it would drop UNIQUE-A and spliced TURN-00.
+    """
+
+    def test_full_replay_keeps_one_copy(self):
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [_cells("LINE-%02d" % i) for i in range(8)]
+        new = [_cells("LINE-%02d" % i) for i in range(9)]
+        merged = merge_replace_scroll_history(old, new, splice_window=4)
+        self.assertEqual(_row_texts(merged), ["LINE-%02d" % i for i in range(9)])
+
+    def test_spliced_overflow_prefers_clean_old_row(self):
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [_cells("user prompt TURN-00"), _cells("TURN-00 L00"), _cells("TURN-00 L01")]
+        new = [
+            _cells("user prompt TURN-00ent reply line 2005"),
+            _cells("TURN-00 L00"),
+            _cells("TURN-00 L01"),
+            _cells("TURN-00 L02"),
+        ]
+        merged = merge_replace_scroll_history(old, new, splice_window=24)
+        texts = _row_texts(merged)
+        self.assertEqual(texts[0], "user prompt TURN-00")
+        self.assertNotIn("ent reply line 2005", texts[0])
+        self.assertEqual(texts.count("user prompt TURN-00"), 1)
+        self.assertEqual(texts[1:], ["TURN-00 L00", "TURN-00 L01", "TURN-00 L02"])
+
+    def test_unrelated_prior_rows_are_kept(self):
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [_cells("UNIQUE-A"), _cells("UNIQUE-B"), _cells("LINE-00"), _cells("LINE-01")]
+        new = [_cells("LINE-00"), _cells("LINE-01"), _cells("LINE-02")]
+        merged = merge_replace_scroll_history(old, new, splice_window=4)
+        self.assertEqual(
+            _row_texts(merged),
+            ["UNIQUE-A", "UNIQUE-B", "LINE-00", "LINE-01", "LINE-02"],
+        )
+
+    def test_wrapped_replay_aligns_on_first_overflow_line(self):
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [
+            _cells("LINE-00"),
+            _cells("       LINE-01"),
+            _cells("              LINE-0"),
+            _cells("2"),
+        ]
+        new = [
+            _cells("LINE-00   LINE-10"),
+            _cells("       LINE-01   LIN"),
+            _cells("E-11          LINE-0"),
+            _cells("2"),
+            _cells(" LINE-03"),
+        ]
+        merged = merge_replace_scroll_history(old, new, splice_window=4)
+        texts = _row_texts(merged)
+        self.assertEqual(texts[0], "LINE-00")
+        self.assertEqual(sum(1 for t in texts if "LINE-00" in t), 1)
 
 
 class ReplaceScrollStateTests(unittest.TestCase):
