@@ -31,6 +31,60 @@ _CUP_HOME_RE = re.compile(r"\x1b\[(?:(?:0;0|1;1|1|0)?H)")
 _SYNC_HL_RE = re.compile(r"\x1b\[\?2026([hl])")
 
 
+def _history_row_text(row):
+    return "".join(ch for ch, _attr in row).rstrip()
+
+
+def _rows_match(old_row, new_row, allow_splice):
+    a = _history_row_text(old_row)
+    b = _history_row_text(new_row)
+    if a == b:
+        return True
+    if allow_splice and a and b and (b.startswith(a) or a.startswith(b)):
+        return True
+    return False
+
+
+def merge_replace_scroll_history(old_rows, new_rows, splice_window):
+    """History after a home+2026 dump's native overflow is known.
+
+    CSI H overwrites the visible screen, then overflow re-scrolls that
+    dump's own text into native scrollback. A full-transcript replay
+    therefore *reproduces* a suffix of prior Python history (often the
+    whole thing), but wrap + in-place overwrite without EL means later
+    overflow rows need not equal the old rows line-for-line. Align on
+    the first overflow line instead: the leftmost old row that matches
+    it (exact or leftover-tail splice) is the start of the reproduced
+    suffix; rows before that are from before this replay and are kept.
+    The first `splice_window` overflow rows can also carry leftover
+    tails of the overwritten screen; prefer the clean prior copy of
+    that same line when the new row is the old text plus a tail.
+
+    old_rows: Python history before this rebuild.
+    new_rows: native rows [origin, scrollback_rows) for this dump.
+    splice_window: screen height (overwrite-and-rescroll window).
+    """
+    keep = len(old_rows)
+    if new_rows:
+        new0 = new_rows[0]
+        if _history_row_text(new0):
+            for j, row in enumerate(old_rows):
+                if _rows_match(row, new0, allow_splice=True):
+                    keep = j
+                    break
+    merged = list(old_rows[:keep])
+    for i, row in enumerate(new_rows):
+        oi = keep + i
+        if i < splice_window and oi < len(old_rows):
+            a = _history_row_text(old_rows[oi])
+            b = _history_row_text(row)
+            if a and b.startswith(a) and b != a:
+                merged.append(old_rows[oi])
+                continue
+        merged.append(row)
+    return merged
+
+
 def update_replace_scroll(sync_open, replace, text):
     """Return (sync_open, replace) after scanning one PTY chunk.
 
@@ -586,17 +640,20 @@ class GhosttyParser:
         # incremental-append path below notifies genuinely new lines. This
         # mirrors Screen.resize()'s own scrollback-clip path, which rebuilds
         # s.history by appending directly rather than through _retire_line.
+        replace_old = None
         if self._replace_scroll and last >= 0:
             # Home+2026 dump, possibly split across feeds: pin the
             # origin to the first overflow of this batch and rebuild
-            # history from that point so later chunks don't wipe the
-            # start of the transcript.
+            # from that native range. Do not blindly clear [0, origin)
+            # -- a full-transcript replay re-creates those rows (often
+            # with a spliced tail on the first screen), but content
+            # from before this replay is not in the dump and must stay.
             if self._replace_origin is None:
                 self._replace_origin = last
             origin = self._replace_origin
             if scrollback_rows <= origin:
                 return
-            s.history.clear()
+            replace_old = list(s.history)
             start = origin
             notify = False
         elif 0 <= last < scrollback_rows:
@@ -607,6 +664,7 @@ class GhosttyParser:
             start = 0
             notify = False
 
+        new_rows = []
         for y in range(start, scrollback_rows):
             cells = []
             for x in range(cols):
@@ -617,10 +675,17 @@ class GhosttyParser:
                     cells.append((" ", 0))
                     continue
                 cells.append(self._cell_from_grid_ref(ref, palette))
-            if notify:
+            if replace_old is not None:
+                new_rows.append(rstrip_cells(cells))
+            elif notify:
                 s._retire_line(cells)
             else:
                 s.history.append(rstrip_cells(cells))
+
+        if replace_old is not None:
+            s.history.clear()
+            for row in merge_replace_scroll_history(replace_old, new_rows, s.rows):
+                s.history.append(row)
 
         self._last_scrollback_rows = scrollback_rows
         s.dirty = True

@@ -286,14 +286,98 @@ which fires because this replay pattern IS exactly a home+sync dump):
 `s.history.clear()` discards everything, including the already-correct
 rows `[0, origin)`, but the rebuild loop right after only re-fetches
 `[origin, scrollback_rows)` — rows before `origin` are never repopulated.
-The premise of pinning `origin` is "only the tail changed, old rows are
-already correct in `s.history`" — true, but contradicted by clearing
-`s.history` first. **Fix is straightforward:** either don't clear
-`s.history` in this branch (keep the existing prefix, only append/replace
-`[origin, scrollback_rows)`), or if a clear is genuinely needed, rebuild
-from `0`, not `origin`. Not applied yet this session — flagging as a
-confirmed, scoped, low-risk fix for next session rather than rushing it
-in in the middle of investigation.
+
+**Attempted fix, 2026-08-22 — WRONG, reverted, do not repeat this exact
+approach.** Tried "truncate `s.history` back to exactly `origin` entries
+instead of clearing, then rebuild `[origin, scrollback_rows)`" (replacing
+`s.history.clear()` with `while len(s.history) > origin: s.history.pop()`).
+This DID fix the content-loss repro (verified: TURN-00 present, zero
+missing lines) — but was verified against a home-grown check that only
+tested set-membership ("is this line present somewhere"), not duplicate
+counts. Running the full existing test suite (should have been step one,
+not an afterthought) immediately showed the real cost:
+`HomeReplaceScrollTests::test_2026_home_dump_does_not_duplicate_*` and
+`test_fifty_testing_agent_dumps_keep_one_copy` all broke (e.g. `LINE-00`
+now appears twice instead of once). Reverted via `git checkout --`; all
+415 tests pass again; **no lasting harm, but no fix landed either.**
+
+**Why "just don't clear" is wrong, understood only after the revert:** a
+home+dump doesn't just add new scrollback rows — CSI H repositions the
+cursor into the CURRENTLY VISIBLE grid and overwrites it in place. Only
+once that overwrite exceeds one screen height does genuine scrolling
+resume, and what scrolls off at that point is the OVERWRITTEN (new) text,
+not what used to be there. When a dump re-sends content whose early lines
+match what's already sitting in the *tail* of `s.history` from a prior
+scroll (the common case for any repeated full-transcript replay, e.g.
+Codex-style, once the transcript has grown past one screen), this
+overwrite-then-rescroll genuinely creates a second, distinct native
+scrollback row with duplicate text — not a Python bug, correct raw
+terminal behavior. `s.history.clear()` was doing real, necessary
+deduplication work for that case, not just being lazy. The `[0, origin)`
+prefix that WAS safe to preserve in the content-loss repro (a 24-row
+screen with a much larger, still-growing transcript) is NOT safe to
+preserve in general — the actual boundary is closer to "the last
+`screen.rows` or so lines of the prior state, which is what gets
+overwritten-and-possibly-rescrolled by any home+dump," not the whole
+`[0, origin)` prefix.
+
+**FIXED, 2026-08-22 — landed by Grok Build in a separate isolated tab,
+handed the task with full context (this section's own analysis, the exact
+repro, and the requirement to verify against the full existing test suite
+before claiming done). Independently re-verified, not just trusted.**
+
+Grok's diagnosis went further than the analysis above: it found that a
+naive "keep `[0, origin)` verbatim" ALSO breaks on the pre-existing
+`test_2026_home_dump_does_not_duplicate_transcript_in_history`-style tests
+once the screen is narrow enough that lines wrap mid-word (a 20-column
+screen splits `LINE-02` across two physical rows as `'LINE-0'` + `'2'`),
+because a full-row-text prefix comparison can't line up correctly against
+wrapped, spliced overflow text.
+
+**The fix:** a new `merge_replace_scroll_history(old_rows, new_rows,
+splice_window)` (`ghostty_engine.py`, top of file) that:
+1. Aligns on the dump's *first* overflow line — finds the leftmost old row
+   that matches it exactly or as a leftover-tail splice (`_rows_match`,
+   `allow_splice=True`) — rather than assuming `origin` itself is a
+   trustworthy boundary.
+2. Keeps every old row before that alignment point (genuinely predates
+   this replay).
+3. Drops the reproduced suffix (this dump re-creating its own transcript).
+4. Repairs the first `splice_window` (= `screen.rows`) overflow rows: if a
+   new row is old text with a spliced-on tail, keeps the clean old copy
+   instead.
+
+`_sync_scrollback`'s replace-scroll branch now captures `replace_old =
+list(s.history)` instead of calling `s.history.clear()` immediately,
+builds `new_rows` from the native fetch as before, then does
+`s.history.clear()` + re-populates via `merge_replace_scroll_history(...)`
+once both sides are known.
+
+**Verification (independently re-run, not just trusted from Grok's own
+report):**
+- `python -m pytest tests/ -q` → **423 passed** (up from 415 — 8 new
+  tests: `ReplaceScrollMergeTests` unit tests for the merge helper itself,
+  plus new `HomeReplaceScrollTests` cases for the growing-replay and
+  wrapped-splice scenarios). Includes the originally-failing
+  `tests/test_splatter_replay_rebuild.py` repro from this session, which
+  now passes.
+- Re-ran the exact original 8-turn content-loss repro script independently
+  (not reusing Grok's own test code) with an explicit duplicate-count
+  check this time (the gap that made my own reverted attempt look correct
+  when it wasn't): `missing=0 dupes=0 total_lines=233`. Zero content loss,
+  zero duplication, for the scenario that started this whole
+  investigation.
+- Confirmed via `git diff` that Grok did not touch `TODO.md` (as
+  instructed) — the diff there is entirely this session's own prior
+  writeup.
+
+This closes the content-loss bug. The splice bug (the OTHER symptom found
+this session, native-level character splicing under real threading) is
+separate and remains open — see that section above; it was not part of
+Grok's task and this fix does not address it (though the merge logic's
+own splice-repair step is a related but different mechanism: it corrects
+a *known, structural* overwrite-splice this dump's own overflow produces,
+not the unexplained live splice from real concurrent PTY timing).
 
 **Splice bug — confirmed real and native-level, reproduced deterministically,
 independent of any Python-side logic.** The same direct native query (no
