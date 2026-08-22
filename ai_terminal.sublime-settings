@@ -621,7 +621,18 @@
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            // 2026-08-21: per-profile bisection-gate override, isolated to
+            // this profile only (ai_terminal.py's five _setting_bool call
+            // sites now pass profile_name=_term_profile_name(term), profile
+            // override wins over the global key of the same name -- see
+            // TODO.md). All five false = raw Terminus baseline, safe to
+            // test here without touching any other live tab/profile.
+            "caret_footer_pinning_enabled": false,
+            "host_cursor_paint_enabled": false,
+            "click_to_cursor_fallback_enabled": false,
+            "user_owns_caret_enabled": false,
+            "fast_caret_patch_enabled": false
         },
         "Vibe": {
             "launch_command": [

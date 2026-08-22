@@ -3383,7 +3383,7 @@ def _do_render(term):
         rows, cy, cx = term.screen.render_cells()
         # Bisection gate (ai_terminal.sublime-settings): raw hardware
         # position when disabled, Terminus-style -- see settings comment.
-        if _setting_bool("caret_footer_pinning_enabled", False):
+        if _setting_bool("caret_footer_pinning_enabled", False, profile_name=_term_profile_name(term)):
             cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
         # The Screen holds the tab's full pinned row count (force_main_screen
@@ -3401,7 +3401,7 @@ def _do_render(term):
     # Bisection gate (ai_terminal.sublime-settings): when disabled, rely
     # solely on the real ST caret + whatever reverse-video the app itself
     # already sends, Terminus-style -- see settings comment.
-    if term.screen.cursor_visible and _setting_bool("host_cursor_paint_enabled", False):
+    if term.screen.cursor_visible and _setting_bool("host_cursor_paint_enabled", False, profile_name=_term_profile_name(term)):
         rows, _host_painted = _paint_host_cursor(rows, cy, cx, shape=term.screen.cursor_shape)
     else:
         # App hid the real cursor (DECTCEM off, ESC[?25l) -- fullscreen TUIs
@@ -3437,7 +3437,7 @@ def _do_render(term):
     # Bisection gate (ai_terminal.sublime-settings): off = always full-buffer
     # replace, no partial diff-patching -- see settings comment.
     fast_caret = (
-        _setting_bool("fast_caret_patch_enabled", False)
+        _setting_bool("fast_caret_patch_enabled", False, profile_name=_term_profile_name(term))
         and prev_plain is not None
         and prev_plain == plain_sig
         and prev_text is not None
@@ -4330,7 +4330,7 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
                 not modified
                 and not multi
                 and not tracked
-                and _setting_bool("click_to_cursor_fallback_enabled", False)
+                and _setting_bool("click_to_cursor_fallback_enabled", False, profile_name=_term_profile_name(term))
             ):
                 _route_click_to_cursor_fallback(view, term, event)
             if not _mouse_handling_enabled(term):
@@ -6089,7 +6089,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         keep_selection = bool(
             term is not None
             and getattr(term, "_user_owns_caret", False)
-            and _setting_bool("user_owns_caret_enabled", False)
+            and _setting_bool("user_owns_caret_enabled", False, profile_name=_term_profile_name(term))
         )
         if keep_selection and term is not None and term._auto_follow:
             # Self-heal a false latch: on_selection_modified's on-command-line
