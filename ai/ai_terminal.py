@@ -5425,6 +5425,19 @@ def _compensate_trim_scroll(view, term, vp):
     (Screen.retired_total vs len(history) between two renders), so the
     compensation is exact too: it keeps whatever was on screen on screen,
     it never picks a target. Deliberately bypasses the kill switch.
+
+    REVERTED 2026-08-23: a same-day attempt to skip this write while
+    following the live prompt (_auto_follow True) -- reasoning that
+    last-row-overflow evictions shouldn't yank the prompt off screen --
+    made live jumping worse, not better. Skipping compensation during
+    follow also skips it for the common case (any real eviction while
+    actively following, which is most of the time once history is at
+    cap), so the ordinary one-line-per-eviction text-slide this function
+    exists to cancel went uncorrected continuously instead of the
+    original, rarer large-overshoot case. Reported live as bigger/more
+    frequent jumps than before the change. Back to unconditional: this
+    function corrects a real pixel/text mismatch regardless of follow
+    state, it does not decide whether to follow.
     """
     if term is None or view is None:
         return vp
