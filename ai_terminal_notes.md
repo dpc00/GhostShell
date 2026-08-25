@@ -3,6 +3,87 @@
 Running technical notes on ai_terminal.py internals that aren't obvious from
 the code alone. Newest entries at the top.
 
+## 2026-08-23 — Viewport jump: compensate's arithmetic is right, the open
+question is why the same-frame follow-snap didn't override it
+
+Grok Build (session 01a03125) tried gating `_compensate_trim_scroll` to skip
+its write during `_auto_follow` True, reasoning that last-row-overflow
+evictions shouldn't yank the prompt off screen. Shipped, made live jumping
+worse ("alarming... never been this bad" — the ordinary one-line-per-eviction
+correction went uncorrected continuously instead of the rare large case).
+Reverted same day: unconditional compensation restored, docstring records
+why, `tests/test_compensate_trim.py` asserts the original behavior, 51 tests
+pass. **Do not re-attempt the auto_follow gate — that lever is closed.**
+
+Grok's own diagnostic harness (wrapped `View.set_viewport_position` /
+`_Terminal.send_string` on view id 19) left one real incident captured in
+`C:\Users\donal\data\logs\ai_terminal\vp_diag_id19.jsonl` before its
+teardown call itself hung 26+ min and had to be force-stopped by the user
+(live process confirmed clean afterward — no leftover hooks, revert confirmed
+in place via `eval_python`). Re-reading that file cold (not Grok's own
+summary of it) surfaces two separate things, not one:
+
+**Finding A — the one real captured jump, arithmetically correct, but a
+question the log can't answer.** t=1787535499.54 (19:38:19): `before=[0,
+5149]`, `after=[0,4571]`, `dy=-578` (34 lines × 17px lh). Stack trace:
+`_do_render` → `AiTerminalRenderCommand._run` → `_compensate_trim_scroll:5466`
+→ `set_viewport_position`. `retired_total` genuinely went 1272→1306 (34 real
+lines retired that frame, not inferred), so the -578px delta is correct for
+what the function computes — eviction shifts every surviving line's buffer
+index down by 34 regardless of where vp happened to be sitting, so
+`vp - evicted*lh` is the right operation independent of past-end state. Do
+NOT "fix" this by clamping vp to `layout_extent - viewport_extent` before
+the subtract: worked the algebra on this exact capture and clamping the
+baseline down to the legitimate max first makes the landing spot *further*
+from true bottom (4484 instead of 4571), not closer — the past-end slack in
+vp isn't the defect, so removing it before the eviction subtract only makes
+the correction overshoot more.
+
+The real open question: in the SAME `_run` call, right after compensate,
+`_settle_viewport` → `_scroll_to_bottom` runs synchronously whenever
+`do_follow and not content_fits` (true here — `_tui_like(term)` is False for
+Claude, since it never sets alt_screen or mouse_tracking, so this is the
+branch, and `real_h≈5883 >> ve[1]=821` so content_fits is False). Given the
+numbers in this capture (`_follow_content_height` with
+`follow_ignore_trailing_lines=6` → `5883-6*17=5781`; target `= 0 + 5781 -
+821 = 4960`), `_scroll_to_bottom` should have overridden compensate's 4571
+back to ~4960 in the same synchronous frame — no async gap, no second
+render needed. But the log's next two lines (JUMP via `svp`, JUMP via
+`sample`, same timestamp) both still show 4571, and the file ends 20s later
+on a `sample_err` (`_VPW_LAST_VP` AttributeError killed the sampler right
+at this moment) — so there is no way to tell from this file whether
+`_scroll_to_bottom` actually fired and got missed by the crashing sampler,
+or didn't fire because `do_follow` was false at that instant despite the
+snapshot's `state.follow: true` (a `getattr` read at a slightly different
+point than the live local `do_follow` inside `_run`). **This is the precise
+thing a fresh capture needs to settle** — not "is compensate's math wrong"
+(it isn't), but "does `_scroll_to_bottom`'s same-frame snap actually
+override a large compensate write, or does something (do_follow being
+false, content_fits being true, an exception mid-`_run`) let it stand."
+
+**Finding B — a separate ~0.9s eased burst, unrelated to eviction.**
+t=1787535308.75→309.62: vp climbs 4961→5139 (~178px) in ~22 small
+interpolated steps. `retired_total`/`len(history)` exactly constant
+(1272/300) the whole time — no eviction, so compensate cannot be the
+source (its `evicted<=0` early-return would fire). Zero `svp` (our own
+viewport-write) log entries in that window either — confirmed by grep, not
+inferred — so no plugin code wrote the viewport during this burst. Two live
+candidates, not attributed: (1) Sublime's own `view.show()` firing on
+focus/hover between renders — already documented at `ai/ai_terminal.py`
+~6354-6364 as a real, independent mechanism, and Sublime interpolates
+position over several frames when `animate` defaults True, which fits a
+22-step easing curve over 0.9s; (2) a real trackpad pan — no `key` events in
+the window, smooth motion, and the existing user-scroll detector
+(`vp[1] < term._last_vp_y - lh*1.5`) only disengages follow on *decreasing*
+y, so a genuine downward pan (increasing y, as observed) wouldn't even
+register as a detected user-scroll. `_hover_poll_tick` (~6293) was checked
+and ruled out — it only sends synthetic mouse sequences into the PTY, never
+touches the viewport.
+
+Do not ship a discriminator for either finding without a fresh, kept-alive
+capture across an actual eviction event — the auto_follow-gate lesson above
+is exactly what guessing here costs.
+
 ## 2026-08-17 — Tab log is the Sublime paint only
 
 User: what I see on the ST tab goes in the log. No JSONL. No other files
