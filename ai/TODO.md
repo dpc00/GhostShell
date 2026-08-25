@@ -3,6 +3,44 @@
 Open/unresolved items only. Full dev-session history (root causes, fixes,
 verification detail) lives in [TODO-archive.md](TODO-archive.md).
 
+## Session baton (2026-08-23) — viewport-jump: auto_follow gate tried and reverted, two findings sharpened, live capture still needed
+
+Full detail in `ai_terminal_notes.md` (2026-08-23 entry) — this is the
+short version. **Do not re-attempt gating `_compensate_trim_scroll` on
+`_auto_follow`** — Grok tried it same day, shipped, made live jumping
+worse ("never been this bad"), reverted (unconditional compensation
+restored, `tests/test_compensate_trim.py` updated, 51 tests pass, this is
+the current on-disk state, confirmed live-clean too).
+
+Two things distinguished in Grok's surviving diagnostic capture
+(`C:\Users\donal\data\logs\ai_terminal\vp_diag_id19.jsonl`), re-derived
+independently rather than taken from Grok's own summary:
+
+1. One real captured jump (-578px/34 lines) traces cleanly to
+   `_compensate_trim_scroll`, and its arithmetic is correct (retired_total
+   genuinely went 1272→1306). The open question is narrower than "is the
+   eviction count right" (it is): `_settle_viewport`/`_scroll_to_bottom`
+   runs synchronously in the same render frame right after compensate and,
+   by the numbers in this capture, should have overridden compensate's
+   landing spot (4571) back to the follow target (~4960) before the frame
+   ever painted — but the log shows 4571 stuck, and the sampler crashed
+   (`_VPW_LAST_VP` AttributeError) right at that instant, so there's no
+   evidence either way on whether the same-frame snap fired. Next capture
+   needs to survive past an eviction event to settle this.
+2. A separate ~0.9s eased viewport drift (4961→5139px, ~22 steps) with
+   `retired_total`/history length exactly constant and zero plugin-code
+   viewport writes in the window (confirmed by grep, not inferred) — not
+   caused by compensate or any of our own code. Two unattributed
+   candidates: Sublime's own `view.show()` on focus/hover (documented
+   elsewhere in the file as a real independent mechanism), or a genuine
+   trackpad pan (the user-scroll detector only catches *decreasing* y, so
+   a downward pan wouldn't register). `_hover_poll_tick` was checked and
+   ruled out.
+
+Do not ship a discriminator for either without a fresh, kept-alive live
+capture across a real eviction — that is exactly the mistake that produced
+the reverted auto_follow gate.
+
 ## Session baton (2026-08-21) — multi-line cursor fix landed, bisection gates added, character-splatter bug found (UNRESOLVED), restart required
 
 Long session (423K context at handoff). Three separate threads of work;
