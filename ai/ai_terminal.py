@@ -3394,6 +3394,13 @@ def _do_render(term):
         # below content (Claude last-row CUP + overflow \\n) is not kept.
         # Empty prompt on the next line is. See trim_display_rows.
         rows = _trim_display_rows(rows, cy)
+        # Cursor visibility/shape captured under the same lock as rows/cy/cx
+        # below -- reading them after releasing the lock let a concurrent
+        # parser feed change cursor state between the grid snapshot above and
+        # the cursor read, pairing one frame's grid with another frame's
+        # cursor visibility/shape.
+        cursor_visible = term.screen.cursor_visible
+        cursor_shape = term.screen.cursor_shape
         # Clear under the lock so a concurrent parser feed cannot set dirty
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
@@ -3401,8 +3408,8 @@ def _do_render(term):
     # Bisection gate (ai_terminal.sublime-settings): when disabled, rely
     # solely on the real ST caret + whatever reverse-video the app itself
     # already sends, Terminus-style -- see settings comment.
-    if term.screen.cursor_visible and _setting_bool("host_cursor_paint_enabled", False, profile_name=_term_profile_name(term)):
-        rows, _host_painted = _paint_host_cursor(rows, cy, cx, shape=term.screen.cursor_shape)
+    if cursor_visible and _setting_bool("host_cursor_paint_enabled", False, profile_name=_term_profile_name(term)):
+        rows, _host_painted = _paint_host_cursor(rows, cy, cx, shape=cursor_shape)
     else:
         # App hid the real cursor (DECTCEM off, ESC[?25l) -- fullscreen TUIs
         # (Textual, ratatui, curses) do this and draw their own focus/
@@ -5866,40 +5873,51 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # Win32-input-mode (DEC 9001): apps that enable it (confirmed: Qwen
         # Code) ignore plain xterm sequences entirely -- every key including
         # plain letters/backspace/arrows silently does nothing once it's on.
-        if 9001 in term.screen.private_modes:
-            code = _encode_win32_key(key, ctrl=ctrl, alt=alt, shift=shift)
-        else:
-            # Try the libghostty-vt key encoder first. It syncs the live
-            # terminal state (app-cursor mode, Kitty keyboard protocol flags,
-            # modifyOtherKeys, alt-escape prefix) on every call, so it
-            # automatically produces the correct sequence regardless of what
-            # mode the child app has negotiated — something the static
-            # _translate_key table cannot do.
-            #
-            # encode_key() returns:
-            #   bytes  — success (may be b"" if the key has no output)
-            #   None   — key not recognised; fall back to legacy table
-            parser = term.parser if hasattr(term, "parser") else None
-            ghostty_result = None
-            if parser is not None and hasattr(parser, "encode_key"):
-                try:
-                    ghostty_result = parser.encode_key(
-                        key, ctrl=ctrl, alt=alt, shift=shift
-                    )
-                except Exception:
-                    ghostty_result = None
-
-            if ghostty_result is not None:
-                code = ghostty_result.decode("utf-8", "surrogateescape") if ghostty_result else ""
+        #
+        # Whole encoding decision -- mode checks, the libghostty-vt call
+        # (which syncs from live native terminal state on every call), and
+        # the legacy-table fallback -- happens under term._lock. This runs
+        # on ST's main thread; the PTY reader thread can be mid-feed
+        # (mutating private_modes / native terminal state) at the same
+        # moment a key arrives, and encode_key's own internal terminal-state
+        # sync race with that feed if unlocked. encode_key() is a pure FFI
+        # call with no callback into Sublime or back into this lock, so
+        # holding the lock here cannot deadlock against the render path.
+        with term._lock:
+            if 9001 in term.screen.private_modes:
+                code = _encode_win32_key(key, ctrl=ctrl, alt=alt, shift=shift)
             else:
-                # Legacy fallback: static escape-sequence tables.
-                code = _translate_key(
-                    key,
-                    ctrl=ctrl,
-                    alt=alt,
-                    shift=shift,
-                    application_mode=1 in term.screen.private_modes,
-                )
+                # Try the libghostty-vt key encoder first. It syncs the live
+                # terminal state (app-cursor mode, Kitty keyboard protocol
+                # flags, modifyOtherKeys, alt-escape prefix) on every call,
+                # so it automatically produces the correct sequence
+                # regardless of what mode the child app has negotiated --
+                # something the static _translate_key table cannot do.
+                #
+                # encode_key() returns:
+                #   bytes  — success (may be b"" if the key has no output)
+                #   None   — key not recognised; fall back to legacy table
+                parser = term.parser if hasattr(term, "parser") else None
+                ghostty_result = None
+                if parser is not None and hasattr(parser, "encode_key"):
+                    try:
+                        ghostty_result = parser.encode_key(
+                            key, ctrl=ctrl, alt=alt, shift=shift
+                        )
+                    except Exception:
+                        ghostty_result = None
+
+                if ghostty_result is not None:
+                    code = ghostty_result.decode("utf-8", "surrogateescape") if ghostty_result else ""
+                else:
+                    # Legacy fallback: static escape-sequence tables.
+                    code = _translate_key(
+                        key,
+                        ctrl=ctrl,
+                        alt=alt,
+                        shift=shift,
+                        application_mode=1 in term.screen.private_modes,
+                    )
         if code:
             # Viewport writes (scroll_to_bottom) must NOT run on keys that only
             # move within the TUI or scrollback. set_viewport_position on
