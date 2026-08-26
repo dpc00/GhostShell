@@ -469,7 +469,7 @@ def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch
             events.append("write")
 
         def resize(self, cols, rows):
-            pass
+            return True
 
         def is_alive(self):
             return self._alive and self.pid
@@ -565,7 +565,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
             pass
 
         def resize(self, cols, rows):
-            pass
+            return True
 
         def is_alive(self):
             return self._alive and self.pid
@@ -614,6 +614,91 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
 
         term._on_data(b"some content\x1b[?2026l")
         assert term.screen.sync_output is False
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().clear()
+
+
+def test_resize_forgets_target_size_when_pty_rejects_it(monkeypatch):
+    """_Pty.resize/_PosixPty.resize return True/False for whether ConPTY/
+    TIOCSWINSZ actually accepted the new size. _Terminal.resize must not
+    treat a False (rejected) result as applied -- if it did,
+    self._last_cols/_last_rows would already claim the rejected size, so a
+    later poll that measures that exact size again would hit the
+    "already at this size" early-return and silently never retry telling
+    the real child, which would stay at its old winsize forever.
+    """
+    events = []
+
+    class FakeParser:
+        def bind_write_pty(self, sink):
+            pass
+
+        def feed(self, text):
+            pass
+
+        def resize(self, cols, rows):
+            pass  # parser/screen side always "succeeds" in this test
+
+    class FakePty:
+        def __init__(self, argv, cwd, cols, rows, env):
+            self.pid = 1
+            self._alive = True
+
+        def start(self):
+            pass
+
+        def read(self, on_data):
+            pass
+
+        def write(self, data):
+            pass
+
+        def resize(self, cols, rows):
+            events.append((cols, rows))
+            return False  # simulate ConPTY/TIOCSWINSZ rejecting every resize
+
+        def is_alive(self):
+            return self._alive and self.pid
+
+        def kill(self):
+            self._alive = False
+
+    monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
+    monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(
+        ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
+    )
+    monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
+    monkeypatch.setattr(
+        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+    )
+    monkeypatch.setattr(
+        sys.modules["sublime"], "load_settings",
+        lambda n: Settings({"record_asciicast": False, "profiles": PROFILES}),
+    )
+    monkeypatch.setattr(sys.modules["sublime"], "set_timeout", lambda fn, ms=0: None)
+
+    try:
+        win = FakeWindow()
+        ai_terminal._spawn(win, ALPHA, profile="Claude")
+        term = next(iter(ai_terminal._term_registry().values()))
+        assert (term._last_cols, term._last_rows) == (80, 24)
+
+        term.resize(100, 30)
+        assert events == [(100, 30)]
+        assert (term._last_cols, term._last_rows) == (None, None), (
+            "a rejected pty resize must not be recorded as the applied size"
+        )
+
+        # A later poll re-measuring the SAME size the rejected call already
+        # tried must retry (call the pty again), not skip it as "unchanged"
+        # -- that early-return only makes sense once a size is confirmed
+        # applied.
+        term.resize(100, 30)
+        assert events == [(100, 30), (100, 30)]
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().clear()

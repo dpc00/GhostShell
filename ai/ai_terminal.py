@@ -357,8 +357,13 @@ class _Pty:
             data = data[written.value:]
 
     def resize(self, cols, rows):
+        """Returns True iff ConPTY actually accepted the new size -- see
+        _Terminal.resize, which must not treat a rejected resize as applied
+        (a caller that did would silently skip a later identical-looking
+        resize request forever, since its own last-known-size bookkeeping
+        would already claim to be at the size ConPTY never actually took)."""
         if not self._alive or self._hPC is None:
-            return
+            return False
         self._cols, self._rows = cols, rows
         # restype=HRESULT makes ctypes raise on a failing result, so a bad
         # resize used to escape into the caller's layout watcher. Non-fatal:
@@ -368,12 +373,14 @@ class _Pty:
             hr = _k32.ResizePseudoConsole(self._hPC, _COORD(cols, rows))
         except OSError as e:
             print(f"[ai_terminal] ResizePseudoConsole({cols}, {rows}) failed: {e}")
-            return
+            return False
         if hr & 0x80000000:
             print(
                 "[ai_terminal] ResizePseudoConsole(%d, %d) failed: HRESULT 0x%08X"
                 % (cols, rows, hr & 0xFFFFFFFF)
             )
+            return False
+        return True
 
     def is_alive(self):
         if not self._alive or self._hProcess is None:
@@ -499,8 +506,11 @@ class _PosixPty:
             data = data[n:]
 
     def resize(self, cols, rows):
+        """Returns True iff TIOCSWINSZ actually succeeded -- see
+        _Pty.resize's docstring and _Terminal.resize for why this must not
+        be treated as applied on failure."""
         if not self._alive or self._fd < 0:
-            return
+            return False
         self._cols, self._rows = cols, rows
         try:
             import fcntl
@@ -512,6 +522,8 @@ class _PosixPty:
             )
         except OSError as e:
             print(f"[ai_terminal] posix pty resize({cols}, {rows}) failed: {e}")
+            return False
+        return True
 
     def is_alive(self):
         if not self._alive or not self.pid:
@@ -2617,7 +2629,15 @@ class _Terminal:
                 print(f"[ai_terminal] resize to {cols}x{rows} failed: {e}")
                 self._notify("terminal resize failed: %s" % e)
                 return
-        self.pty.resize(cols, rows)
+        if not self.pty.resize(cols, rows):
+            # ConPTY/TIOCSWINSZ rejected it (see _Pty.resize/_PosixPty.resize
+            # docstrings): the parser/screen already reflowed to cols/rows
+            # above, but the real child never got the SIGWINCH-equivalent at
+            # this size. Forget the target size, same as the parser-resize
+            # failure above, so a later poll that measures this exact size
+            # again does not hit the "already at this size" early-return and
+            # silently skip retrying forever.
+            self._last_cols = self._last_rows = None
         # Recording patch: emit an "r" (resize) event so the .cast records
         # geometry changes for accurate replay.
         self._cast("r", f"{int(cols)}x{int(rows)}")
