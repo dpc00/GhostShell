@@ -266,28 +266,60 @@ verification across multiple real CLI profiles the original audit did
 — not something to fold into a "bind the encoder" one-line action item.
 Left for a dedicated future stage if wanted.
 
-## Stage 5 — One resize pipeline with applied-state accounting
+## Stage 5 — PTY-resize applied-state accounting (DONE); row suppression kept (REVISED)
 
-Evidence: `_LayoutWatcher` debounces geometry, then `_Terminal.resize`
-resizes `GhosttyParser`/`Screen` *before* resizing the PTY; PTY resize
-failures are logged but don't return an applied-size result, so
-`_Terminal` can retain a target size ConPTY never actually accepted.
-`force_main_screen` also suppresses row changes outright during resize.
-cmux's `TerminalSurface+Sizing.swift` pipeline explicitly distinguishes
-desired vs. applied pixel size and only updates its own last-known-size
-bookkeeping after the native call confirms.
+**Part A — PTY-resize failure accounting — DONE, 2026-08-25.** Verified
+first: `_Terminal.resize` already had *some* failure handling (a
+try/except around the parser/screen resize that forgets the target size
+on failure, with a comment explaining exactly why), but the actual
+`self.pty.resize(cols, rows)` call right after it was bare — no
+exception handling, no return value, nothing. Checked `_Pty.resize`
+(ConPTY) and `_PosixPty.resize` (TIOCSWINSZ): both already catch and log
+their own failures but always returned `None` either way, so a rejected
+native resize looked identical to a successful one to the caller. Since
+`_Terminal.resize`'s own early-return guard is
+`if cols == self._last_cols and rows == self._last_rows: return`, and
+`_last_cols`/`_last_rows` were set to the new size *before* the PTY call
+regardless of outcome, a rejected resize could permanently wedge the
+terminal at the wrong native size: a later poll measuring that exact
+size again would match the (falsely) recorded last-applied size and
+skip retrying forever.
 
-Action: introduce one `ResizeOutcome`-style result threaded through
-`_LayoutWatcher` → `_Terminal.resize` → PTY backend → `GhosttyParser`,
-so a failed PTY resize is visible and retryable instead of silently
-producing a Python/native size mismatch. Remove resize-time row
-suppression as a general policy — if a no-reflow mode is ever genuinely
-needed, model it as its own explicit mode (as cmux does for tmux
-mirroring), not a side effect of `force_main_screen`.
+Fixed narrowly: both `resize()` methods now return `True`/`False` for
+whether the native call actually succeeded (behavior and logging
+otherwise unchanged); `_Terminal.resize` resets `_last_cols`/
+`_last_rows` to `None` on `False`, mirroring the existing parser-failure
+branch exactly. New test
+`test_resize_forgets_target_size_when_pty_rejects_it`
+(`tests/test_launcher_flow.py`) drives a fake PTY that always rejects
+and confirms an identical follow-up resize retries instead of being
+skipped. Full suite: 427 passed, same 3 pre-existing unrelated
+`test_launcher_flow.py` failures as the running baseline.
 
-Exit criteria: resize tests cover a simulated PTY-resize failure path;
-live check of rapid resize (dragging the pane edge) shows no stuck
-geometry.
+**Part B — "remove resize-time row suppression" — NOT done, same
+reason as Stages 2/3.** The plan's second action item proposed removing
+`_Terminal.resize`'s row-pinning under `force_main_screen` (only column
+changes are ever forwarded to the child; rows stay pinned to whatever
+was last sent) as unwanted policy. Read the code before touching it —
+it is not incidental, it's a second deliberate compensation for
+`force_main_screen` (kept intentionally per Stage 2), with the exact
+failure mode it prevents spelled out in its own comment: on the primary
+screen, vertical space is indefinite scrollback, not a fixed page;
+forwarding a row-count change still reaches the child as a real resize,
+so a fullscreen TUI that believes it's on the alt screen repaints its
+whole frame — but with no alt-screen erase, the old frame merely scrolls
+into history instead of being cleared, which reads as a duplicate or
+garbled banner. Since `force_main_screen` stays true by design, this
+pinning must stay with it; removing one without the other reopens a
+concrete rendering bug for exactly the apps `force_main_screen` exists
+to help. This is the third stage where the Ghostty/cmux comparison
+recommended removing something that turned out to be a deliberate,
+already-diagnosed compensation for a GhostShell-specific design
+decision neither reference implementation has any equivalent of.
+
+Exit criteria (met, Part A only): PTY resize failures are visible and
+retried instead of silently wedging the terminal at an unconfirmed
+size; row suppression under `force_main_screen` is unchanged.
 
 ## Stage 6 — Idempotent parser/native-resource teardown
 
