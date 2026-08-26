@@ -91,31 +91,59 @@ Exit criteria: existing concurrent feed/render tests
 add a test that exercises keypress-during-feed if one doesn't already
 exist.
 
-## Stage 2 — Stop rewriting the VT byte stream
+## Stage 2 — Fix the alt-screen strip regex; keep `force_main_screen`'s intent (REVISED, landed 2026-08-25)
 
-Evidence: `ghostty_engine.py`'s `_strip_alt_screen` regex-strips
-alternate-screen escape sequences before they reach the parser when
-`force_main_screen` is enabled. The regex is documented as missing mixed
-private parameters. Neither Ghostty nor cmux ever rewrites the incoming
-stream — cmux's only comparable behavior (manual-I/O tmux mirror mode)
-is an explicit, separately-modeled mode, not stream editing.
+**Revision note:** the original version of this stage, written from the
+Ghostty/cmux source comparison alone, proposed deleting
+`_strip_alt_screen` entirely on the theory that GhostShell should never
+rewrite the incoming VT byte stream, matching Ghostty/cmux. Live
+investigation before implementing showed that recommendation was wrong:
+`force_main_screen`'s docstring, the settings file, and a full prior
+audit (`ai/TODO-archive.md`, 2026-08-13, `page_keys_to_pty`) all
+establish that keeping AI-CLI transcripts in real, searchable ST
+scrollback across alt-screen episodes (Codex's Ctrl+T pager, Grok's TUI)
+is a deliberate, already-tuned product feature, not architectural drift.
+Deleting it would have made that content live only in an ephemeral
+native alternate screen (zero scrollback, per Ghostty's own model) —
+the opposite of what this project is for. The Ghostty/cmux comparison
+correctly diagnosed "GhostShell rewrites the byte stream" but had no way
+to know that divergence was intentional; source comparison alone can't
+distinguish an intentional product decision from an architectural wart.
 
-Action: delete `_strip_alt_screen`. If "stay on primary screen"
-(transcript mode) is still a wanted product feature, implement it as a
-presentation-layer choice over native primary/alternate snapshots —
-i.e. GhostShell may choose which native screen to *display*, but must
-never lie to the parser about what the child process sent.
+What *was* a real bug, confirmed live: `_ALT_SCREEN_RE` (originally
+`\x1b\[\?(1049|1047|47)[hl]`) only matched an isolated alt-screen
+sequence. Any app combining it with another private mode in one CSI
+sequence (e.g. `\x1b[?1049;2004h`, alt-screen + bracketed paste
+together) slipped through unstripped, silently defeating
+`force_main_screen` for that app. Confirmed via `eval_python` against
+the live plugin before touching any code:
 
-Risk: this is exactly the kind of change that caused the
-`auto_follow`/`_compensate_trim_scroll` regression Grok shipped and
-reverted (see `TODO.md` 2026-08-23 entry) — a plausible-looking
-simplification that changed live behavior. Land this alone, verify live
-in the Testing Agent profile across both a full-screen app (e.g. vim)
-and a normal shell session, before proceeding to Stage 3.
+```
+\x1b[?1049h                -> stripped OK
+\x1b[?1049;2004h            -> LEAKED THROUGH
+\x1b[?2004;1049h            -> LEAKED THROUGH
+\x1b[?1;47h                 -> LEAKED THROUGH
+```
 
-Exit criteria: `force_main_screen` no longer touches the byte stream;
-manual live check confirms alt-screen apps still render correctly
-whether or not the setting is on.
+Action taken: `_strip_alt_screen` now removes only the alt-screen mode
+numbers (1049/1047/47) from a private-mode parameter list and keeps the
+rest, instead of matching only an all-alt-screen isolated sequence. An
+unrelated mode toggled in the same sequence (e.g. bracketed paste) still
+reaches the parser; a sequence that becomes empty after removal is
+dropped entirely, same as before. `force_main_screen`'s behavior and
+default are unchanged.
+
+Verified: unit tests added for the three combined-parameter cases above
+(`tests/test_ghostty_engine.py::StripAltScreenTests`); confirmed
+end-to-end via `eval_python` against a live `GhosttyParser` that
+`screen.alt_screen` stays `False` across a combined `?1049;2004h`/
+`?1049;2004l` toggle, matching the pre-existing behavior for the
+isolated form. Full suite: same 3 pre-existing, unrelated
+`test_launcher_flow.py` failures as Stage 0/1's baseline.
+
+Exit criteria (met): the alt-screen strip is correct for combined
+private-mode sequences; `force_main_screen`'s documented behavior is
+unchanged for every case that already worked.
 
 ## Stage 3 — Retire the second scrollback/history copy
 

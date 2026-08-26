@@ -59,6 +59,13 @@ class StripAltScreenTests(unittest.TestCase):
         text = "\x1b[?1000h\x1b[?2004h"
         self.assertEqual(_strip_alt_screen(text), text)
 
+    def test_alt_screen_combined_with_another_mode_is_still_stripped(self):
+        # A prior regex only matched an isolated "?1049h" and silently let
+        # combined-parameter forms through -- confirmed live 2026-08-25.
+        self.assertEqual(_strip_alt_screen("\x1b[?1049;2004h"), "\x1b[?2004h")
+        self.assertEqual(_strip_alt_screen("\x1b[?2004;1049h"), "\x1b[?2004h")
+        self.assertEqual(_strip_alt_screen("\x1b[?1;47h"), "\x1b[?1h")
+
     def test_text_without_private_modes_is_returned_unchanged(self):
         text = "plain \x1b[31mred\x1b[0m"
         self.assertIs(_strip_alt_screen(text), text)

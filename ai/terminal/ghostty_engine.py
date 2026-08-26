@@ -21,10 +21,17 @@ from .screen import BLANK
 # screen would genuinely hold different cell contents once entered. Instead
 # strip the alt-screen enter/exit sequences from the byte stream before
 # they ever reach the terminal, so it never leaves the primary screen.
-# CSI ? 1049/1047/47 h or l (with or without other combined private
-# params -- TUIs emit these standalone in practice, so this doesn't try to
-# handle a mixed-params form like `?1000;1049h`).
-_ALT_SCREEN_RE = re.compile(r"\x1b\[\?(1049|1047|47)[hl]")
+# CSI ? 1049/1047/47 h or l -- including when combined with another
+# private mode in the same sequence (e.g. `?1049;2004h` for alt-screen +
+# bracketed paste together). An earlier version of this regex
+# (`\x1b\[\?(1049|1047|47)[hl]`) only matched an isolated alt-screen
+# sequence and silently let combined forms through unstripped (confirmed
+# live 2026-08-25: `?1049;2004h` and `?1;47h` both leaked). _strip_alt_screen
+# below removes just the alt-screen mode numbers from the parameter list
+# and keeps the rest, so an unrelated mode toggled in the same sequence
+# still reaches the parser.
+_ALT_SCREEN_MODES = frozenset(("1049", "1047", "47"))
+_PRIVATE_MODE_RE = re.compile(r"\x1b\[\?([0-9;]+)([hl])")
 # CUP home as Codex/Qwen emit it on a full-frame repaint. Do not treat
 # CUP to an arbitrary row (`ESC[12H`) as home.
 _CUP_HOME_RE = re.compile(r"\x1b\[(?:(?:0;0|1;1|1|0)?H)")
@@ -108,7 +115,14 @@ def update_replace_scroll(sync_open, replace, text):
 def _strip_alt_screen(text):
     if "\x1b[?" not in text:
         return text
-    return _ALT_SCREEN_RE.sub("", text)
+
+    def _drop_alt_screen_params(m):
+        kept = [p for p in m.group(1).split(";") if p not in _ALT_SCREEN_MODES]
+        if not kept:
+            return ""
+        return "\x1b[?" + ";".join(kept) + m.group(2)
+
+    return _PRIVATE_MODE_RE.sub(_drop_alt_screen_params, text)
 
 
 def _color_id(result, rgb):
