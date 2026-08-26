@@ -145,45 +145,62 @@ Exit criteria (met): the alt-screen strip is correct for combined
 private-mode sequences; `force_main_screen`'s documented behavior is
 unchanged for every case that already worked.
 
-## Stage 3 — Retire the second scrollback/history copy
+## Stage 3 — DO NOT IMPLEMENT AS WRITTEN (verified against project history, 2026-08-25)
 
-Evidence: `ghostty_engine.py`'s `_sync_scrollback` re-reads native
-history into a second Python deque; `merge_replace_scroll_history`
-heuristically repairs synchronized full-frame replay; `screen.py`'s
-`_retire_line` independently drops blank rows, applies its own cap,
-supports pausing trim, and emits logging callbacks. Both Ghostty and
-cmux keep exactly one scrollback owner (Ghostty's `PageList`); cmux
-never copies historical cells into the host, it only asks Ghostty for a
-compact scrollbar position and issues `scroll_to_row`.
+**Original proposal (do not do this):** delete `Screen`'s own history
+deque and `_sync_scrollback`/`merge_replace_scroll_history`, on the
+theory — from the Ghostty/cmux comparison alone — that GhostShell keeps
+a second, purely-duplicative copy of terminal history that native
+scrollback should replace outright.
 
-This is flagged by explore-5 as GhostShell's single largest duplication,
-and the checkpoint's `trim_paused` note is a real hazard: pausing trim in
-Python cannot restore rows libghostty already pruned via
-`max_scrollback` — the feature currently promises something it can't
-deliver.
+**Why this is wrong, with evidence:** `ai/TODO.md` (2026-08-21/22
+entries, "content-loss bug" and "splice bug") documents a real, already
+shipped and tested investigation into exactly this mechanism:
 
-Action:
-1. Make native history the sole display source; stop maintaining a
-   parallel Python deque of historical rows.
-2. Move durable session-log persistence (if still wanted) to an
-   append-only listener on the PTY byte stream — the same layer
-   `_Terminal._on_data()` already exists at — completely decoupled from
-   the terminal's own scrollback/rendering path. This keeps the proven
-   invariant: full-transcript replay rebuilds, logging appends, and the
-   two must not be the same code path.
-3. Remove `trim_paused` and any cap/eviction logic that duplicates
-   `max_scrollback`; if a smaller/larger scrollback is wanted, it's a
-   native setting, not a second cap.
+- A full-transcript-replay TUI (Codex-style: `CSI H` + re-dump the whole
+  conversation every turn) genuinely produces **duplicate native
+  scrollback rows** when the redraw overflows past one screen height —
+  documented in the record as "correct raw terminal behavior, not a
+  Python bug." Trusting native history directly, as Stage 3 proposed,
+  means showing the user those duplicates.
+- A first attempt at simplifying this exact code (a "just don't clear
+  history" fix, 2026-08-22) was tried, reverted after it broke
+  `HomeReplaceScrollTests` (lines started appearing twice), and is
+  recorded as "do not repeat this exact approach."
+- The fix that actually shipped, `merge_replace_scroll_history`, aligns
+  a new dump against existing history by content-matching and splice
+  repair specifically so the *displayed* transcript stays deduplicated
+  despite the terminal-correct duplication underneath. It's covered by
+  `ReplaceScrollMergeTests` and `HomeReplaceScrollTests`
+  (`tests/test_ghostty_engine.py`), independently re-verified at the
+  time against an 8-turn live repro (`missing=0 dupes=0 total_lines=233`).
+- A separate, still-open native-level character-splice bug was chased
+  through a pure-C repro linked directly against the exact
+  `ghostty-vt.dll` GhostShell ships (SHA256-matched) and **cleared
+  Ghostty/libghostty-vt entirely** — it reproduces only under the live
+  plugin's real threading, not in any single-threaded repro. This bug is
+  orthogonal to Stage 3 either way: keeping or removing the Python
+  history copy does not touch it.
 
-This stage is the biggest and should itself be split into sequential
-patches (read-path first behind a flag if needed, then remove the old
-deque) rather than one commit.
+Both explore-4 and explore-5 (the Ghostty/cmux source comparisons this
+plan was built from) had no way to know this history — they compared
+architectures, not this project's own bug-fix record. Source comparison
+correctly spotted a structural difference from Ghostty/cmux, but could
+not tell an accidental duplication from a deliberately-earned fix for a
+workload (full-transcript-replay AI CLIs) neither reference
+implementation needs to handle. This is the second plan stage (after
+Stage 2) where that blind spot produced a recommendation that would have
+reintroduced an already-fixed bug — treat any remaining stage's
+"delete this, trust native" recommendation as unverified until checked
+the same way.
 
-Exit criteria: `Screen.history` (or equivalent) is a read-only view over
-native state; `tests/test_screen.py` and `tests/test_ghostty_engine.py`
-updated and passing; live check of scrollback across a resize and across
-an alt-screen exit/re-entry (the two conditions that previously needed
-heuristic repair).
+`trim_paused`'s narrower claim ("can't restore rows libghostty already
+pruned") is true but not actionable: `trim_paused` only defers Python's
+own cap enforcement on rows *already copied* into `Screen.history`; it
+was never responsible for retrieving rows already evicted from native
+before Python read them, so there's nothing to fix there either.
+
+No code changed for this stage.
 
 ## Stage 4 — Bind native mouse and synchronized-output state
 
