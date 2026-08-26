@@ -702,3 +702,90 @@ def test_resize_forgets_target_size_when_pty_rejects_it(monkeypatch):
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().clear()
+
+
+def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
+    """_Terminal.kill() must free the native ghostty-vt resources
+    (GhosttyParser.close) exactly once per tab close, and only after the
+    reader thread that could still be calling parser.feed() has actually
+    stopped -- calling close() while a reader is still mid-feed would be a
+    native use-after-free, not a Python exception, so this can't be
+    observed by any assertion if it went wrong; the ordering is what's
+    under test.
+    """
+    close_calls = []
+
+    class FakeParser:
+        def bind_write_pty(self, sink):
+            pass
+
+        def feed(self, text):
+            pass
+
+        def resize(self, cols, rows):
+            pass
+
+        def close(self):
+            # Mirrors GhosttyParser.close()'s own idempotency guard -- that
+            # guard, not _Terminal.kill() itself, is what makes a double
+            # kill() safe.
+            if getattr(self, "_closed", False):
+                return
+            self._closed = True
+            close_calls.append(1)
+
+    class FakePty:
+        def __init__(self, argv, cwd, cols, rows, env):
+            self.pid = 1
+            self._alive = True
+
+        def start(self):
+            pass
+
+        def read(self, on_data):
+            pass  # returns immediately, same as a real PTY hitting EOF
+
+        def write(self, data):
+            pass
+
+        def resize(self, cols, rows):
+            return True
+
+        def is_alive(self):
+            return self._alive and self.pid
+
+        def kill(self):
+            self._alive = False
+
+    monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
+    monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(
+        ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
+    )
+    monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
+    monkeypatch.setattr(
+        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+    )
+    monkeypatch.setattr(
+        sys.modules["sublime"], "load_settings",
+        lambda n: Settings({"record_asciicast": False, "profiles": PROFILES}),
+    )
+    monkeypatch.setattr(sys.modules["sublime"], "set_timeout", lambda fn, ms=0: None)
+
+    try:
+        win = FakeWindow()
+        ai_terminal._spawn(win, ALPHA, profile="Claude")
+        term = next(iter(ai_terminal._term_registry().values()))
+
+        term.kill()
+        assert close_calls == [1]
+
+        # Idempotent: a second kill() (e.g. a double tab-close) must not
+        # double-free.
+        term.kill()
+        assert close_calls == [1]
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().clear()

@@ -292,6 +292,36 @@ class SyncOutputModeTests(unittest.TestCase):
         self.assertFalse(self.screen.sync_output)
 
 
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class ParserCloseTests(unittest.TestCase):
+    """GhosttyParser.close() frees the terminal, render state, and (if
+    ever created) the key encoder/event -- previously nothing did, so a
+    closed tab leaked all of it until Sublime restarted. No tearDown here:
+    each test is responsible for its own single close() call, since a
+    second real free of an already-freed native handle (not exercised by
+    these tests, which test the idempotency guard, not double-freeing
+    past it) would be the actual bug this class exists to catch."""
+
+    def test_close_is_safe_with_no_keys_ever_encoded(self):
+        from ai.terminal.screen import Screen
+        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser.close()  # no exception is the assertion
+
+    def test_close_frees_the_lazily_created_key_encoder_too(self):
+        from ai.terminal.screen import Screen
+        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        # Allocates _key_encoder/_key_event on first use -- see encode_key.
+        parser.encode_key("a")
+        self.assertTrue(hasattr(parser, "_key_encoder"))
+        parser.close()  # no exception is the assertion
+
+    def test_close_is_idempotent(self):
+        from ai.terminal.screen import Screen
+        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser.close()
+        parser.close()  # must not double-free; no exception is the assertion
+
+
 def _cells(text):
     return [(ch, 0) for ch in text]
 

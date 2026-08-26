@@ -2684,6 +2684,29 @@ class _Terminal:
             self.pty.kill()
         except Exception as e:
             print(f"[ai_terminal] kill error: {e}")
+        # Free the native ghostty-vt resources this terminal owns (terminal,
+        # render state, key encoder -- see GhosttyParser.close). Must not
+        # race the reader thread's in-flight parser.feed(): freeing while
+        # another thread is mid-call is a native use-after-free, not a
+        # Python exception, so join it first. pty.kill() above already
+        # closed the pseudoconsole handles, which should unblock the
+        # reader's blocked ReadFile promptly; bounded so a reader that
+        # somehow doesn't exit can't hang tab-close -- at the cost of
+        # leaking (never crashing) in that case.
+        reader = self._reader
+        if reader is not None and reader.is_alive():
+            reader.join(timeout=2.0)
+        close = getattr(self.parser, "close", None)
+        if close is not None:
+            if reader is None or not reader.is_alive():
+                with self._lock:
+                    close()
+            else:
+                print(
+                    "[ai_terminal] reader thread did not exit in time; "
+                    "leaking native ghostty resources for this tab rather "
+                    "than risk a use-after-free"
+                )
 
 
 # ─── view helpers ─────────────────────────────────────────────────────────────

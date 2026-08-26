@@ -248,6 +248,34 @@ class GhosttyParser:
         self._replace_scroll = False
         self._replace_origin = None
 
+    def close(self):
+        """Free every native resource this parser owns: the terminal, its
+        render state (+ row iterator/cells), and the key encoder/event if
+        one was ever created (lazy -- see encode_key). Idempotent, so a
+        caller doesn't need to track whether it already called this.
+
+        Freed in reverse acquisition order (key encoder/event were created
+        last, if at all; the terminal was created first). The caller must
+        ensure nothing else can still be calling feed()/encode_key()/etc.
+        on this instance before calling this -- freeing while another
+        thread is mid-call is a native use-after-free, not a Python
+        exception. See _Terminal.kill, which joins the PTY reader thread
+        first for exactly this reason.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        key_event = getattr(self, "_key_event", None)
+        if key_event is not None:
+            self._g.key_event_free(key_event)
+        key_encoder = getattr(self, "_key_encoder", None)
+        if key_encoder is not None:
+            self._g.key_encoder_free(key_encoder)
+        self._g.render_state_row_cells_free(self._cells)
+        self._g.render_state_row_iterator_free(self._row_iter)
+        self._g.render_state_free(self._render_state)
+        self._g.terminal_free(self._term)
+
     def feed(self, text):
         if self.force_main_screen:
             text = _strip_alt_screen(text)

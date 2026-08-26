@@ -321,25 +321,60 @@ Exit criteria (met, Part A only): PTY resize failures are visible and
 retried instead of silently wedging the terminal at an unconfirmed
 size; row suppression under `force_main_screen` is unchanged.
 
-## Stage 6 — Idempotent parser/native-resource teardown
+## Stage 6 — Idempotent parser/native-resource teardown (DONE, 2026-08-25)
 
-Evidence: the FFI already exposes `terminal_free` and frees for the
-encoder, cells, iterator, and render-state, but `GhosttyParser` has no
-explicit close/free path — `_Terminal.kill()` just starts a daemon
-thread. cmux's `TerminalSurface+RuntimeLifecycle.swift` models this
-properly: idempotent close sequence, liveness-checked before every
-native call, generation-tagged to catch stale queued callbacks.
+Verified before implementing: `GhosttyParser` really did have no
+close/free path at all — `self._term`, `self._render_state`,
+`self._row_iter`, `self._cells`, and the lazily-created
+`self._key_encoder`/`self._key_event` were allocated once in `__init__`
+and reused for the parser's whole life, but `_Terminal.kill()` never
+touched `self.parser`. Every closed tab leaked all of it until Sublime
+itself restarted. Unlike Stages 2/3/4-mouse/5-partB, no comment or
+history anywhere suggested this was deliberate — it looks like a plain
+gap: teardown was wired up for the PTY/OS-process side but never
+extended to the native ghostty-vt side when that binding was added.
 
-Action: give `GhosttyParser` a lifecycle with a generation token —
-stop accepting input, unbind the write callback, stop/join the reader,
-quarantine handles, then free encoder/cells/iterator/render-state/
-terminal in reverse acquisition order. Daemon-thread exit is not a
-substitute for this.
+**Action taken, narrower than the original generation-token proposal:**
 
-Exit criteria: a new test exercises close-during-active-render and
-close-during-pending-input and confirms no use-after-free-shaped
-Python exceptions (AttributeError on a nulled handle, etc.) and no
-stale callback fires after close.
+- `GhosttyParser.close()` (`ghostty_engine.py`): idempotent (guarded by
+  a `_closed` flag), frees key event, key encoder (both `getattr`-
+  guarded since they're only created lazily on first keypress), row
+  cells, row iterator, render state, then the terminal — reverse of
+  acquisition order. All five free functions were already bound in
+  `ghostty_vt.py`; nothing new needed there.
+- `_Terminal.kill()` now joins the PTY reader thread (bounded, 2s
+  timeout) before calling `parser.close()` under `self._lock`. This
+  matters because the reader thread can still be inside
+  `parser.feed()` when `kill()` runs on a different thread — freeing
+  native resources concurrently with an in-flight call touching them is
+  a native use-after-free, not a Python exception, so it can't be
+  caught after the fact. `pty.kill()` (called just before) already
+  closes the pseudoconsole handles, which should unblock the reader's
+  blocked `ReadFile` promptly; if the join still times out, the
+  resources are deliberately leaked (logged) rather than freed
+  unsafely — a bounded leak is recoverable (process exit), a crash from
+  a bad free is not.
+
+**Not done, deliberately smaller than proposed:** no generation-token
+system, no "unbind the write callback" step, no `close-during-active-
+render` test. The join-then-close ordering above is sufficient to make
+freeing safe without needing per-call liveness checks throughout the
+parser — cmux needs a generation token because its surfaces are
+referenced from many places with unpredictable lifetimes (UI, async
+callbacks, other threads) simultaneously; `GhosttyParser` has exactly
+one thread (the PTY reader) that can call into it after construction,
+and that thread is now provably stopped before `close()` runs.
+
+Verified: `ParserCloseTests` (`tests/test_ghostty_engine.py`) against
+the real DLL — close with no keys ever encoded, close after the lazy
+key encoder was allocated, and double-close (idempotency) all run
+clean with no exception. `test_kill_closes_the_parser_once_the_reader_thread_has_stopped`
+(`tests/test_launcher_flow.py`) covers the `_Terminal.kill()` ordering
+and its own idempotency. Confirmed live via `eval_python` against the
+running plugin: feed, encode a key (allocating the lazy resources),
+resize, close, close again -- no crash. Full suite: 431 passed, same 3
+pre-existing unrelated `test_launcher_flow.py` failures as the running
+baseline.
 
 ## Stage 7 — Grapheme-aware text offsets (small, isolated)
 
