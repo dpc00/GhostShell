@@ -213,6 +213,28 @@
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
             }
         },
+        "Claude → Cloud": {
+            // --cloud attaches to a cloud-hosted session (the kind the
+            // phone/mobile app uses) instead of starting/resuming a local
+            // on-disk one -- local-history --resume/--continue cannot see
+            // those. Requires a real interactive TTY (confirmed: errors
+            // immediately over a piped/non-interactive invocation), which
+            // this profile's PTY satisfies. With no session_id/url argument
+            // it prompts interactively to create or attach; to attach to a
+            // specific mobile session directly, get its session ID or
+            // claude.ai/code URL from the phone app's session details/share
+            // menu and type `claude --cloud <that>` once the tab opens, or
+            // temporarily add it to this profile's launch_command.
+            "follow_ignore_trailing_lines": 2,
+            "launch_command": [
+                "claude",
+                "--cloud"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1",
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+            }
+        },
         "Claude --chrome": {
             "follow_ignore_trailing_lines": 2,
             "launch_command": [
