@@ -253,6 +253,45 @@ class WritePtyCallbackTests(unittest.TestCase):
         self.assertEqual(self.responses, [b"\x1b[8;40;100t"])
 
 
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class SyncOutputModeTests(unittest.TestCase):
+    """screen.sync_output (DEC mode 2026) is queried fresh from the native
+    terminal after every feed (ghostty_terminal_mode_get), replacing what
+    used to be a separate Python regex tracker in ai_terminal.py. Native
+    modes are inherently a boolean level, not a stack, so a repeated "h"
+    while already open (confirmed live: Grok sends exactly this, h twice
+    per l) can never become a nested/counted open the way a naive counter
+    could."""
+
+    def setUp(self):
+        from ai.terminal.screen import Screen
+        self.screen = Screen(80, 24)
+        self.parser = GhosttyParser(self.screen, force_main_screen=False)
+
+    def tearDown(self):
+        self.parser._g.terminal_free(self.parser._term)
+
+    def test_closed_by_default(self):
+        self.assertFalse(self.screen.sync_output)
+
+    def test_opens_on_h_and_closes_on_l(self):
+        self.parser.feed("\x1b[?2026h")
+        self.assertTrue(self.screen.sync_output)
+        self.parser.feed("some content")
+        self.assertTrue(self.screen.sync_output, "stays open until the matching l")
+        self.parser.feed("\x1b[?2026l")
+        self.assertFalse(self.screen.sync_output)
+
+    def test_repeated_h_is_a_level_not_a_stack(self):
+        self.parser.feed("\x1b[?2026h\x1b[?2026h")
+        self.assertTrue(self.screen.sync_output)
+        # A single closing l must fully close it -- if this were a stack
+        # (incrementing on each h), it would incorrectly still read open
+        # after only one l.
+        self.parser.feed("\x1b[?2026l")
+        self.assertFalse(self.screen.sync_output)
+
+
 def _cells(text):
     return [(ch, 0) for ch in text]
 

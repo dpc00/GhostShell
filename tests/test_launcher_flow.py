@@ -517,35 +517,35 @@ def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch
             ai_terminal._term_registry().clear()
 
 
-def test_sync_update_regex_is_a_latch_not_a_stack():
-    """CSI ?2026h/l (DECSET mode 2026) is a boolean level per spec: a
-    repeated "h" while already open is a legal no-op, not a nested open.
-    Grok sends exactly this -- confirmed live, h twice per l, always in that
-    order -- so only the last mark in a chunk may decide the resulting
-    state, never a running open/close count (that would only increase and
-    the tab would stop rendering forever).
-    """
-    find = ai_terminal._SYNC_UPDATE_RE.findall
-
-    assert find("\x1b[?2026h\x1b[?2026h\x1b[?2026l")[-1] == "l"
-    assert find("\x1b[?2026h")[-1] == "h"
-    assert find("\x1b[?2026h\x1b[?2026h") == ["h", "h"]
-    assert find("no markers here") == []
-
-
 def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
-    """A chunk that opens CSI ?2026 with no closing "l" yet must not let
-    _on_data's paint show a half-written frame -- that is the write-then-
-    retract stutter this fix exists for.
+    """term.screen.sync_output (native-backed: GhosttyParser queries
+    ghostty_terminal_mode_get after every feed) is a boolean level per spec
+    -- a repeated "h" while already open is a legal no-op, not a nested
+    open, so this can never become a stacked/running open count the way a
+    naive regex-count tracker could. _do_render must not paint a
+    half-written frame while it's true -- that is the write-then-retract
+    stutter this defer exists for.
     """
     events = []
 
     class FakeParser:
+        """feed() mirrors sync_output the way the real GhosttyParser does
+        (querying ghostty_terminal_mode_get after every feed) -- a level,
+        not a stack, since a repeated "h" while already open is a legal
+        DECSET no-op, never a nested/counted open.
+        """
+
+        def __init__(self, screen):
+            self.screen = screen
+
         def bind_write_pty(self, sink):
             pass
 
         def feed(self, text):
-            pass
+            if "\x1b[?2026h" in text:
+                self.screen.sync_output = True
+            if "\x1b[?2026l" in text:
+                self.screen.sync_output = False
 
         def resize(self, cols, rows):
             pass
@@ -582,7 +582,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
     )
     monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
     monkeypatch.setattr(
-        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser(screen)
     )
     monkeypatch.setattr(
         sys.modules["sublime"], "load_settings",
@@ -599,7 +599,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
         term = next(iter(ai_terminal._term_registry().values()))
 
         term._on_data(b"\x1b[?2026h")
-        assert term._sync_update_open is True
+        assert term.screen.sync_output is True
         assert term._render_pending is True
 
         # _render_pending is already True (set by _schedule_render inside
@@ -613,7 +613,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
         )
 
         term._on_data(b"some content\x1b[?2026l")
-        assert term._sync_update_open is False
+        assert term.screen.sync_output is False
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().clear()

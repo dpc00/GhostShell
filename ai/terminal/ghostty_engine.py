@@ -611,6 +611,7 @@ class GhosttyParser:
             self._get(gvt.TERMINAL_DATA_ACTIVE_SCREEN, ctypes.c_int())
             == gvt.SCREEN_ALTERNATE
         )
+        s.sync_output = self._mode(gvt.MODE_SYNC_OUTPUT)
 
         s.private_modes.discard(1000)
         s.private_modes.discard(1002)

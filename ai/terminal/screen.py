@@ -63,6 +63,12 @@ class Screen:
         self.retire_line_error = None
         self.saved = (0, 0)
         self.alt_screen = False
+        # DEC mode 2026 (synchronized output): true while the app is mid
+        # batch-update. Native-backed (GhosttyParser queries
+        # ghostty_terminal_mode_get after every feed) -- ai_terminal.py's
+        # render path defers painting while this is true so a batch isn't
+        # shown half-drawn.
+        self.sync_output = False
         # DECTCEM (mode 25): whether the app wants its real terminal cursor
         # shown. Defaults True (real terminals start with the cursor visible).
         # Fullscreen TUIs (Textual, ratatui, curses) hide it via ESC[?25l and
