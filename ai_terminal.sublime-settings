@@ -219,21 +219,24 @@
             // on-disk one -- local-history --resume/--continue cannot see
             // those. Requires a real interactive TTY (confirmed: errors
             // immediately over a piped/non-interactive invocation), which
-            // this profile's PTY satisfies. With no session_id/url argument
-            // it prompts interactively to create or attach; to attach to a
-            // specific mobile session directly, get its session ID or
-            // claude.ai/code URL from the phone app's session details/share
-            // menu and type `claude --cloud <that>` once the tab opens, or
-            // temporarily add it to this profile's launch_command.
-            "follow_ignore_trailing_lines": 2,
+            // this tab's PTY satisfies.
+            //
+            // Deliberately does NOT launch `claude --cloud` directly:
+            // confirmed live 2026-08-25 that the bare form (no
+            // description/session_id/url) does not open a generic
+            // interactive attach picker -- it errors asking for a
+            // description (that argument is for creating a brand-new
+            // session). There is no argument-free "show my cloud
+            // sessions" mode, and GhostShell's launcher has no way to
+            // prompt for a value before spawning. This profile just opens
+            // a plain shell in the resolved directory instead -- get the
+            // session ID or claude.ai/code URL from the phone app's
+            // session details/share menu, then type
+            // `claude --cloud <that>` yourself once the tab opens.
             "launch_command": [
-                "claude",
-                "--cloud"
+                "cmd.exe"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-            }
+            "spawn_env": {}
         },
         "Claude --chrome": {
             "follow_ignore_trailing_lines": 2,
