@@ -202,29 +202,69 @@ before Python read them, so there's nothing to fix there either.
 
 No code changed for this stage.
 
-## Stage 4 — Bind native mouse and synchronized-output state
+## Stage 4 — Bind native synchronized-output state (DONE); native mouse encoder (SPLIT OUT, not done)
 
-Evidence: keyboard already correctly derives from live terminal state
-via `GhosttyParser.encode_key` (modulo the Stage 1 locking fix); mouse
-does not — `mouse.py` reimplements the 1000/1002/1003/1006 protocols
-independently, and routing lives in `ai_terminal.py`'s
-`_route_mouse_click`/`_route_mouse_wheel`/`_mouse_force_release`, gated
-by settings like `mouse_handling`, `wheel_to_pty`, `page_keys_to_pty`.
-Similarly, synchronized-output (DEC mode 2026) is tracked by two
-independent regex state machines (`_on_data`'s `_sync_update_open` and
-`ghostty_engine.py`'s `update_replace_scroll`) instead of querying the
-one native mode flag Ghostty already maintains.
+**Revision note:** the original version bundled two unrelated changes
+under one stage. They needed different amounts of verification, so they
+were split rather than landed together.
 
-Action: bind libghostty's native mouse encoder (`ghostty_surface_mouse_*`
-equivalents already exposed via the C API used elsewhere) and drive it
-from `_term`, keeping only Sublime event capture and coordinate
-acquisition in Python. Replace both regex-based mode-2026 scanners with
-a query against native terminal modes.
+**Part A — synchronized-output mode query — DONE, 2026-08-25.** The
+original evidence claimed *two* independent regex state machines for
+DEC mode 2026: `_on_data`'s `_sync_update_open` in `ai_terminal.py` and
+`update_replace_scroll` in `ghostty_engine.py`. Checked both before
+touching anything — they are not the same kind of thing:
 
-Exit criteria: `tests/test_mouse.py` passing against the native encoder;
-manual check of mouse reporting in an app that uses it (e.g. `htop`,
-`less -S` in mouse mode); synchronized-output paint delay still bounded
-but no longer regex-driven.
+- `_on_data`'s `_sync_update_open` really was a pure level query ("is
+  mode 2026 on right now") reconstructed via regex after the fact. This
+  one native-backed it correctly: added `MODE_SYNC_OUTPUT = 2026` to
+  `ghostty_vt.py`, `Screen.sync_output` (defaults `False`), and
+  `GhosttyParser._sync()` now sets it via
+  `self._mode(gvt.MODE_SYNC_OUTPUT)` (`ghostty_terminal_mode_get`,
+  confirmed present in the shipped DLL by symbol lookup before use).
+  `_on_data`'s regex scan and the `_sync_update_open` attribute are
+  removed; `_do_render` reads `term.screen.sync_output` directly. The
+  render path's own "stop waiting after 0.5s" safety valve became a
+  separate `_sync_defer_forced` latch, since it can no longer force the
+  (now native-backed, not Python-tracked) state itself false — it just
+  ignores it until sync_output naturally goes false again.
+- `ghostty_engine.py`'s `update_replace_scroll` is a *different*
+  mechanism and must NOT be touched: it decides, from raw byte position
+  within one PTY chunk, whether a CUP-home occurred *while* mode 2026
+  was transiently open earlier in that same chunk — a question about
+  event order within a string, which a post-hoc native mode query
+  cannot answer (feeding the whole chunk first, then querying, only
+  sees the mode's value at the end of the chunk). This function feeds
+  `merge_replace_scroll_history`'s full-rebuild decision, the exact
+  mechanism Stage 3 already established is load-bearing. Left as-is.
+
+Verified: new `SyncOutputModeTests` (`tests/test_ghostty_engine.py`)
+against a live `GhosttyParser`/DLL, including the redundant-"h"
+(Grok-style) case; existing `test_do_render_defers_while_synchronized_output_is_open`
+updated to drive `screen.sync_output` through a fake parser instead of
+the removed regex, still passing. Confirmed live via `eval_python`
+against the running plugin. Full suite: 426 passed, same 3
+pre-existing unrelated `test_launcher_flow.py` failures.
+
+**Part B — native mouse encoder — not done, split out deliberately.**
+`libghostty-vt` does expose a real mouse encoder C API
+(`include/ghostty/vt/mouse/encoder.h`: `ghostty_mouse_encoder_new`/
+`setopt_from_terminal`/`encode`, symbol-confirmed present in the shipped
+DLL), so this is technically buildable, unlike the mouse claim would
+have been if the API didn't exist. But `mouse.py`'s current
+implementation and `ai_terminal.py`'s routing were built from a real
+audit (`TODO-archive.md`, 2026-08-11: replaying 470 recorded asciicast
+sessions to determine per-CLI mouse-tracking support) and include a
+Sublime-specific feature with no native equivalent —
+`_route_click_to_cursor_fallback()`, which synthesizes arrow-key
+presses to reposition an app's cursor when it has *no* DEC mouse
+tracking at all. Native mouse encoding would only ever help the apps
+that already enable tracking; it cannot replace the fallback path, and
+touching the routing risks the already-tuned per-profile
+`mouse_handling`/`wheel_to_pty`/`page_keys_to_pty` settings. This is
+real, substantial, separately-scoped work needing the same kind of live
+verification across multiple real CLI profiles the original audit did
+— not something to fold into a "bind the encoder" one-line action item.
+Left for a dedicated future stage if wanted.
 
 ## Stage 5 — One resize pipeline with applied-state accounting
 
