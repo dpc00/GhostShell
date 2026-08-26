@@ -14,15 +14,42 @@ over that file to update). Override via GHOSTTY_VT_DLL env var to point at
 a different build during development.
 """
 import ctypes
+import hashlib
 import os
 
 DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dll")
 
+_fingerprint_logged = False
+
+
+def dll_fingerprint(path):
+    """sha256/size/mtime of the DLL file at path, or None if unreadable.
+
+    The DLL is gitignored (built binary artifact) and exposes no version
+    query of its own, so this is the only way to record which exact build
+    produced a given test run or bug report.
+    """
+    try:
+        st = os.stat(path)
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return {
+            "path": path,
+            "sha256": h.hexdigest(),
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+        }
+    except OSError:
+        return None
+
 
 def load_library(path=None):
+    global _fingerprint_logged
     path = path or os.environ.get("GHOSTTY_VT_DLL", DEFAULT_DLL_PATH)
     try:
-        return ctypes.CDLL(path)
+        lib = ctypes.CDLL(path)
     except OSError as e:
         # CDLL's own message ("[WinError 126] The specified module could not be
         # found") names neither the file nor the override, which is the whole
@@ -31,6 +58,15 @@ def load_library(path=None):
             "could not load libghostty-vt from %s (%s); set GHOSTTY_VT_DLL to "
             "a working build" % (path, e)
         ) from e
+    if not _fingerprint_logged:
+        _fingerprint_logged = True
+        fp = dll_fingerprint(path)
+        if fp is not None:
+            print(
+                "[ghostty_vt] loaded %s (sha256=%s, size=%d)"
+                % (fp["path"], fp["sha256"][:12], fp["size"])
+            )
+    return lib
 
 
 # ---- types.h ----
