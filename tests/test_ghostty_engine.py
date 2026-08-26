@@ -23,7 +23,12 @@ from ai.terminal.colors import (
     UNDERLINE,
     quantize256,
 )
-from ai.terminal.ghostty_engine import GhosttyParser, _color_id, _strip_alt_screen
+from ai.terminal.ghostty_engine import (
+    GhosttyParser,
+    _AltScreenFilter,
+    _color_id,
+    _strip_alt_screen,
+)
 
 
 def _detached_parser():
@@ -69,6 +74,47 @@ class StripAltScreenTests(unittest.TestCase):
     def test_text_without_private_modes_is_returned_unchanged(self):
         text = "plain \x1b[31mred\x1b[0m"
         self.assertIs(_strip_alt_screen(text), text)
+
+
+class AltScreenStreamFilterTests(unittest.TestCase):
+    def _assert_every_split(self, text, expected):
+        for split in range(len(text) + 1):
+            stream_filter = _AltScreenFilter()
+            actual = stream_filter.feed(text[:split])
+            actual += stream_filter.feed(text[split:])
+            actual += stream_filter.flush()
+            self.assertEqual(actual, expected, "split at byte %d" % split)
+
+    def test_enter_and_exit_work_at_every_read_boundary(self):
+        self._assert_every_split("a\x1b[?1049hb\x1b[?1049lc", "abc")
+        self._assert_every_split("a\x1b[?47hb\x1b[?1047lc", "abc")
+
+    def test_combined_modes_work_at_every_read_boundary(self):
+        self._assert_every_split(
+            "a\x1b[?1049;2004hb\x1b[?2004;1049lc",
+            "a\x1b[?2004hb\x1b[?2004lc",
+        )
+
+    def test_one_character_reads_preserve_text_and_unrelated_csi(self):
+        text = "plain \x1b[31mred\x1b[0m \x1b[?1049hinside\x1b[?1049l done"
+        stream_filter = _AltScreenFilter()
+        actual = "".join(stream_filter.feed(ch) for ch in text)
+        actual += stream_filter.flush()
+        self.assertEqual(actual, "plain \x1b[31mred\x1b[0m inside done")
+
+    def test_malformed_parameter_run_is_bounded_and_flushed_unchanged(self):
+        stream_filter = _AltScreenFilter(pending_max=8)
+        malformed = "\x1b[?123456789"
+        self.assertEqual(stream_filter.feed(malformed), malformed)
+        self.assertEqual(stream_filter.pending, "")
+
+    def test_reset_discards_an_incomplete_sequence(self):
+        stream_filter = _AltScreenFilter()
+        self.assertEqual(stream_filter.feed("before\x1b[?104"), "before")
+        self.assertEqual(stream_filter.pending, "\x1b[?104")
+        stream_filter.reset()
+        self.assertEqual(stream_filter.feed("9hafter"), "9hafter")
+        self.assertEqual(stream_filter.pending, "")
 
 
 class ColorIdTests(unittest.TestCase):

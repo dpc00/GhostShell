@@ -364,7 +364,6 @@ class _Pty:
         would already claim to be at the size ConPTY never actually took)."""
         if not self._alive or self._hPC is None:
             return False
-        self._cols, self._rows = cols, rows
         # restype=HRESULT makes ctypes raise on a failing result, so a bad
         # resize used to escape into the caller's layout watcher. Non-fatal:
         # the child keeps its old winsize, so full-screen TUIs draw at the
@@ -380,6 +379,7 @@ class _Pty:
                 % (cols, rows, hr & 0xFFFFFFFF)
             )
             return False
+        self._cols, self._rows = cols, rows
         return True
 
     def is_alive(self):
@@ -511,7 +511,6 @@ class _PosixPty:
         be treated as applied on failure."""
         if not self._alive or self._fd < 0:
             return False
-        self._cols, self._rows = cols, rows
         try:
             import fcntl
             import struct
@@ -523,6 +522,7 @@ class _PosixPty:
         except OSError as e:
             print(f"[ai_terminal] posix pty resize({cols}, {rows}) failed: {e}")
             return False
+        self._cols, self._rows = cols, rows
         return True
 
     def is_alive(self):
@@ -2543,6 +2543,10 @@ class _Terminal:
             _debug_log(data)
         text = self._decoder.decode(data)
         _record_profile_usage(getattr(self, "profile_name", None), text)
+        if getattr(self, "_resize_desynced", False):
+            # Bytes can still drain while pty.kill() closes the handles, but
+            # they cannot safely be interpreted against stale parser geometry.
+            return
         with self._lock:
             try:
                 self.parser.feed(text)
@@ -2611,40 +2615,40 @@ class _Terminal:
             rows = self._last_rows
         if cols == self._last_cols and rows == self._last_rows:
             return
-        self._last_cols, self._last_rows = cols, rows
+        if getattr(self, "_resize_desynced", False):
+            return
         with self._lock:
+            # The reader also takes this lock, so resize-generated output
+            # cannot be fed between changing the child and changing the
+            # parser. A child rejection leaves every other state untouched.
+            if not self.pty.resize(cols, rows):
+                return
             try:
                 if hasattr(self.parser, "resize"):
-                    # The parser owns its own internal terminal state mirroring
-                    # self.screen's size; it must stay in lockstep or _sync()
-                    # reads past its actual column/row range next feed().
                     self.parser.resize(cols, rows)
                 else:
                     self.screen.resize(cols, rows)
             except Exception as e:
-                # This runs on the geometry watcher's timeout; report the
-                # failure and forget the target size so the next tick retries
-                # instead of assuming this size was applied.
-                self._last_cols = self._last_rows = None
-                print(f"[ai_terminal] resize to {cols}x{rows} failed: {e}")
-                self._notify("terminal resize failed: %s" % e)
+                # The child accepted the geometry but the parser did not.
+                # Continuing would interpret output against false dimensions.
+                self._resize_desynced = True
+                message = (
+                    "terminal stopped after its parser rejected the applied "
+                    "resize to %dx%d: %s" % (cols, rows, e)
+                )
+                print("[ai_terminal] %s" % message)
+                self._notify(message)
+                try:
+                    self.pty.kill()
+                except Exception as kill_error:
+                    print("[ai_terminal] resize containment kill failed: %s" % kill_error)
+                sublime.set_timeout(
+                    lambda m=message: _vwrite(self.view, "\n[%s]\n" % m), 0
+                )
                 return
-        if not self.pty.resize(cols, rows):
-            # ConPTY/TIOCSWINSZ rejected it (see _Pty.resize/_PosixPty.resize
-            # docstrings): the parser/screen already reflowed to cols/rows
-            # above, but the real child never got the SIGWINCH-equivalent at
-            # this size. Forget the target size, same as the parser-resize
-            # failure above, so a later poll that measures this exact size
-            # again does not hit the "already at this size" early-return and
-            # silently skip retrying forever.
-            self._last_cols = self._last_rows = None
-        # Recording patch: emit an "r" (resize) event so the .cast records
-        # geometry changes for accurate replay.
+            self._last_cols, self._last_rows = cols, rows
+        # Record and render only a size applied to both the child and parser.
         self._cast("r", f"{int(cols)}x{int(rows)}")
-        # Re-render so the view text matches the new (narrower) grid right
-        # away. Without this, the view keeps stale wider text until Claude
-        # next emits output, and the stale wider lines show a horizontal
-        # scrollbar for up to several seconds after a shrink.
         _schedule_render(self)
 
     def snapshot(self):

@@ -66,16 +66,24 @@ def install(message_sink=None):
     the "nothing found" / "bad path" feedback paths.
     """
     if "sublime" in sys.modules:
-        return sys.modules["sublime"]
+        m = sys.modules["sublime"]
+        # Test modules are collected in an order pytest does not guarantee.
+        # If another suite installed the shared stub first, a later flow test
+        # still needs to observe status/error messages in its own sink.
+        if message_sink is not None:
+            m._message_sink = message_sink
+        return m
 
     def _message(kind):
         def emit(text):
-            if message_sink is not None:
-                message_sink.append((kind, text))
+            sink = getattr(m, "_message_sink", None)
+            if sink is not None:
+                sink.append((kind, text))
 
         return emit
 
     m = types.ModuleType("sublime")
+    m._message_sink = message_sink
     m.Region = Region
     m.Settings = Settings
     m.Kind = Kind

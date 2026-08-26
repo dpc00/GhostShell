@@ -32,6 +32,7 @@ from .screen import BLANK
 # still reaches the parser.
 _ALT_SCREEN_MODES = frozenset(("1049", "1047", "47"))
 _PRIVATE_MODE_RE = re.compile(r"\x1b\[\?([0-9;]+)([hl])")
+_ALT_SCREEN_PENDING_MAX = 256
 # CUP home as Codex/Qwen emit it on a full-frame repaint. Do not treat
 # CUP to an arbitrary row (`ESC[12H`) as home.
 _CUP_HOME_RE = re.compile(r"\x1b\[(?:(?:0;0|1;1|1|0)?H)")
@@ -112,17 +113,104 @@ def update_replace_scroll(sync_open, replace, text):
     return open_, replace
 
 
+def _rewrite_private_mode(params, action):
+    kept = [p for p in params.split(";") if p not in _ALT_SCREEN_MODES]
+    if not kept:
+        return ""
+    return "\x1b[?" + ";".join(kept) + action
+
+
+class _AltScreenFilter:
+    """Incrementally remove DEC alternate-screen modes from a VT stream.
+
+    PTY reads may split a CSI sequence at any byte. A regex applied to each
+    read independently therefore lets a split ``ESC[?1049h`` reach Ghostty
+    and defeats force_main_screen. This filter retains only a possible
+    unfinished private-mode sequence; all ordinary text passes immediately.
+    Malformed numeric parameter runs are bounded so they cannot grow memory
+    indefinitely.
+    """
+
+    def __init__(self, pending_max=_ALT_SCREEN_PENDING_MAX):
+        self.pending = ""
+        self.pending_max = max(4, int(pending_max))
+
+    def reset(self):
+        self.pending = ""
+
+    def flush(self):
+        pending = self.pending
+        self.pending = ""
+        return pending
+
+    def feed(self, text):
+        if not self.pending and "\x1b" not in (text or ""):
+            return text or ""
+        data = self.pending + (text or "")
+        self.pending = ""
+        if not data:
+            return ""
+
+        out = []
+        pos = 0
+        size = len(data)
+        while pos < size:
+            esc = data.find("\x1b", pos)
+            if esc < 0:
+                out.append(data[pos:])
+                break
+            out.append(data[pos:esc])
+
+            # Retain prefixes that may become ESC[?... on the next read.
+            remaining = size - esc
+            if remaining == 1 or (remaining == 2 and data[esc + 1] == "["):
+                self.pending = data[esc:]
+                break
+            if data[esc + 1] != "[":
+                out.append("\x1b")
+                pos = esc + 1
+                continue
+            if remaining == 2:
+                self.pending = data[esc:]
+                break
+            if data[esc + 2] != "?":
+                # Some other complete/incomplete CSI. Ghostty owns it; emit
+                # the ESC now and leave its own incremental parser to finish.
+                out.append("\x1b")
+                pos = esc + 1
+                continue
+
+            end = esc + 3
+            while end < size and data[end] in "0123456789;":
+                end += 1
+            if end == size:
+                candidate = data[esc:]
+                if len(candidate) <= self.pending_max:
+                    self.pending = candidate
+                else:
+                    out.append(candidate)
+                break
+
+            action = data[end]
+            if end > esc + 3 and action in "hl":
+                out.append(_rewrite_private_mode(data[esc + 3:end], action))
+                pos = end + 1
+                continue
+
+            # Not a DEC private mode set/reset sequence we rewrite. Preserve
+            # the bytes examined and continue after them without interpretation.
+            out.append(data[esc:end + 1])
+            pos = end + 1
+
+        return "".join(out)
+
+
 def _strip_alt_screen(text):
+    """Stateless compatibility helper for complete strings and unit tests."""
     if "\x1b[?" not in text:
         return text
-
-    def _drop_alt_screen_params(m):
-        kept = [p for p in m.group(1).split(";") if p not in _ALT_SCREEN_MODES]
-        if not kept:
-            return ""
-        return "\x1b[?" + ";".join(kept) + m.group(2)
-
-    return _PRIVATE_MODE_RE.sub(_drop_alt_screen_params, text)
+    stream_filter = _AltScreenFilter()
+    return stream_filter.feed(text) + stream_filter.flush()
 
 
 def _color_id(result, rgb):
@@ -243,6 +331,7 @@ class GhosttyParser:
         )
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
+        self._alt_screen_filter = _AltScreenFilter()
         self._last_scrollback_rows = -1
         self._sync_open = False
         self._replace_scroll = False
@@ -265,6 +354,7 @@ class GhosttyParser:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        self._alt_screen_filter.reset()
         key_event = getattr(self, "_key_event", None)
         if key_event is not None:
             self._g.key_event_free(key_event)
@@ -278,7 +368,7 @@ class GhosttyParser:
 
     def feed(self, text):
         if self.force_main_screen:
-            text = _strip_alt_screen(text)
+            text = self._alt_screen_filter.feed(text)
         self._sync_open, self._replace_scroll = update_replace_scroll(
             self._sync_open, self._replace_scroll, text
         )
@@ -306,6 +396,7 @@ class GhosttyParser:
         self._last_scrollback_rows = -1
 
     def reset(self):
+        self._alt_screen_filter.reset()
         gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
         self._last_scrollback_rows = -1
         self._sync_open = False

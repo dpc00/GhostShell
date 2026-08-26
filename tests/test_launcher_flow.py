@@ -619,89 +619,98 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
             ai_terminal._term_registry().clear()
 
 
-def test_resize_forgets_target_size_when_pty_rejects_it(monkeypatch):
-    """_Pty.resize/_PosixPty.resize return True/False for whether ConPTY/
-    TIOCSWINSZ actually accepted the new size. _Terminal.resize must not
-    treat a False (rejected) result as applied -- if it did,
-    self._last_cols/_last_rows would already claim the rejected size, so a
-    later poll that measures that exact size again would hit the
-    "already at this size" early-return and silently never retry telling
-    the real child, which would stay at its old winsize forever.
-    """
+def _resize_test_term(parser_resize, pty_resize):
     events = []
 
     class FakeParser:
         def bind_write_pty(self, sink):
             pass
 
-        def feed(self, text):
-            pass
-
         def resize(self, cols, rows):
-            pass  # parser/screen side always "succeeds" in this test
+            events.append(("parser", cols, rows))
+            parser_resize(cols, rows)
 
     class FakePty:
-        def __init__(self, argv, cwd, cols, rows, env):
-            self.pid = 1
+        argv = []
+        pid = 1
+
+        def __init__(self):
             self._alive = True
 
-        def start(self):
-            pass
-
-        def read(self, on_data):
-            pass
-
-        def write(self, data):
-            pass
-
         def resize(self, cols, rows):
-            events.append((cols, rows))
-            return False  # simulate ConPTY/TIOCSWINSZ rejecting every resize
+            events.append(("pty", cols, rows))
+            return pty_resize(cols, rows)
 
         def is_alive(self):
-            return self._alive and self.pid
+            return self._alive
 
         def kill(self):
+            events.append(("kill",))
             self._alive = False
 
-    monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
-    monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
-    monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
-    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
-    monkeypatch.setattr(
-        ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
+    screen = ai_terminal._Screen(80, 24)
+    term = ai_terminal._Terminal(
+        FakeView(), FakePty(), screen, FakeParser(), profile_name="Claude"
     )
-    monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
-    monkeypatch.setattr(
-        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
-    )
-    monkeypatch.setattr(
-        sys.modules["sublime"], "load_settings",
-        lambda n: Settings({"record_asciicast": False, "profiles": PROFILES}),
-    )
+    return term, events
+
+
+def test_resize_rejection_leaves_all_applied_state_unchanged(monkeypatch):
+    """A child resize rejection must not resize the parser, change applied
+    bookkeeping, emit a cast event, or suppress a later identical retry."""
+    events = []
+    term, resize_events = _resize_test_term(lambda c, r: None, lambda c, r: False)
+    monkeypatch.setattr(term, "_cast", lambda code, data: events.append((code, data)))
+    monkeypatch.setattr(ai_terminal, "_schedule_render", lambda term: events.append("render"))
+
+    term.resize(100, 30)
+    assert resize_events == [("pty", 100, 30)]
+    assert (term._last_cols, term._last_rows) == (80, 24)
+    assert (term.screen.cols, term.screen.rows) == (80, 24)
+    assert events == []
+
+    term.resize(100, 30)
+    assert resize_events == [("pty", 100, 30), ("pty", 100, 30)]
+
+
+def test_resize_commits_and_records_only_after_both_sides_succeed(monkeypatch):
+    casts = []
+    term, events = _resize_test_term(lambda c, r: term.screen.resize(c, r), lambda c, r: True)
+    monkeypatch.setattr(term, "_cast", lambda code, data: casts.append((code, data)))
+    renders = []
+    monkeypatch.setattr(ai_terminal, "_schedule_render", lambda t: renders.append(t))
+
+    term.resize(100, 30)
+
+    assert events == [("pty", 100, 30), ("parser", 100, 30)]
+    assert (term._last_cols, term._last_rows) == (100, 30)
+    assert (term.screen.cols, term.screen.rows) == (100, 30)
+    assert casts == [("r", "100x30")]
+    assert renders == [term]
+
+
+def test_parser_failure_after_child_resize_is_visible_and_contained(monkeypatch):
+    def reject_parser(cols, rows):
+        raise RuntimeError("native parser rejected size")
+
+    term, events = _resize_test_term(reject_parser, lambda c, r: True)
+    casts = []
+    notices = []
+    monkeypatch.setattr(term, "_cast", lambda code, data: casts.append((code, data)))
+    monkeypatch.setattr(term, "_notify", notices.append)
     monkeypatch.setattr(sys.modules["sublime"], "set_timeout", lambda fn, ms=0: None)
 
-    try:
-        win = FakeWindow()
-        ai_terminal._spawn(win, ALPHA, profile="Claude")
-        term = next(iter(ai_terminal._term_registry().values()))
-        assert (term._last_cols, term._last_rows) == (80, 24)
+    term.resize(100, 30)
 
-        term.resize(100, 30)
-        assert events == [(100, 30)]
-        assert (term._last_cols, term._last_rows) == (None, None), (
-            "a rejected pty resize must not be recorded as the applied size"
-        )
+    assert events == [("pty", 100, 30), ("parser", 100, 30), ("kill",)]
+    assert term._resize_desynced is True
+    assert term.pty.is_alive() is False
+    assert (term._last_cols, term._last_rows) == (80, 24)
+    assert casts == []
+    assert notices and "parser rejected" in notices[0]
 
-        # A later poll re-measuring the SAME size the rejected call already
-        # tried must retry (call the pty again), not skip it as "unchanged"
-        # -- that early-return only makes sense once a size is confirmed
-        # applied.
-        term.resize(100, 30)
-        assert events == [(100, 30), (100, 30)]
-    finally:
-        with ai_terminal._term_lock():
-            ai_terminal._term_registry().clear()
+    term.resize(100, 30)
+    assert events == [("pty", 100, 30), ("parser", 100, 30), ("kill",)]
 
 
 def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
