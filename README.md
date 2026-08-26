@@ -82,5 +82,9 @@ run `zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
 ## Testing
 
 ```
-python -m unittest discover -s tests -v
+python -m pytest tests/ -q
 ```
+
+`python -m unittest discover -s tests -v` also works but silently misses
+the pytest-only tests in this suite (fewer collected than the command
+above) — use the pytest invocation for a full run.
