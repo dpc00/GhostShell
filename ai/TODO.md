@@ -1,6 +1,17 @@
 # ai_terminal TODO
 
-## Splatter/splice corruption: bisection gates fully exonerated (2026-08-27, ~2:30am)
+## Splatter/splice corruption: one real bug found+fixed, root cause narrowed to the ctypes/native boundary (2026-08-27, ~2:30am–3:45am)
+
+**Correction to this entry's own earlier claim** (caught in review): the
+control-profile test below varied only `caret_footer_pinning_enabled`; the
+other four bisection gates (`host_cursor_paint_enabled`,
+`click_to_cursor_fallback_enabled`, `user_owns_caret_enabled`,
+`fast_caret_patch_enabled`) were held at the same value (`false`) in both
+the test and control profile, not independently tested. Only
+`caret_footer_pinning_enabled` — and, per the deeper trace below, the whole
+`_replace_scroll`/`merge_replace_scroll_history` machinery — is
+conclusively exonerated for this bug. The other four gates are untested
+for this specific corruption, not exonerated.
 
 Stage 1 of the Terminus-rewrite plan below (removing `adjust_display_caret`'s
 prompt/footer remapping) hit a documented blocker before any code change was
@@ -34,21 +45,64 @@ workload.
 
 **Result: the same corruption occurred, at multiple points, in the pinned
 control too.** Same splice shape, same rolling-digit pattern, same self-
-heal. **`caret_footer_pinning_enabled` (and by extension the whole caret
-display/remap system) is conclusively not a causal or contributing factor**
-— this is a pure parser/history/timing bug in the full-transcript-replay
-pattern itself, upstream of and independent of caret display. Bisection
-gates are fully exonerated for this specific bug.
+heal. `caret_footer_pinning_enabled` specifically is conclusively not a
+causal or contributing factor for this bug. This de-risks the Terminus
+rewrite: the 2026-08-21 caution against disabling that gate was conflating
+two different bugs.
 
-**This de-risks the Terminus rewrite significantly**: the 2026-08-21
-caution against disabling `caret_footer_pinning_enabled` was conflating two
-different bugs. Root cause of the splatter itself is still not found —
-next step (not attempted this session) is the isolated-subprocess stress
-harness already flagged in the 2026-08-21 entry below, widened to match
-the actual replay-on-every-Enter burst pattern rather than a tight
-synthetic loop. Full reproduction evidence, byte-for-byte, preserved
-outside the repo (scratchpad, not committed — path in this session's own
-record) for whoever picks up the splatter root-cause separately.
+**Root-cause chase, continued, per explicit instruction (test-first, fix,
+validate against the real repro, don't assume causation).** Built a
+deterministic offline tool: `replay_single_thread.py` (scratchpad, path in
+session record) feeds a real captured `.cast` through the actual
+`GhosttyParser`/`Screen`, single-threaded, checking rendered rows for the
+splice signature after every feed. **Reproduced the exact corruption with
+zero concurrency** — this is not a race condition, ruling out an entire
+prior hypothesis (ctypes thread-safety) that earlier sessions had flagged
+as a candidate.
+
+**Real, independent bug found and FIXED**: `merge_replace_scroll_history()`
+(`ai/terminal/ghostty_engine.py`) aligned to the *first* (earliest)
+matching old row when locating where a replay dump's content starts in
+prior history (`break` on first match). Since Codex-style tools redraw
+from turn 0 on every dump, that matched text recurs once per prior replay
+cycle — picking the earliest occurrence instead of the most recent
+misaligns every subsequent row comparison, both letting real splice
+corruption through uncorrected *and* silently dropping genuinely unique
+older content. New test proved this with actual demonstrated data loss
+before the fix: `tests/test_ghostty_engine.py`
+`test_ambiguous_repeated_match_prefers_most_recent_occurrence` — confirmed
+failing against the original code, passing after removing the `break` (all
+4 pre-existing tests in that class unaffected — none have ambiguous
+matches). Full suite: 446 passed (was 445), same 1 pre-existing unrelated
+failure. **Kept — real, TDD-verified fix**, but:
+
+**Replaying the real cast against the fixed code still reproduces the
+identical corruption.** This fix is correct but not the (or not the only)
+cause of the live-reproduced splatter. Instrumented
+`merge_replace_scroll_history` directly (call-logging monkeypatch) and
+found the corrupted text is **already present in `new_rows` before the
+merge function ever runs** — confirmed at 3 separate events. This
+exonerates the whole `_replace_scroll`/merge machinery for this bug too.
+
+**Narrowed to `_sync_scrollback()`'s row-reading loop**
+(`ai/terminal/ghostty_engine.py` ~801-817), which reads native scrollback
+rows directly via `terminal_grid_ref` (3 ctypes FFI calls per cell). The
+corrupting event read 135 new rows in one call (~37,665 ctypes calls in
+one synchronous loop, from one large Codex-style dump). The corruption is
+present in what these calls return — at essentially the ctypes/native-
+library boundary. **Not yet distinguished**: genuine bug in the native
+`ghostty-vt.dll`'s scrollback/grid tracking under this access pattern, vs.
+a GhostShell-side indexing/staleness issue in assembling these per-cell
+native reads into rows. This is where the session stopped.
+
+**Next step, not attempted**: instrument inside `_sync_scrollback`'s loop
+itself (temporary prints) — does re-reading the same native row twice give
+identical content? Does read order change what comes back? Does the
+corrupted row index correlate with any buffer/cache boundary in the DLL?
+That distinguishes "native DLL bug" from "GhostShell assembles it wrong"
+before any fix attempt at this layer, since it's the ctypes boundary
+directly. Full reproduction evidence and the reusable replay tool are
+preserved outside the repo (scratchpad, path in this session's record).
 
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
