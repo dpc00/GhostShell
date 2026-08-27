@@ -1,6 +1,126 @@
 # ai_terminal TODO
 
-Open/unresolved items only. Full dev-session history (root causes, fixes,
+## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
+
+**The "command-row detection with permission-aware headroom" architecture
+note further down this file (under "lost keystroke + viewport jump") is
+superseded by this entry. Do not implement it as written — read this
+first.**
+
+**Two things converged independently and correct that plan:**
+
+1. **`_SCROLL_MANIPULATION_ENABLED = False`** (`ai_terminal.py:1594`) is a
+   real, deliberate kill-switch from **2026-08-18**, "per user directive":
+   every `_set_viewport()` call in the file is currently a hard no-op.
+   Traced every live-read site of `term._auto_follow` (not just the
+   write choke-point) — both consumers (`_scroll_to_bottom` via the mouse-
+   wheel handler, `_settle_viewport` via the render loop) terminate in
+   `_set_viewport`. **Nothing in this engine moves the viewport right
+   now.** Sublime's own native scroll behavior is 100% of what's visible.
+   This means tonight's earlier PageUp/PageDown "auto-follow" fix (commit
+   `a53fbd7`) does not do what its own commit message says — it still has
+   a real, separate effect (pausing scrollback eviction via the
+   `trim_paused` mirror), but the "yank back" mechanism it claims to fix
+   doesn't exist under the current setup. The real yank-back must be
+   Sublime's native scroll-to-caret reacting to wherever the render loop
+   places the ST caret each frame.
+2. **Independent architecture audit by Codex** (same evening, `Codex`
+   tab, working from the same `ai/TODO.md` notes): cloned Terminus's real
+   source and did a full comparison. Conclusion: GhostShell's caret/
+   viewport system models "is the user reading history" as **persistent,
+   mutable, actively-maintained state** (`_auto_follow`, 22 call sites of
+   `_set_auto_follow`) that every event handler (keys, mouse, scroll,
+   render, trim, selection, TUI detection) has to update correctly,
+   instead of an *observation made at render time*. On top of that, it
+   tries to reverse-engineer application UI from rendered text
+   (`caret.py` pattern-matches `>`/`❯`, box borders, footer placement)
+   rather than trusting the terminal engine's own authoritative cursor
+   position — which is exactly the mechanism behind the stale-prompt
+   permission-dialog bug noted elsewhere in this file. Full critique
+   (unedited) preserved in the `Codex` tab's transcript this session;
+   key claims independently re-verified against source before accepting
+   them, not taken on faith.
+
+**Terminus's actual algorithm** (`terminus/render.py`,
+`TerminusShowCursorCommand`, ~20 lines total, verified directly against
+the cloned source, not summarized secondhand):
+
+```python
+def focus_cursor(self, edit, terminal):
+    # ST caret := raw PTY cursor position, mapped 1:1. No search, no
+    # prompt/footer inference -- terminal.offset + screen.cursor.y/x are
+    # authoritative values the terminal engine already tracks.
+    pt = view.text_point(cursor.y + terminal.offset, col)
+    sel.add(sublime.Region(pt, pt))
+
+def scroll_to_cursor(self, terminal):
+    last_y = view.text_to_layout(view.size())[1]              # true buffer end
+    viewport_y = last_y - view.viewport_extent()[1] + line_height
+    offset_y = view.text_to_layout(view.text_point(terminal.offset, 0))[1]  # top of live screen
+    y = max(offset_y, viewport_y)   # true-bottom, floored so it never hides the live screen's start
+    view.set_viewport_position((0, y), False)
+```
+
+Called as: `terminus_keypress` → `view.run_command("terminus_show_cursor")`
+→ `terminal.send_key(...)`. That's the entire interactive contract. No
+`_auto_follow`, no `_host_rest_y`, no `_compensate_trim_scroll`, no TUI-
+vs-shell branching in the ordinary path, no copy-mode-as-prerequisite for
+selecting text — Sublime owns selection/mouse-wheel/scrollbar
+continuously, unconditionally.
+
+**Why this resolves Claude's variable-footer problem without a separate
+command-row/headroom mechanism:** Terminus never has this problem because
+a plain shell's prompt genuinely *is* the last buffer line. GhostShell
+already has a render-time trim step whose entire job is exactly this —
+`_trim_display_rows` (`ai/terminal/render.py`) cuts trailing footer/blank
+padding so the rendered buffer's last row lands at/near the live cursor.
+**If that trim is correct, Terminus's literal "scroll to buffer bottom"
+also keeps the command line in view — no command-row search, no dynamic
+headroom sizing needed at the viewport layer at all.** The variable-footer
+problem becomes: is `_trim_display_rows` correctly and consistently
+trimming to the cursor across every frame shape (normal footer,
+permission prompt, mid-stream output) — a render-layer correctness
+question, not a viewport-anchoring one. This is *narrower and more
+tractable* than the command-row + dynamic-headroom plan it replaces.
+
+**Decided (user, explicit choice among three options — full rewrite,
+incremental patching, or re-enabling the kill-switch as-is): pursue the
+Terminus-style rewrite.** Not started — this session ended here due to
+the hour and both Claude's and Codex's usage limits. Read GhostShell's
+own `CURSOR_SYSTEM_HISTORY.md` before touching anything (it has the full
+prior-art history of every previous attempt at this system and why each
+was reverted or gated). Suggested shape for next session, adapted from
+Codex's proposal and Terminus's actual code above, for the **normal
+(non-`_tui_like`) profiles only** — fullscreen/mouse-tracking TUIs
+(Grok, Qwen) need their own explicit, isolated mode, not shared branches
+through the ordinary path, per Codex's point 6:
+
+- Key/paste → position ST caret at the raw PTY cursor (`term.screen.cursor`,
+  no `_find_prompt_row`/pattern search) → encode → send to PTY.
+- Render → if the view was already following (compare against the last
+  known live-follow viewport position, Terminus-style — not a separately
+  maintained `_auto_follow` mode), show the raw PTY cursor and re-run the
+  Terminus-style scroll-to-cursor; otherwise leave the viewport and
+  selection alone entirely.
+- Mouse wheel / scrollbar / selection: Sublime owns them unconditionally,
+  no mode mutation, no synthesized PTY input.
+- Verify `_trim_display_rows` against real permission-prompt and mid-
+  stream-footer frame captures (`.cast` files from tonight,
+  `ai_terminal_asciinema_casts_for_troubleshooting_rendering/`) before
+  assuming it's already correct.
+- Candidates for removal from the ordinary-profile path once the above is
+  live-verified: `_auto_follow`/`_set_auto_follow`, `_host_rest_y`,
+  `_compensate_trim_scroll`, `_settle_viewport`, the periodic viewport
+  clamp loop, prompt/footer caret inference in `caret.py`, `_user_owns_caret`
+  as a prerequisite for selection. Keep: terminal parsing, history,
+  geometry/encoding, rendering, colors, logging — separate concerns, not
+  the source of the entanglement.
+- `_SCROLL_MANIPULATION_ENABLED` should very likely just be deleted along
+  with this, not re-enabled — its own docstring says flip it back "once
+  redesigned, not patched further," and this *is* that redesign, not a
+  patch.
+
+Open/unresolved items only otherwise. Full dev-session history (root causes, fixes,
 verification detail) lives in [TODO-archive.md](TODO-archive.md).
 
 ## Session baton (2026-08-27, later) — lost keystroke + viewport jump during a permission prompt; architecture lead from Ghostty's real source; diagnostic landed, no fix yet
