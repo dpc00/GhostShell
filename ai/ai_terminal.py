@@ -2539,6 +2539,11 @@ class _Terminal:
         # sticking at the top showing the banner.
         _set_auto_follow(self, True)
         self._last_vp_y = 0.0
+        # Terminus-style single-anchor rewrite (ai/TODO.md, stage 2, in
+        # progress): mirrors every _last_vp_y write. Not yet read anywhere --
+        # purely additive until the follow-decision and viewport-write logic
+        # switches over to it in a later commit.
+        self._live_anchor_y = 0.0
         # Snapshot of screen.retired_total / len(screen.history) as of the
         # last render, so AiTerminalRenderCommand can tell exactly how many
         # lines the maxlen history deque evicted from the top this frame
@@ -3351,6 +3356,7 @@ def _migrate_terminal_view(term, new_view):
     # stranding the view at the top instead of following to the cursor.
     _set_auto_follow(term, True)
     term._last_vp_y = 0.0
+    term._live_anchor_y = 0.0
     _schedule_render(term)
 
     _forget_view_mouse_state(old_vid)
@@ -4043,6 +4049,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
                 _set_auto_follow(term, True)
                 _scroll_to_bottom(self.view)
                 term._last_vp_y = self.view.viewport_position()[1]
+                term._live_anchor_y = term._last_vp_y
                 # Enter in ST is an insert of "\n"; TUIs expect CR.
                 term.send_string("\r" if chars == "\n" else chars)
             return ("ai_terminal_noop", {})
@@ -4050,12 +4057,14 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             _set_auto_follow(term, True)
             _scroll_to_bottom(self.view)
             term._last_vp_y = self.view.viewport_position()[1]
+            term._live_anchor_y = term._last_vp_y
             term.send_string("\x7f")
             return ("ai_terminal_noop", {})
         if command == "right_delete":
             _set_auto_follow(term, True)
             _scroll_to_bottom(self.view)
             term._last_vp_y = self.view.viewport_position()[1]
+            term._live_anchor_y = term._last_vp_y
             term.send_string("\x1b[3~")
             return ("ai_terminal_noop", {})
         if command == "move":
@@ -4114,6 +4123,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
                 _set_auto_follow(term, True)
                 _scroll_to_bottom(view)
                 term._last_vp_y = view.viewport_position()[1]
+                term._live_anchor_y = term._last_vp_y
                 # Forward raw. \n submits in Claude Code's TUI (a pasted multi-line
                 # block becomes multi-prompt, one submit per line); converting a
                 # lone \n to \r would NOT submit (verified) -- so send \n as-is.
@@ -5913,6 +5923,7 @@ def _pin_viewport_rest(view, rest=None, term=None):
             _set_viewport(view, (0.0, rest), False)
         if term is not None:
             term._last_vp_y = rest
+            term._live_anchor_y = rest
     except Exception:
         pass
 
@@ -6015,6 +6026,7 @@ def _compensate_trim_scroll(view, term, vp):
         # 2026-08-18: unbounded growth, 300 -> 1000+ lines in seconds).
         if term is not None:
             term._last_vp_y = new_y
+            term._live_anchor_y = new_y
     return vp
 
 
@@ -6061,6 +6073,7 @@ def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         _scroll_to_bottom(view)
         if term is not None:
             term._last_vp_y = view.viewport_position()[1]
+            term._live_anchor_y = term._last_vp_y
 
 
 class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
@@ -6541,11 +6554,13 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         if abs(cur - rest) > 1.0:
                             _set_viewport(self.view, (0.0, rest), False)
                         term._last_vp_y = rest
+                        term._live_anchor_y = rest
                     except Exception:
                         pass
                 else:
                     _scroll_to_bottom(self.view)
                     term._last_vp_y = self.view.viewport_position()[1]
+                    term._live_anchor_y = term._last_vp_y
             term.send_string(code)
 
 
