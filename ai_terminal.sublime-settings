@@ -20,9 +20,15 @@
     // away from content as "drop everything below the last real row," which
     // with an unpinned cy meant real scrollback content, not just blank
     // padding, got dropped (reported: 300 lines missing, tab down to ~22-26
-    // lines and still shrinking). Leave this true until trim_display_rows
-    // itself is also gated and that combination is retested deliberately.
-    "caret_footer_pinning_enabled": true,
+    // lines and still shrinking). That report predates this flip and was
+    // never reproduced against current trim_display_rows (see ai_terminal.py
+    // _do_render's 2026-08-27 note); investigated and flipped to false after
+    // live-verifying the raw-cursor path in a genuinely isolated process
+    // (portable ST + git worktree, see ai/TODO.md "Terminus rewrite, stage
+    // 1") -- multi-line cursor position, a real permission prompt, and
+    // PageUp/PageDown all confirmed correct with this off. Revert to true
+    // only if scrollback loss actually reproduces again.
+    "caret_footer_pinning_enabled": false,
     // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
     // a visible block/bar/underline/hollow glyph or reverse-video cell on top
     // of the plain rendered text. False = rely solely on the real ST caret
