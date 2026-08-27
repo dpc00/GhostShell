@@ -95,15 +95,40 @@ Codex's proposal and Terminus's actual code above, for the **normal
 (Grok, Qwen) need their own explicit, isolated mode, not shared branches
 through the ordinary path, per Codex's point 6:
 
-- Key/paste → position ST caret at the raw PTY cursor (`term.screen.cursor`,
-  no `_find_prompt_row`/pattern search) → encode → send to PTY.
-- Render → if the view was already following (compare against the last
-  known live-follow viewport position, Terminus-style — not a separately
-  maintained `_auto_follow` mode), show the raw PTY cursor and re-run the
-  Terminus-style scroll-to-cursor; otherwise leave the viewport and
-  selection alone entirely.
-- Mouse wheel / scrollbar / selection: Sublime owns them unconditionally,
-  no mode mutation, no synthesized PTY input.
+**Final reconciled constraints (Codex + Claude, both independently
+source-verified against the cloned Terminus code, agreed live this
+session — this wording supersedes any earlier phrasing above):**
+
+- No cross-cutting inferred-intent state machine — not "zero state."
+  Keep exactly **one** local viewport anchor (Terminus's
+  `terminus_view.viewport_y` is the model: a single float, one writer).
+  **One comparison** decides whether the view was already following
+  (current viewport position vs. that anchor). That same single result
+  controls **both** cursor-following and scrollback-eviction pausing —
+  not separate `_auto_follow`/`trim_paused` flags maintained by different
+  code paths.
+- Raw PTY cursor only (`term.screen.cursor` mapped 1:1) — no
+  `_find_prompt_row`/prompt-glyph/footer-shape recognition anywhere in
+  the ordinary path.
+- Sublime owns scrolling, selection, and ordinary mouse behavior
+  unconditionally — no mode mutation, no synthesized PTY input for these.
+- Fullscreen mouse-tracking TUI mode (Grok, Qwen) is an explicit,
+  isolated **GhostShell-specific** architectural boundary — confirmed
+  **not** Terminus-derived precedent (Terminus has zero alt-screen/mouse-
+  tracking viewport branching; it's a plain-shell terminal). Do not cite
+  Terminus as justification for that piece specifically, and do not
+  leak its branches into the ordinary-profile path.
+
+Concretely, for the **normal (non-`_tui_like`) profiles only**:
+
+- Key/paste → position ST caret at the raw PTY cursor → encode → send
+  to PTY.
+- Render → the one viewport-anchor comparison above decides everything:
+  if still following, show the raw PTY cursor and re-run Terminus-style
+  scroll-to-cursor (`max(offset_y, viewport_y)`, see the algorithm
+  above); if not, leave the viewport, selection, and scrollback
+  untouched — including not trimming history out from under a reading
+  user.
 - Verify `_trim_display_rows` against real permission-prompt and mid-
   stream-footer frame captures (`.cast` files from tonight,
   `ai_terminal_asciinema_casts_for_troubleshooting_rendering/`) before
