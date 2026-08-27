@@ -53,6 +53,81 @@ def _rows_match(old_row, new_row, allow_splice):
     return False
 
 
+def _best_alignment(old_rows, new_rows, search_window, min_run=1):
+    """Find where new_rows continues old_rows, using multi-row evidence.
+
+    Anchoring on new_rows[0] alone (the original design) fails whenever
+    that specific row has no counterpart anywhere in old_rows -- which
+    happens routinely for a dump chunk that starts mid-transcript (not at
+    a repeated "turn 0"), or when row 0 is itself a splice-corrupted
+    native read. Neither case means alignment is impossible; it means the
+    evidence is elsewhere in the chunk. This searches every (old row, new
+    row) pair within `search_window` of new_rows for the LONGEST
+    contiguous run of matching rows.
+
+    Returns the match as an anchor PAIR (new_start, old_start, run_len) --
+    "new_rows[new_start + k] corresponds to old_rows[old_start + k] for
+    k in [0, run_len)" -- rather than collapsing it to a single linear
+    `keep` offset. A chunk can genuinely contain two different things back
+    to back: a handful of rows that are a plain continuation of old_rows
+    (no alignment needed, new_start == 0 has no match), followed by a
+    replay that restarts much earlier in history (old_start far less than
+    new_start). Forcing one global `old_start - new_start` offset across
+    both silently discards a correct alignment whenever that subtraction
+    goes negative (found live, 2026-08-27, see ai/TODO.md) -- the anchor
+    pair lets the caller treat rows before `new_start` as an unverified
+    continuation and only apply old-row comparison from `new_start`
+    onward, which is exactly the two different things a chunk can contain.
+
+    `k0` (the candidate start row within new_rows) is tried in increasing
+    order, and the search stops at the FIRST k0 that has at least one
+    candidate old-row match -- mirroring the original design's "anchor as
+    early as possible" behavior (needed so that genuinely-in-between rows,
+    like a wrapped line's messy first fragment, still get compared against
+    their old counterpart instead of passed through raw; preferring a
+    later, longer-but-unrelated run over an earlier weak one duplicates
+    those in-between rows instead of cleaning them up). Only WITHIN that
+    one k0 does run length disambiguate between multiple candidate old-row
+    positions (e.g. the same short/repeated line matching several old
+    positions) -- ties on run length prefer the more recent (larger
+    `old_start`). `min_run` is a floor (default 1: any match at all counts
+    as evidence) rather than a hard ambiguity filter -- the run-length
+    comparison is what resolves ambiguity within one k0.
+
+    Returns (new_start, old_start, run_len). run_len == 0 means no
+    candidate met `min_run` anywhere in the search window -- the caller's
+    explicit fallback for that case is to treat the whole of new_rows as
+    an unverified continuation (no speculative splice-cleanup, but also no
+    risk of misaligning against unrelated old content).
+    """
+    limit = min(len(new_rows), search_window)
+    for k0 in range(limit):
+        new0 = new_rows[k0]
+        if not _history_row_text(new0):
+            continue
+        best_old = None
+        best_run = 0
+        for j, row in enumerate(old_rows):
+            if not _rows_match(row, new0, allow_splice=True):
+                continue
+            run = 1
+            jj, kk = j + 1, k0 + 1
+            while (
+                jj < len(old_rows)
+                and kk < len(new_rows)
+                and _rows_match(old_rows[jj], new_rows[kk], allow_splice=True)
+            ):
+                run += 1
+                jj += 1
+                kk += 1
+            if run > best_run or (run == best_run and (best_old is None or j > best_old)):
+                best_run = run
+                best_old = j
+        if best_old is not None and best_run >= min_run:
+            return k0, best_old, best_run
+    return 0, len(old_rows), 0
+
+
 def merge_replace_scroll_history(old_rows, new_rows, splice_window):
     """History after a home+2026 dump's native overflow is known.
 
@@ -60,47 +135,78 @@ def merge_replace_scroll_history(old_rows, new_rows, splice_window):
     dump's own text into native scrollback. A full-transcript replay
     therefore *reproduces* a suffix of prior Python history (often the
     whole thing), but wrap + in-place overwrite without EL means later
-    overflow rows need not equal the old rows line-for-line. Align on
-    the first overflow line instead: the leftmost old row that matches
-    it (exact or leftover-tail splice) is the start of the reproduced
-    suffix; rows before that are from before this replay and are kept.
-    The first `splice_window` overflow rows can also carry leftover
-    tails of the overwritten screen; prefer the clean prior copy of
-    that same line when the new row is the old text plus a tail.
+    overflow rows need not equal the old rows line-for-line.
+
+    Alignment is found via multi-row evidence (see _best_alignment), not
+    by anchoring solely on new_rows[0] -- the original row-0-only design
+    silently disabled all splice-cleanup for an entire chunk whenever its
+    first row happened to have no counterpart in old_rows (e.g. a dump
+    chunk that starts mid-transcript, or row 0 itself being a splice
+    artifact), which both let real corruption through uncorrected AND
+    duplicated shared rows that a smarter search would have recognized
+    (live-reproduced and root-caused 2026-08-27, see ai/TODO.md). When no
+    reliable multi-row alignment exists, the explicit fallback keeps all
+    of old_rows and appends new_rows as an unverified continuation rather
+    than guess.
 
     old_rows: Python history before this rebuild.
     new_rows: native rows [origin, scrollback_rows) for this dump.
-    splice_window: screen height (overwrite-and-rescroll window).
+    splice_window: screen height -- bounds each ALIGNMENT SEARCH pass (an
+    anchor should be found near the start of what's left to align, if at
+    all; searching further is wasted work). Once a trusted anchor is
+    found, the per-row splice-cleanup comparison for that segment covers
+    the full rest of that segment, not capped at splice_window -- a
+    single large Codex-style write can scroll hundreds of rows through in
+    one native sync, and a splice artifact can land anywhere in that
+    range, not just within one screen-height of the top.
+
+    A single dump can also contain MULTIPLE embedded restarts concatenated
+    back to back (a buffered PTY read catching several redraw cycles in
+    one native sync) -- one linear anchor cannot represent that, so this
+    processes new_rows in segments: find one alignment, apply it until its
+    old-row reference runs out, then re-search the remaining new_rows
+    against everything merged so far (which now includes the just-cleaned
+    segment) for the next restart. Bounded by len(new_rows) iterations --
+    each pass consumes at least one row, since `old_start` from
+    _best_alignment is always a valid index into whatever it searched.
+    (Live-reproduced and root-caused 2026-08-27, see ai/TODO.md.)
     """
-    keep = len(old_rows)
-    if new_rows:
-        new0 = new_rows[0]
-        if _history_row_text(new0):
-            # Take the LAST (most recent) matching row, not the first --
-            # a Codex-style tool redraws from turn 0 on every dump, so
-            # this line's text is not unique across accumulated history
-            # (it recurs once per prior replay cycle). Aligning to an
-            # earlier occurrence shifts every subsequent oi=keep+i
-            # comparison below onto unrelated old rows, which both lets
-            # real splice corruption through uncorrected and drops
-            # genuinely unique content between the stale and fresh
-            # copies (found live, 2026-08-27 -- see
-            # tests/test_ghostty_engine.py
-            # test_ambiguous_repeated_match_prefers_most_recent_occurrence).
-            # No `break`: keep scanning so `keep` ends on the last match.
-            for j, row in enumerate(old_rows):
-                if _rows_match(row, new0, allow_splice=True):
-                    keep = j
-    merged = list(old_rows[:keep])
-    for i, row in enumerate(new_rows):
-        oi = keep + i
-        if i < splice_window and oi < len(old_rows):
-            a = _history_row_text(old_rows[oi])
-            b = _history_row_text(row)
-            if a and b.startswith(a) and b != a:
-                merged.append(old_rows[oi])
+    merged = list(old_rows)
+    remaining = list(new_rows)
+    guard = len(new_rows) + 10
+    while remaining and guard > 0:
+        guard -= 1
+        new_start, old_start, run = _best_alignment(merged, remaining, search_window=splice_window)
+        if run == 0:
+            merged.extend(remaining)
+            remaining = []
+            break
+        old_ref = merged
+        old_len = len(old_ref)
+        merged = list(old_ref[:old_start])
+        i = 0
+        n = len(remaining)
+        while i < n:
+            oi = old_start + (i - new_start)
+            if i < new_start:
+                merged.append(remaining[i])
+                i += 1
                 continue
-        merged.append(row)
+            if old_start <= oi < old_len:
+                a = _history_row_text(old_ref[oi])
+                b = _history_row_text(remaining[i])
+                if a and b.startswith(a) and b != a:
+                    merged.append(old_ref[oi])
+                else:
+                    merged.append(remaining[i])
+                i += 1
+                continue
+            # old_ref exhausted for this segment: stop here and re-align
+            # the rest of `remaining` against everything merged so far.
+            break
+        remaining = remaining[i:]
+    if remaining:
+        merged.extend(remaining)
     return merged
 
 

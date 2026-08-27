@@ -562,6 +562,50 @@ class ReplaceScrollMergeTests(unittest.TestCase):
             ],
         )
 
+    def test_mid_stream_start_finds_alignment_via_later_rows(self):
+        """A dump chunk boundary can land such that new_rows[0] is a
+        corrupted/unmatched row (real splice artifact, or simply mid-
+        transcript content with no prior counterpart) while later rows in
+        the SAME chunk clearly continue a run already in old_rows. Row-0-
+        only alignment (the original design) finds nothing, falls back to
+        keep=len(old_rows), and then BOTH duplicates the shared rows AND
+        never gets a chance to protect anything -- this is the real
+        2026-08-27 live-reproduced defect (ai/TODO.md), distinct from the
+        ambiguous-repeat case above: here there is no candidate match for
+        new_rows[0] AT ALL, so the fix must search evidence across
+        multiple rows, not just retry the same row-0 anchor differently.
+        """
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [
+            _cells("PRE-A"),
+            _cells("PRE-B"),
+            _cells("SHARED-01"),
+            _cells("SHARED-02"),
+            _cells("SHARED-03"),
+        ]
+        new = [
+            _cells("CORRUPT-ROW-0-no-match-anywhere"),
+            _cells("SHARED-01"),
+            _cells("SHARED-02"),
+            _cells("SHARED-03"),
+            _cells("SHARED-04"),
+        ]
+        merged = merge_replace_scroll_history(old, new, splice_window=4)
+        texts = _row_texts(merged)
+        # SHARED-01/02/03 must appear exactly once each -- the defining
+        # failure mode of row-0-only alignment is duplicating them (kept
+        # in old_rows' tail AND re-appended fresh from new_rows).
+        for shared in ("SHARED-01", "SHARED-02", "SHARED-03"):
+            self.assertEqual(
+                texts.count(shared), 1, f"{shared} must appear exactly once, got {texts}"
+            )
+        # The genuinely new tail row must be present.
+        self.assertIn("SHARED-04", texts)
+        # SHARED-03 must be immediately followed by SHARED-04 (the real
+        # continuation), not duplicated content in between.
+        self.assertEqual(texts[texts.index("SHARED-03") + 1], "SHARED-04")
+
     def test_wrapped_replay_aligns_on_first_overflow_line(self):
         from ai.terminal.ghostty_engine import merge_replace_scroll_history
 
