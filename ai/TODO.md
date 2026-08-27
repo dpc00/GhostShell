@@ -252,14 +252,21 @@ level MCP command's param is `string`, not `text` — a caller mistake this
 session, not a plugin bug; also reconfirmed the console is line-buffered/
 cooked, so a lone digit without a following `\r` only echoes, it doesn't
 reach the child until the line is flushed — matches the established "send
-text and Enter as two separate calls" convention). Mid-run, the buffer
-showed exactly the residual signature already characterized above: 2
-splices, a handful of duplicate `TURN-NN` headers — no new or worse
-symptom. After continued replay the buffer settled to 0 splices, 0
-duplicates over the full scrollback, matching the "later merges self-heal"
-finding from the offline `git stash` comparison. No runaway growth, no
-crash. **This closes the live-test requirement** — the row-0 alignment fix
-behaves live exactly as characterized offline.
+text and Enter as two separate calls" convention). Mid-run (~14 turns,
+buffer size 22349, 14 unique headers), the buffer showed exactly the
+residual signature already characterized above: 2 splices, `TURN-07`..
+`TURN-11` duplicated — no new or worse symptom. After ~30 turns the buffer
+read 0 splices, 0 duplicates — but **that is eviction, not repair**: size
+had dropped to 11458 with only 10 headers visible for 30 turns of
+transcript, i.e. the scrollback cap had simply evicted the rows holding
+the splices, exactly the "no clean reference survives to compare against"
+limitation already documented above. Correcting an earlier overclaim in
+this same entry: nothing "self-healed." **What this run legitimately
+establishes:** the fix runs live without crashing, the residual signature
+appears at the same documented magnitude and does not grow under
+continued load (bounded, not worse), and the profile survives 30 replay
+cycles. **This closes the live-test requirement** on that basis — live
+behavior matches the offline characterization, including its limitation.
 
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
