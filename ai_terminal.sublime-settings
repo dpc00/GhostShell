@@ -211,7 +211,8 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-            }
+            },
+            "detachable": true
         },
         "Claude → Cloud": {
             // --cloud attaches to a cloud-hosted session (the kind the
