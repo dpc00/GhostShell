@@ -95,14 +95,49 @@ library boundary. **Not yet distinguished**: genuine bug in the native
 a GhostShell-side indexing/staleness issue in assembling these per-cell
 native reads into rows. This is where the session stopped.
 
-**Next step, not attempted**: instrument inside `_sync_scrollback`'s loop
-itself (temporary prints) — does re-reading the same native row twice give
-identical content? Does read order change what comes back? Does the
-corrupted row index correlate with any buffer/cache boundary in the DLL?
-That distinguishes "native DLL bug" from "GhostShell assembles it wrong"
-before any fix attempt at this layer, since it's the ctypes boundary
-directly. Full reproduction evidence and the reusable replay tool are
-preserved outside the repo (scratchpad, path in this session's record).
+**Root cause found, precisely — a design gap, not a small bug.** Read the
+real native source (`~/tools/ghostty/src/terminal/point.zig`) directly:
+`Tag.screen` addressing (`POINT_TAG_SCREEN`) is documented as relative to
+"the furthest back in the scrollback history *supported*" — not a stable
+absolute index over time. That explained a secondary phenomenon (a later
+re-read of "the same" row returned unrelated content) but was a red
+herring for the corruption itself, not its cause — confirmed by re-tracing
+the actual failing call with instrumentation.
+
+The real cause: for the corrupting sync, `new_rows[0]` was
+`"TURN-03 L17 mock agent reply line 3017"` — a **mid-stream continuation**,
+not a repeat of `"TURN-00"` (this dump chunk didn't start at the
+transcript's beginning). `merge_replace_scroll_history`'s row-0 alignment
+search found no match for it in `old_rows`, so `keep` fell back to its
+default, `len(old_rows)`. Once that happens, `oi = keep + i` is
+`>= len(old_rows)` for *every* subsequent row in that sync — the splice-
+cleanup safety net's own guard (`oi < len(old_rows)`) can never be true
+again for the rest of the chunk. **The whole protection mechanism only
+activates when a dump's first row happens to align with existing history
+(the common "starts at TURN-00" case) — for a chunk that starts mid-
+stream, which is routine with how large PTY reads get split across OS-
+level reads, the safety net goes silently inert for the entire chunk,**
+including the genuinely corrupted row within it.
+
+**Not fixed this session, deliberately.** `merge_replace_scroll_history`
+exists specifically to solve an earlier, already-fixed duplicate-history
+bug (2026-08-18/21) — a correct fix means redesigning how the splice
+safety net anchors itself (e.g. tracking absolute position/offset instead
+of re-deriving it via a row-0 content search every sync) without
+reintroducing that original bug. Needs careful design plus extending
+`tests/test_ghostty_engine.py::ReplaceScrollMergeTests` with a mid-stream-
+start case specifically — not an improvised change at the end of a long
+session. Confirmed NOT the cause: threading/concurrency (single-threaded
+offline repro), `caret_footer_pinning_enabled` specifically (pinned vs.
+unpinned control, identical), and the leftmost-vs-rightmost ambiguity
+already fixed this session (real, kept, but insufficient alone here since
+`keep` never had *any* candidate match for this event, ambiguous or not).
+
+Full reproduction evidence and the reusable offline replay/probe tools
+(`replay_single_thread.py`, `native_boundary_probe.py`) are preserved
+outside the repo (scratchpad, path in this session's record) — both work
+against any real captured `.cast` and are ready to validate the eventual
+fix.
 
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
