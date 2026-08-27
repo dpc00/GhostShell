@@ -713,6 +713,54 @@ def test_parser_failure_after_child_resize_is_visible_and_contained(monkeypatch)
     assert events == [("pty", 100, 30), ("parser", 100, 30), ("kill",)]
 
 
+def test_broker_reattach_does_not_pin_inactive_restored_view_to_one_row(monkeypatch):
+    """Session restore can report a one-row viewport for an inactive sheet.
+
+    Main-screen terminals pin the row count chosen during reattach, so that
+    transient measurement must be deferred until the sheet is activated.
+    A genuinely one-row active pane remains valid.
+    """
+    view = FakeView(vid=713)
+    other = FakeView(vid=714)
+    window = FakeWindow(active_view=other)
+    view.window = lambda: window
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    view.settings().set(ai_terminal._BROKER_PIPE_SETTING, "test-pipe")
+    view.settings().set(ai_terminal._BROKER_PROFILE_SETTING, "Claude")
+
+    scheduled = []
+    attached = []
+    monkeypatch.setattr(
+        sys.modules["sublime"], "set_timeout",
+        lambda fn, ms=0: scheduled.append((fn, ms)),
+    )
+    monkeypatch.setattr(ai_terminal._Terminal, "from_id", classmethod(lambda cls, vid: None))
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (94, 1))
+    monkeypatch.setattr(
+        ai_terminal, "_reattach_broker_view",
+        lambda view, pipe: attached.append((view.id(), pipe)),
+    )
+    ai_terminal._BROKER_REATTACH_PENDING.clear()
+    ai_terminal._BROKER_REATTACH_CANDIDATE.clear()
+
+    ai_terminal._maybe_reattach_broker(view)
+    assert attached == []
+    assert len(scheduled) == 1
+    callback, delay = scheduled.pop(0)
+    assert delay == ai_terminal._BROKER_REATTACH_CONFIRM_MS
+    callback()
+    assert attached == []
+    assert view.id() not in ai_terminal._BROKER_REATTACH_PENDING
+
+    # Activation starts a fresh confirmed attempt; the same one-row geometry
+    # is now legitimate because this is the pane the user is actually seeing.
+    window._active_view = view
+    ai_terminal._maybe_reattach_broker(view)
+    callback, _delay = scheduled.pop(0)
+    callback()
+    assert attached == [(view.id(), "test-pipe")]
+
+
 def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
     """_Terminal.kill() must free the native ghostty-vt resources
     (GhosttyParser.close) exactly once per tab close, and only after the

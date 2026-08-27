@@ -2975,6 +2975,16 @@ _BROKER_PIPE_SETTING = "ai_terminal_broker_pipe"
 _BROKER_PROFILE_SETTING = "ai_terminal_broker_profile"
 _BROKER_CWD_SETTING = "ai_terminal_broker_cwd"
 
+# Sublime restores views before their final layout is necessarily available.
+# Reattaching a detachable terminal during that window can measure an inactive
+# tab as one row and immediately send that bogus geometry to the surviving
+# broker.  Main-screen profiles deliberately pin their initial row count, so
+# the later layout watcher cannot repair that mistake.  Keep reattachment
+# separate from ordinary layout watching and require one confirming measure.
+_BROKER_REATTACH_PENDING = set()
+_BROKER_REATTACH_CANDIDATE = {}
+_BROKER_REATTACH_CONFIRM_MS = 250
+
 
 def _vwrite(view, text):
     def _do(t=text):
@@ -5278,7 +5288,7 @@ def _spawn(window, path, profile=None):
     term.start_reader()
 
 
-def _maybe_reattach_broker(view):
+def _maybe_reattach_broker(view, _confirm=False):
     """If `view` is a detachable-profile ai_terminal tab restored by Sublime
     (workspace session restore after a restart) but has no live _Terminal,
     reconnect it to its still-running agent_broker.py session instead of
@@ -5291,8 +5301,54 @@ def _maybe_reattach_broker(view):
         pipe_name = view.settings().get(_BROKER_PIPE_SETTING)
         if not pipe_name:
             return
+
+        vid = view.id()
+        if not _confirm:
+            if vid in _BROKER_REATTACH_PENDING:
+                return
+            _BROKER_REATTACH_PENDING.add(vid)
+            _BROKER_REATTACH_CANDIDATE[vid] = _measure(
+                view, profile_name=view.settings().get(_BROKER_PROFILE_SETTING)
+            )
+            sublime.set_timeout(
+                lambda v=view: _maybe_reattach_broker(v, _confirm=True),
+                _BROKER_REATTACH_CONFIRM_MS,
+            )
+            return
+
+        size = _measure(
+            view, profile_name=view.settings().get(_BROKER_PROFILE_SETTING)
+        )
+        previous = _BROKER_REATTACH_CANDIDATE.get(vid)
+        if size != previous:
+            _BROKER_REATTACH_CANDIDATE[vid] = size
+            sublime.set_timeout(
+                lambda v=view: _maybe_reattach_broker(v, _confirm=True),
+                _BROKER_REATTACH_CONFIRM_MS,
+            )
+            return
+
+        # An inactive restored sheet can remain at the minimum measurement
+        # until Sublime lays it out for display.  Do not turn that transient
+        # value into the permanent main-screen height; on_activated will
+        # start a fresh confirmed attempt.  A genuinely one-row ACTIVE pane
+        # is still valid and is not inflated to a made-up minimum.
+        window = view.window()
+        if size[1] <= _min_rows() and window is not None and window.active_view() != view:
+            _BROKER_REATTACH_PENDING.discard(vid)
+            _BROKER_REATTACH_CANDIDATE.pop(vid, None)
+            return
+
+        _BROKER_REATTACH_PENDING.discard(vid)
+        _BROKER_REATTACH_CANDIDATE.pop(vid, None)
         _reattach_broker_view(view, pipe_name)
     except Exception:
+        try:
+            vid = view.id()
+            _BROKER_REATTACH_PENDING.discard(vid)
+            _BROKER_REATTACH_CANDIDATE.pop(vid, None)
+        except Exception:
+            pass
         print("[ai_terminal] reattach check failed:\n%s" % traceback.format_exc())
 
 
