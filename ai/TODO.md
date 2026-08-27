@@ -3,6 +3,58 @@
 Open/unresolved items only. Full dev-session history (root causes, fixes,
 verification detail) lives in [TODO-archive.md](TODO-archive.md).
 
+## RESOLVED (2026-08-27) — Codex resize<->replay oscillation: 4-digit gutter reserve implemented
+
+**Symptom.** Pinch-zoom (or any) font_size change reloads
+`Preferences.sublime-settings`, which fires `_LayoutWatcher` on every open
+`ai_terminal` tab. Live-caught with Codex: once a session had a
+significant line count, the resize became self-sustaining --
+`94x42 <-> 93x42` oscillating on its own with no further external
+trigger -- driving Codex's "earlier messages" full-transcript dump to
+replay repeatedly. Buffer ballooned to ~2MB with genuinely spliced/
+garbled content from different points in history, at times stalling
+Sublime's main thread (`get_console` returned "main-thread timeout after
+5s") and desyncing the visible scroll position from live content
+("stuck at line 4720", "can't get to bottom").
+
+**Root cause.** `_measure()` computes `cols` from `view.viewport_extent()`,
+which excludes ST's native line-number gutter. That gutter's width is a
+function of the buffer's current total line count (widens by a digit at
+999->1000, 9999->10000, ...). During an active full-history replay/rebuild,
+total_lines crosses that boundary repeatedly, so `viewport_extent()` --
+and therefore the measured `cols` -- genuinely changes mid-replay (not
+measurement noise; the existing `accepted_cols` ±1 hysteresis in
+`ai/terminal/layout.py` doesn't catch it). Resize fires -> replay
+restarts at the new width -> line count crosses the boundary again ->
+resize fires again.
+
+**Fix applied.** New pure helper `gutter_digit_delta(total_lines,
+scrollback_cap)` (`ai/terminal/layout.py`): returns
+`reserved_digits - actual_digits`, where `reserved_digits` is the digit
+width of the profile's `scrollback_history_size` cap (the buffer's real
+ceiling, so that digit count never changes once reached) and
+`actual_digits` is the buffer's current line-count digit width.
+`_measure()` (`ai/ai_terminal.py`) subtracts `gutter_digit_delta(...) *
+cw` from `usable_w` before computing `cols`, canceling the real gutter's
+fluctuation so `cols` stays pinned regardless of the buffer's moving
+line count. `_measure` now takes an optional `profile_name` (threaded
+through all three call sites: `_LayoutWatcher._run`, `_spawn`,
+`_reattach_broker_view`) to resolve the right cap via the existing
+`_scrollback_size(profile_name)`. ST's own native gutter still resizes
+for real; it just no longer moves `cols`.
+
+Tests: `tests/test_layout.py` `GutterDigitDeltaTests` (boundary-crossing
+cancellation, net-reservation invariant across a 1..cap sweep). Full
+suite: 445 passed (1 pre-existing unrelated failure --
+`AiTerminalEndSessionCommand` not registered in PluginLoader.py --
+present on baseline too).
+
+**Live-verified**, twice: (1) with `font_size` edits after the fix, the
+resize storm no longer oscillates; (2) resumed the actual Codex session
+that previously flooded to ~2MB and it stayed stable at 300+ lines
+through a fresh `font_size` change that previously triggered the loop
+every time.
+
 ## Session baton (2026-08-23) — viewport-jump: auto_follow gate tried and reverted, two findings sharpened, live capture still needed
 
 Full detail in `ai_terminal_notes.md` (2026-08-23 entry) — this is the
@@ -857,7 +909,9 @@ running process; 207 unit tests OK):
    Needs a plugin reload (do not touch PluginLoader.py while other
    agent tabs are live).
 
-4-digit gutter reserve and the replace_scroll heuristic stay unstarted.
+4-digit gutter reserve done — see "RESOLVED (2026-08-27)" above (turned
+out to need the scrollback-cap's actual digit width, not a bare 4). The
+replace_scroll heuristic stays unstarted.
 
 ## Copy-mode "turns on by itself" report (2026-08-11), Kiro profile — UNRESOLVED
 
