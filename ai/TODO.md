@@ -120,6 +120,16 @@ had simply completed too fast to test against.
   next keypress-driven reposition. **Do not act on this hypothesis without
   tracing the actual code path first**, per this file's established
   practice — record only.
+  **Live-confirmed, separately (2026-08-27, later still):** user reports
+  (portable instance, post env-leakage fix, otherwise-normal session) "PgUp
+  puts it in scrollback, but cursor keys return it to command line" — the
+  exact caret-in-scrollback-then-self-corrects behavior described above,
+  now directly observed rather than only hypothesized. Not reported as a
+  usability complaint this time (self-corrects immediately on the next
+  keypress); still not root-caused. The underlying-mechanism hypothesis
+  above (`terminal.offset` staleness across a pure Sublime-side scroll) is
+  unchanged and still needs actual code tracing before any fix is
+  attempted.
 - **ROOT-CAUSED: the live tab's differing behavior all session was a stale
   personal settings override, not a stage-2 code issue at all.**
   `C:\Users\donal\AppData\Roaming\Sublime Text\Packages\User\ai_terminal.sublime-settings`
