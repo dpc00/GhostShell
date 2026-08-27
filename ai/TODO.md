@@ -1,5 +1,55 @@
 # ai_terminal TODO
 
+## Splatter/splice corruption: bisection gates fully exonerated (2026-08-27, ~2:30am)
+
+Stage 1 of the Terminus-rewrite plan below (removing `adjust_display_caret`'s
+prompt/footer remapping) hit a documented blocker before any code change was
+even trusted: `ai_terminal.sublime-settings` records a 2026-08-21 report of
+real scrollback content loss when `caret_footer_pinning_enabled` was
+previously disabled. Investigated (see plan file / commit `a4667d3`):
+`trim_display_rows` provably cannot drop non-blank content regardless of
+cursor position (existing test `test_content_below_cursor_is_kept` proves
+it), so reverted the stage-1 code change back to its original conditional
+gate — zero behavior change — pending live verification in an isolated
+profile.
+
+**That live verification found something more important than what it was
+looking for.** Spawned the existing "Testing Agent" profile (all five
+bisection gates false, `tests/mock_agent_cli.py`, Codex-style full-
+transcript replay) and drove it with real input (`"5"`+CR, wait, `"9"`+CR,
+wait — two-step submit, burst text+CR gets treated as paste). Reproduced,
+live, the exact character-splatter/splice corruption already documented in
+this file's 2026-08-21 "SUPERSEDED by a real splatter repro" entry:
+`› user prompt TURN-00ent reply line 8019` (two non-adjacent stream
+positions spliced together), followed by ~9 lines of rolling-digit-shift
+garbage, then a clean self-heal.
+
+**Per explicit instruction not to assume causation from correlation**
+(caret display logic reads already-rendered rows; it should not be able to
+mutate `Screen.history`, which is where the 2026-08-21 note already placed
+the corruption): built a single-variable control. Cloned the profile
+identically except `caret_footer_pinning_enabled: true` (the same value
+Claude's and Codex's live tabs actually run under) and reran the identical
+workload.
+
+**Result: the same corruption occurred, at multiple points, in the pinned
+control too.** Same splice shape, same rolling-digit pattern, same self-
+heal. **`caret_footer_pinning_enabled` (and by extension the whole caret
+display/remap system) is conclusively not a causal or contributing factor**
+— this is a pure parser/history/timing bug in the full-transcript-replay
+pattern itself, upstream of and independent of caret display. Bisection
+gates are fully exonerated for this specific bug.
+
+**This de-risks the Terminus rewrite significantly**: the 2026-08-21
+caution against disabling `caret_footer_pinning_enabled` was conflating two
+different bugs. Root cause of the splatter itself is still not found —
+next step (not attempted this session) is the isolated-subprocess stress
+harness already flagged in the 2026-08-21 entry below, widened to match
+the actual replay-on-every-Enter burst pattern rather than a tight
+synthetic loop. Full reproduction evidence, byte-for-byte, preserved
+outside the repo (scratchpad, not committed — path in this session's own
+record) for whoever picks up the splatter root-cause separately.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
