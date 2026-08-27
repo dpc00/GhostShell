@@ -523,6 +523,45 @@ class ReplaceScrollMergeTests(unittest.TestCase):
             ["UNIQUE-A", "UNIQUE-B", "LINE-00", "LINE-01", "LINE-02"],
         )
 
+    def test_ambiguous_repeated_match_prefers_most_recent_occurrence(self):
+        """Codex-style tools redraw from turn 0 on every single dump, so
+        "TURN-00"-shaped text is not unique across accumulated history --
+        it recurs once per prior replay cycle. Aligning to the FIRST
+        (leftmost/earliest) matching old row instead of the LAST (most
+        recent) one shifts every subsequent row comparison onto unrelated
+        old rows, which can both let real splice corruption through
+        uncorrected AND drop genuinely unique older content -- this is the
+        2026-08-27 live-reproduced root cause (ai/TODO.md), traced to a
+        `break` on the first match in the old_rows scan below.
+        """
+        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+
+        old = [
+            _cells("user prompt TURN-00"),  # 0: stale, from an earlier cycle
+            _cells("STALE-ONLY-HERE"),      # 1: unique marker after the stale copy
+            _cells("user prompt TURN-00"),  # 2: the correct, most-recent copy
+            _cells("FRESH-ONLY-HERE"),      # 3: unique marker after the fresh copy
+        ]
+        # This dump only continues the FRESH copy (its own next row is the
+        # fresh marker, not the stale one).
+        new = [
+            _cells("user prompt TURN-00"),
+            _cells("FRESH-ONLY-HERE"),
+            _cells("user prompt TURN-01"),
+        ]
+        merged = merge_replace_scroll_history(old, new, splice_window=4)
+        texts = _row_texts(merged)
+        self.assertEqual(
+            texts,
+            [
+                "user prompt TURN-00",
+                "STALE-ONLY-HERE",
+                "user prompt TURN-00",
+                "FRESH-ONLY-HERE",
+                "user prompt TURN-01",
+            ],
+        )
+
     def test_wrapped_replay_aligns_on_first_overflow_line(self):
         from ai.terminal.ghostty_engine import merge_replace_scroll_history
 

@@ -76,10 +76,21 @@ def merge_replace_scroll_history(old_rows, new_rows, splice_window):
     if new_rows:
         new0 = new_rows[0]
         if _history_row_text(new0):
+            # Take the LAST (most recent) matching row, not the first --
+            # a Codex-style tool redraws from turn 0 on every dump, so
+            # this line's text is not unique across accumulated history
+            # (it recurs once per prior replay cycle). Aligning to an
+            # earlier occurrence shifts every subsequent oi=keep+i
+            # comparison below onto unrelated old rows, which both lets
+            # real splice corruption through uncorrected and drops
+            # genuinely unique content between the stale and fresh
+            # copies (found live, 2026-08-27 -- see
+            # tests/test_ghostty_engine.py
+            # test_ambiguous_repeated_match_prefers_most_recent_occurrence).
+            # No `break`: keep scanning so `keep` ends on the last match.
             for j, row in enumerate(old_rows):
                 if _rows_match(row, new0, allow_splice=True):
                     keep = j
-                    break
     merged = list(old_rows[:keep])
     for i, row in enumerate(new_rows):
         oi = keep + i
