@@ -1,5 +1,38 @@
 # ai_terminal TODO
 
+## OPEN, UNSOLVED — no reliable keyboard-or-click way to reposition the edit cursor for cut/paste; mouse-drag selection is the only precise mechanism (2026-08-27, later still)
+
+**User's live report, same session as the caret-staleness confirmation
+above.** Two compounding gaps, not one:
+
+1. **Plain arrow keys can't select scrollback text.** By design (Terminus-
+   style: arrows always go to the live PTY command line unless copy mode is
+   on), so after PageUp into scrollback, u/d/l/r "snap back" to the command
+   line instead of moving within the scrollback. Copy mode (Ctrl+Alt+C) is
+   the existing intended answer for keyboard-driven selection — user recalls
+   it as a working solution "once upon a time," but it is not, on its own,
+   a full fix for the actual goal below.
+2. **Mouse click on the command line does not reposition the PTY's edit
+   cursor.** Expected, not a regression — `click_to_cursor_fallback_enabled`
+   defaults to `false` for real profiles (per the 2026-08-21 baton: gated
+   off along with `host_cursor_paint_enabled`, and explicitly not touched
+   since). So neither keyboard nor mouse click can precisely move the live
+   edit-insertion point; only mouse-drag selection is precise (Sublime owns
+   selection/mouse unconditionally, independent of the PTY, per the
+   Terminus-style rewrite's own design constraints above).
+
+**Net effect: no reliable way to cut text from scrollback and paste it back
+in at a chosen point in the command line without the mouse for both halves
+of the operation** (drag-select the source with the mouse — works — but
+there is no equally precise way to place the paste-target cursor, since
+clicking the command line doesn't move it and arrows don't either once
+you've left copy mode). **User's own assessment, explicit:** "may not be
+any solution to this... it may be a 'live with it' proposition. Until
+someone thinks up some neat idea." Recorded as an open limitation, not
+assigned a fix — do not attempt one without a concrete design, and do not
+flip `click_to_cursor_fallback_enabled`'s default without asking first, per
+the standing directive already on that gate.
+
 ## FALSE ALARM, root-caused — "cursor keys don't work at all" in the portable instance was environment leakage, not an ai_terminal bug (2026-08-27, later still)
 
 **Report:** user's in-progress portable Claude session (`D:\GhostShell-caret-test`,
