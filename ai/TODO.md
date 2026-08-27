@@ -292,11 +292,14 @@ silent, confirming no crossover.
 **User tested a real profile there directly: "multiline typed in, ST
 cursor appearance and position perfect."** This is the confirmed fix for
 the multi-line-prompt cursor bug (CURSOR_SYSTEM_HISTORY item 2) this whole
-rewrite was chasing. Permission-prompt-obscured-by-typed-input scenario
-not yet tested. Not yet decided: whether to carry this settings flip back
-to the main repo (making it the default for real profiles) or proceed to
-the plan's literal code deletion first. Both need the user's call — do not
-default the live gate without asking, per the original directive.
+rewrite was chasing. **Permission-prompt-obscured-by-typed-input scenario
+also tested: "first permission prompt was fine."** Both of tonight's
+originally-reported live bugs are now confirmed fixed by the raw-cursor
+path, in the isolated worktree. Not yet decided: whether to carry this
+settings flip back to the main repo (making it the default for real
+profiles) or proceed to the plan's literal code deletion first. Both need
+the user's call — do not default the live gate without asking, per the
+original directive.
 
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
