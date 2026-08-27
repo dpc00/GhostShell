@@ -314,7 +314,8 @@
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            }
+            },
+            "detachable": true
         },
         "Codex →⇢⇨ Ollama": {
             // page_keys_to_pty: same underlying `codex` binary as the
@@ -708,6 +709,11 @@
     // size. Decreasing it may improve performance.
     // Live: changing this swaps the live deque (trims oldest if smaller).
     "scrollback_history_size": 300,
+    // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
+    // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
+    // Off by default (extra text in every terminal tab's status bar
+    // otherwise). Read fresh every render tick, no reload needed.
+    "debug_status_bar_enabled": false,
     // claude --model gemini-2.5-pro
     // Env vars applied to the spawned terminal process (merged on top of
     // os.environ). Swap or add agent-specific vars here without editing the
