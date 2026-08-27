@@ -39,6 +39,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from functools import lru_cache
 
 import sublime
@@ -151,6 +152,16 @@ if os.name == "nt":
         _k32.HeapAlloc.restype = c_void_p
         _k32.HeapFree.argtypes = [ctypes.c_void_p, DWORD, c_void_p]
         _k32.HeapFree.restype = BOOL
+        # Named-pipe client calls, used by _BrokerPty to connect to a
+        # detachable session's agent_broker.py instead of owning a ConPTY
+        # directly -- see _BrokerPty below.
+        _k32.CreateFileW.argtypes = [LPCWSTR, DWORD, DWORD, c_void_p, DWORD, DWORD, HANDLE]
+        _k32.CreateFileW.restype = HANDLE
+        _k32.WaitNamedPipeW.argtypes = [LPCWSTR, DWORD]
+        _k32.WaitNamedPipeW.restype = BOOL
+        _k32.CancelIoEx.argtypes = [HANDLE, c_void_p]
+        _k32.CancelIoEx.restype = BOOL
+        _INVALID_HANDLE_VALUE = HANDLE(-1).value
 
         _STILL_ACTIVE = 259
         _INFINITE = 0xFFFFFFFF
@@ -418,6 +429,242 @@ class _Pty:
         if self._heap_buf is not None:
             _k32.HeapFree(self._heap_buf[0], 0, self._heap_buf[1])
             self._heap_buf = None
+
+
+# ─── _BrokerPty: client of a standalone tools/agent_broker.py session ────────
+#
+# Same interface as _Pty (start/read/write/resize/is_alive/kill, .pid) so it's
+# a drop-in replacement wherever _Pty is constructed. Instead of owning a
+# ConPTY directly, it connects to a named pipe served by a separate
+# agent_broker.py process. That process is spawned with
+# DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB so it survives Sublime Text
+# closing (verified live on this machine: a process spawned this way from
+# inside ST's own process tree stayed running, and its pipe stayed answering,
+# across a real ST restart). kill() here only disconnects this client -- the
+# whole point of a detachable session is that closing the tab must NOT kill
+# the agent; ending it for real goes through explicit_kill().
+
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_OPEN_EXISTING = 3
+_ERROR_PIPE_BUSY = 231
+_ERROR_NO_DATA = 232
+_ERROR_FILE_NOT_FOUND = 2
+_ERROR_OPERATION_ABORTED = 995
+_DETACHED_PROCESS = 0x00000008
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def _broker_pipe_path(name):
+    return "\\\\.\\pipe\\" + name
+
+
+def _broker_script_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "agent_broker.py")
+
+
+def _broker_python_exe():
+    """Locate a real Windows Python to run tools/agent_broker.py -- sys.executable
+    inside the ST plugin host resolves to sublime_text.exe, not a usable
+    interpreter. Override with the `broker_python` setting if auto-detect
+    picks the wrong one (e.g. multiple Pythons on PATH)."""
+    override = _settings_obj().get("broker_python")
+    if override:
+        return override
+    for name in ("python.exe", "python3.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+class _BrokerPty:
+    """Client of a tools/agent_broker.py session over a named pipe.
+
+    start() first tries to connect to an already-running broker on
+    --pipe-name; only if that fails does it spawn a new detached broker and
+    retry. This makes the same code path serve both a fresh session and
+    reattaching to one that survived a Sublime restart.
+    """
+
+    def __init__(self, pipe_name, argv, cwd, cols, rows, env):
+        self.pipe_name = pipe_name
+        self.argv = list(argv)
+        self.pid = 0
+        self._cwd = cwd or None
+        self._env = env
+        self._cols = cols
+        self._rows = rows
+        self._h_out = None
+        self._h_in = None
+        self._h_ctl = None
+        self._alive = False
+        self._io_lock = threading.Lock()
+
+    def _try_connect(self, path, access, timeout_s):
+        deadline = time.time() + timeout_s
+        while True:
+            h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, 0, None)
+            if h != _INVALID_HANDLE_VALUE:
+                return h
+            err = ctypes.get_last_error()
+            if time.time() > deadline:
+                return None
+            if err == _ERROR_PIPE_BUSY:
+                # An instance exists but is taken -- WaitNamedPipeW actually
+                # blocks until one frees up (or this timeout).
+                _k32.WaitNamedPipeW(path, 500)
+            elif err == _ERROR_FILE_NOT_FOUND:
+                # The pipe doesn't exist yet (broker still starting up).
+                # WaitNamedPipeW returns immediately in this case per MSDN --
+                # it does not wait for first creation -- so poll instead.
+                time.sleep(0.1)
+            else:
+                return None
+
+    def start(self):
+        # Two separate unidirectional pipes (<name> broker-writes/we-read,
+        # <name>-in we-write/broker-reads) -- NOT one duplex pipe. A duplex
+        # version had this client's reader thread blocked in ReadFile while
+        # the broker's writer thread did WriteFile on the SAME handle;
+        # confirmed live that the WriteFile can simply never complete (no
+        # error, just never returns) under a fast burst, silently killing
+        # the session after just its first few bytes. Splitting the
+        # directions removes the shared handle entirely.
+        out_path = _broker_pipe_path(self.pipe_name)
+        in_path = _broker_pipe_path(self.pipe_name + "-in")
+
+        h_out = self._try_connect(out_path, _GENERIC_READ, 0.3)
+        if h_out is None:
+            self._spawn_broker()
+            h_out = self._try_connect(out_path, _GENERIC_READ, 10.0)
+            if h_out is None:
+                raise OSError(
+                    f"could not connect to agent_broker.py on pipe {self.pipe_name!r} "
+                    f"after spawning it"
+                )
+            print(f"[ai_terminal] spawned new detachable session on pipe {self.pipe_name!r}")
+        else:
+            print(f"[ai_terminal] reattached to existing detachable session on pipe {self.pipe_name!r}")
+        self._h_out = h_out
+
+        h_in = self._try_connect(in_path, _GENERIC_WRITE, 5.0)
+        if h_in is None:
+            _k32.CloseHandle(h_out)
+            self._h_out = None
+            raise OSError(f"could not connect to input pipe for {self.pipe_name!r}")
+        self._h_in = h_in
+        self._alive = True
+
+        # Control pipe connect is best-effort -- a session that survived a
+        # restart is already sized however it last was; a failed connect here
+        # just means resize() silently no-ops until the next reattach.
+        ctl = self._try_connect(_broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 2.0)
+        self._h_ctl = ctl
+        if ctl is not None:
+            self.resize(self._cols, self._rows)
+
+    def _spawn_broker(self):
+        python_exe = _broker_python_exe()
+        if not python_exe:
+            raise OSError(
+                "no Python interpreter found to run tools/agent_broker.py -- "
+                "install Python and ensure it's on PATH, or set the "
+                "`broker_python` setting to its full path"
+            )
+        cmd = [
+            python_exe, _broker_script_path(),
+            "--pipe-name", self.pipe_name,
+            "--cols", str(self._cols), "--rows", str(self._rows),
+        ]
+        if self._cwd:
+            cmd += ["--cwd", self._cwd]
+        cmd += ["--"] + self.argv
+        # The child's full environment (including any resolved API keys) is
+        # passed via Popen's env= -- NOT as --env KEY=VALUE command-line
+        # arguments. A process's command line is readable by any other
+        # process on the machine (tasklist, wmic, Task Manager's "Command
+        # line" column) -- passing secrets that way leaks them locally.
+        # agent_broker.py's own --env flag still exists for its own small,
+        # explicit manual overrides; it's just unused here.
+        subprocess.Popen(
+            cmd,
+            env=self._env,
+            creationflags=(_DETACHED_PROCESS | _CREATE_BREAKAWAY_FROM_JOB
+                           | _CREATE_NEW_PROCESS_GROUP),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+    def read(self, on_data):
+        buf = (c_char * 8192)()
+        n = DWORD(0)
+        while self._alive:
+            ok = _k32.ReadFile(self._h_out, buf, 8192, byref(n), None)
+            if not ok:
+                err = ctypes.get_last_error()
+                self._alive = False
+                if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
+                           _ERROR_OPERATION_ABORTED):
+                    return
+                raise OSError("ReadFile on broker output pipe failed (GetLastError %d)" % err)
+            if n.value == 0:
+                break
+            on_data(bytes(buf[: n.value]))
+        self._alive = False
+
+    def write(self, data):
+        if not self._alive or self._h_in is None:
+            return
+        written = DWORD(0)
+        while data:
+            if not _k32.WriteFile(self._h_in, data, len(data), byref(written), None):
+                raise OSError("WriteFile to broker input pipe failed (GetLastError %d)"
+                              % ctypes.get_last_error())
+            if not written.value:
+                raise OSError("WriteFile accepted 0 of %d bytes" % len(data))
+            data = data[written.value:]
+
+    def resize(self, cols, rows):
+        self._cols, self._rows = cols, rows
+        if self._h_ctl is None:
+            return False
+        line = ("RESIZE %d %d\n" % (cols, rows)).encode("utf-8")
+        written = DWORD(0)
+        with self._io_lock:
+            ok = _k32.WriteFile(self._h_ctl, line, len(line), byref(written), None)
+        return bool(ok)
+
+    def is_alive(self):
+        return self._alive
+
+    def kill(self):
+        """Disconnect this client only. The broker and its agent process keep
+        running -- that's the point of a detachable session. See
+        explicit_kill() to actually end the session."""
+        self._alive = False
+        for h in (self._h_out, self._h_in, self._h_ctl):
+            if h is not None:
+                # CancelIoEx unblocks the reader thread's pending ReadFile on
+                # this handle from here (a different thread). Without this,
+                # CloseHandle can hang the calling thread indefinitely if a
+                # blocking ReadFile on the same handle is still pending on
+                # another thread -- reproduced live: froze Sublime's main
+                # thread solid when called there directly.
+                _k32.CancelIoEx(h, None)
+                _k32.CloseHandle(h)
+        self._h_out = self._h_in = self._h_ctl = None
+
+    def explicit_kill(self):
+        """End the underlying agent/shell for real (not just disconnect)."""
+        h = self._h_ctl or self._try_connect(
+            _broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 1.0)
+        if h is not None:
+            line = b"KILL\n"
+            written = DWORD(0)
+            _k32.WriteFile(h, line, len(line), byref(written), None)
+        self.kill()
 
 
 # ─── _PosixPty: forkpty child process (Linux/WSL/macOS) ──────────────────────
@@ -2719,6 +2966,14 @@ _VIEW_NAME = "Ai"
 _VIEW_SETTING = "ai_terminal_view"
 _TAG_SETTING = "ai_logger"  # so panic_dialog / ClaudeSendTab still find this view
 
+# Persisted (view.settings() survives an ST restart via the workspace session
+# file) so a detachable profile's tab can reconnect to its still-running
+# agent_broker.py session after Sublime restarts -- see _BrokerPty and
+# _reattach_broker_view.
+_BROKER_PIPE_SETTING = "ai_terminal_broker_pipe"
+_BROKER_PROFILE_SETTING = "ai_terminal_broker_profile"
+_BROKER_CWD_SETTING = "ai_terminal_broker_cwd"
+
 
 def _vwrite(view, text):
     def _do(t=text):
@@ -3857,7 +4112,22 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             term._watcher = None
         with _term_lock():
             _term_registry().pop(self.view.id(), None)
-        threading.Thread(target=term.kill, daemon=True).start()
+
+        def _do_close():
+            if isinstance(term.pty, _BrokerPty):
+                # Closing the tab is a deliberate "end this session" action,
+                # unlike Sublime quitting: hot-exit does NOT fire on_close
+                # per view (confirmed live -- reattach across a real ST
+                # restart works), so this is the only place a detachable
+                # session should actually be ended rather than just
+                # disconnected.
+                try:
+                    term.pty.explicit_kill()
+                except Exception as e:
+                    print(f"[ai_terminal] explicit_kill on tab close failed: {e}")
+            term.kill()
+
+        threading.Thread(target=_do_close, daemon=True).start()
 
     # ─── pre-empt ST's internal view.show on focus/hover ───────────────────
     #
@@ -3888,6 +4158,7 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
 
     def on_activated(self):
         self._preclamp_vp()
+        _maybe_reattach_broker(self.view)
 
     def on_deactivated(self):
         self._preclamp_vp()
@@ -4889,9 +5160,22 @@ def _spawn(window, path, profile=None):
         view.close()
         return
 
+    detachable = bool(profile_data.get("detachable")) if profile_data else False
+
     if os.name != "nt":
         pty = _PosixPty(argv, path, cols, rows, env)
         print("[ai_terminal] Spawning PTY process using 'posix' backend.")
+    elif detachable:
+        # Do NOT write the pipe name into view.settings() yet -- doing so
+        # before the terminal is registered below opens a window where
+        # on_activated's reattach check (_maybe_reattach_broker) sees "pipe
+        # name set, no live _Terminal yet" and races this same spawn with a
+        # second one for the identical pipe name (observed live: 4 broker
+        # processes competing for one named pipe). Settings are written only
+        # after pty.start() + registry insertion succeed, below.
+        pipe_name = "ghostshell_" + uuid.uuid4().hex[:20]
+        pty = _BrokerPty(pipe_name, argv, path, cols, rows, env)
+        print(f"[ai_terminal] Spawning PTY process using 'broker' backend (detachable, pipe={pipe_name!r}).")
     else:
         pty = _Pty(argv, path, cols, rows, env)
         print("[ai_terminal] Spawning PTY process using 'conpty' backend.")
@@ -4916,9 +5200,83 @@ def _spawn(window, path, profile=None):
         sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
         view.close()
         return
+    if detachable and isinstance(pty, _BrokerPty):
+        view.settings().set(_BROKER_PIPE_SETTING, pty.pipe_name)
+        view.settings().set(_BROKER_PROFILE_SETTING, profile_name)
+        view.settings().set(_BROKER_CWD_SETTING, path)
     with _term_lock():
         _term_registry()[view.id()] = term
     term.start_reader()
+
+
+def _maybe_reattach_broker(view):
+    """If `view` is a detachable-profile ai_terminal tab restored by Sublime
+    (workspace session restore after a restart) but has no live _Terminal,
+    reconnect it to its still-running agent_broker.py session instead of
+    leaving it orphaned. Cheap no-op for every other view."""
+    try:
+        if not view.settings().get(_VIEW_SETTING):
+            return
+        if _Terminal.from_id(view.id()) is not None:
+            return
+        pipe_name = view.settings().get(_BROKER_PIPE_SETTING)
+        if not pipe_name:
+            return
+        _reattach_broker_view(view, pipe_name)
+    except Exception:
+        print("[ai_terminal] reattach check failed:\n%s" % traceback.format_exc())
+
+
+def _reattach_broker_view(view, pipe_name):
+    if not _PTY_OK or os.name != "nt":
+        return
+    profile_name = view.settings().get(_BROKER_PROFILE_SETTING)
+    path = view.settings().get(_BROKER_CWD_SETTING)
+    s = _settings_obj()
+    profile_data = _profile_settings(profile_name, s) if profile_name else None
+
+    if profile_data:
+        argv = _platform_argv(profile_data.get("launch_command", _DEFAULT_LAUNCH_COMMAND))
+        shared_env = s.get("shared_spawn_env", {})
+        if not isinstance(shared_env, dict):
+            shared_env = {}
+        extra_env = dict(shared_env)
+        extra_env.update(profile_data.get("spawn_env", {}))
+    else:
+        argv = _launch_command()
+        extra_env = _spawn_env()
+
+    env = _sanitize_pty_env(os.environ, extra_env)
+    env = _refresh_path_env(env)
+    env = _resolve_env_refs(env)
+    env = _resolve_secret_refs(env)
+    try:
+        argv = _resolve_launch_argv(argv, env)
+    except FileNotFoundError as e:
+        print(f"[ai_terminal] reattach: {e}")
+        return
+
+    cols, rows = _measure(view)
+    try:
+        screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
+        parser = _make_parser(screen, _force_main_screen(profile_name))
+    except Exception:
+        print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
+        return
+
+    pty = _BrokerPty(pipe_name, argv, path, cols, rows, env)
+    term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
+    term.prepare()
+    try:
+        pty.start()
+    except Exception as e:
+        print("[ai_terminal] reattach: broker connect failed:\n%s" % traceback.format_exc())
+        sublime.status_message(f"Ai terminal: could not reattach ({e})")
+        return
+    with _term_lock():
+        _term_registry()[view.id()] = term
+    term.start_reader()
+    print(f"[ai_terminal] reattached view {view.id()} to pipe {pipe_name!r}")
 
 
 class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
@@ -6213,6 +6571,30 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             _pin_viewport_rest(view, rest, term)
 
 
+class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
+    """End a detachable session's underlying agent/shell for real, then close
+    the tab. Plain tab-close only detaches (see _BrokerPty.kill) -- this is
+    the explicit "actually stop it" action for a detachable profile. No
+    command palette / menu entry yet; run via View > Show Console:
+        view.run_command("ai_terminal_end_session")
+    Hidden/no-op on non-detachable tabs.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None or not isinstance(term.pty, _BrokerPty):
+            return
+        try:
+            term.pty.explicit_kill()
+        except Exception as e:
+            print(f"[ai_terminal] explicit_kill failed: {e}")
+        self.view.close()
+
+    def is_visible(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and isinstance(term.pty, _BrokerPty)
+
+
 class AiTerminalNukeCommand(sublime_plugin.TextCommand):
     """Clear the view and reset the terminal screen (terminus_nuke equivalent).
 
@@ -6636,6 +7018,12 @@ def plugin_loaded():
     _start_layout_watcher()
     _ensure_usage_scanner()
     _start_usage_refresh()
+    # Reconnect any detachable-profile tabs Sublime just restored from its
+    # workspace session -- their agent_broker.py session may have survived
+    # the restart even though this plugin instance is brand new.
+    for window in sublime.windows():
+        for view in window.views():
+            _maybe_reattach_broker(view)
     print("[ai_terminal] loaded (trackpad pan→TUI scroll armed)")
 
 
