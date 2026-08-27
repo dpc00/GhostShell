@@ -139,6 +139,49 @@ outside the repo (scratchpad, path in this session's record) — both work
 against any real captured `.cast` and are ready to validate the eventual
 fix.
 
+## Row-0 alignment gap: FIXED and TDD-verified, with an honest limit found (2026-08-27, later)
+
+Implemented, test-first, exactly per the diagnosis above. `_best_alignment`
+now returns an anchor **pair** (`new_start`, `old_start`) instead of one
+collapsed linear offset — a single dump chunk can contain a plain
+continuation *and* a restart back to back, which one offset can't
+represent (confirmed live: forcing one offset either discarded a correct
+alignment when the subtraction went negative, or, once fixed, duplicated
+"in-between" rows that actually needed splice-cleanup rather than pass-
+through). Also: the search now stops at the **first** `new_rows` index
+with any candidate match at all — run length only disambiguates *within*
+that one candidate set — and processes `new_rows` in **segments**,
+re-searching alignment against the growing merged result each time one
+segment's old-row reference runs out, because a single native write can
+contain multiple embedded restarts concatenated in one buffered PTY read.
+Iterated through three real regressions during this (each caught by the
+full suite before being accepted, including two further real-cast
+corruption instances only visible after fixing the first). New regression
+test: `test_mid_stream_start_finds_alignment_via_later_rows` — confirmed
+failing against the original code with real demonstrated data loss.
+
+**Full suite: 447 passed, same 1 pre-existing unrelated failure.**
+
+**Honest validation result**: diffed the real captured cast's *final*
+rendered state (all 30 events) between original and fixed code
+(`git stash`) — **identical**. The original code's own later-merge
+self-healing already reaches this same endpoint for this specific
+sequence. The fix genuinely eliminates the alignment gap (proven via
+isolated tests with real data-loss prevented) and narrows the *window*
+during which corruption is visible mid-session, but the 2 splices that
+survive to the end of this cast have a different, deeper cause: by the
+time they occur, a prior restart has already (correctly) dropped the only
+clean reference they'd need to be repaired against — no history-
+comparison fix, however smart, can repair a row when nothing clean
+survives to compare it against. That needs either a native-`ghostty-vt`-
+level fix or a same-dump self-consistency check, neither attempted.
+7 pre-existing exact-duplicate lines were also confirmed identical in
+both versions — not introduced this session, not investigated further.
+
+Full precise findings (byte-for-byte before/after, every intermediate
+regression and its fix) in the scratchpad `repro_notes.md`, same path as
+before.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
