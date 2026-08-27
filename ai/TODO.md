@@ -3,6 +3,140 @@
 Open/unresolved items only. Full dev-session history (root causes, fixes,
 verification detail) lives in [TODO-archive.md](TODO-archive.md).
 
+## Session baton (2026-08-27, later) — lost keystroke + viewport jump during a permission prompt; architecture lead from Ghostty's real source; diagnostic landed, no fix yet
+
+**What the user saw, live, same evening as the gutter-reserve fix above.**
+Two related incidents in the `Claude` tab: (1) mid-typing a reply, the
+viewport jumped ~100 lines up into old conversation text; (2) separately, a
+permission prompt was obscured (viewport not showing the live prompt row);
+the user typed their intended response anyway, but **only the Enter
+keystroke reached the PTY — the typed text itself was lost**, submitting
+effectively empty input.
+
+**Ruled out this session, with evidence, not guesswork:**
+- **Copy-mode-turns-on-by-itself** (the other UNRESOLVED item below): the
+  TEMP DEBUG call-stack logger in `AiTerminalToggleCopyModeCommand.run` is
+  still live and printed nothing around this incident. Not the cause here.
+- **`_tui_like()` mispinning the viewport**: checked — for the `Claude`
+  profile specifically, `alt_screen` and `mouse_tracking` are both
+  deliberately disabled (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`,
+  confirmed elsewhere in this file), so `_tui_like(term)` is almost always
+  `False` for Claude. Keypresses should be taking the unconditional
+  `_scroll_to_bottom()` branch in `AiTerminalKeypressCommand.run`
+  (`ai_terminal.py` ~line 6388), not the fragile "only re-pin if drifted"
+  TUI branch that uses `_host_rest_y()`. Rules out that specific mechanism
+  for Claude; may still apply to `_tui_like` profiles (Grok, Qwen, etc.).
+
+**New, concrete, not-yet-confirmed lead for the lost-keystroke half.**
+`encode_key()` (the libghostty-vt key encoder called from
+`AiTerminalKeypressCommand.run`) can legitimately return empty bytes
+(`b""`) for "a key with no output," per its own docstring. Both the actual
+PTY write (`term.send_string(code)`) *and* the `_scroll_to_bottom()` call
+live inside `if code:` — so if something about the permission-prompt
+frame's terminal-mode state (Kitty keyboard protocol flags,
+modifyOtherKeys, app-cursor mode — all synced live by `encode_key` on
+every call) made it return empty for plain characters but not for `\r`,
+that would produce exactly this symptom: text silently dropped, Enter
+still gets through. **Not yet proven** — no direct evidence this actually
+fired during the incident, only that the mechanism exists and fits.
+
+**Diagnostic landed (additive-only, zero behavior change).**
+`AiTerminalKeypressCommand.run` now logs (rate-limited to once per view per
+~2s) whenever a key that should normally produce output — a single
+printable character, or enter/return/space/tab/backspace — comes back with
+empty `code`: the key/modifiers, view id/name, and
+`private_modes`/`alt_screen`/`mouse_tracking` snapshot at that moment.
+TEMP DEBUG, same pattern as the copy-mode logger above — remove once this
+is root-caused or ruled out. Next occurrence of "typed text vanished"
+should show up here whether or not it's this exact mechanism.
+
+**Architecture lead: what Ghostty and Terminus actually do, checked
+against real source, not assumption.** `~/tools/ghostty/src/Surface.zig`
+(~lines 4809-4884, the `.csi`/`.esc`/`.text`/`.cursor_key` input-action
+handlers): every single keystroke that writes to the PTY **unconditionally
+and synchronously scrolls the viewport to bottom first** — no "is this
+really the footer," no drift threshold, no compensation math. The
+cursor-key handler's own comment: *"We always scroll to the bottom for
+these inputs."* Terminus does the same in spirit per the existing
+`CURSOR_SYSTEM_HISTORY.md` note (`focus_cursor`, ~10 lines, raw PTY
+position, no remapping/pinning/synthesis/override).
+
+GhostShell's current design instead tries to *infer* correct scroll
+position reactively from PTY **output** state — `_compensate_trim_scroll`,
+`_settle_viewport`, `_host_rest_y`, caret-row detection via
+`_find_prompt_row` — which is categorically more fragile than "scroll-to-
+bottom is an unconditional side effect of the keystroke that sent input."
+This is the real architectural gap behind both the viewport-jump family
+below and tonight's permission-prompt incident. **Not attempted tonight,
+deliberately** — per the explicit warning in the 2026-08-23 entry below,
+a prior blind attempt at this exact class of change ("gate
+`_compensate_trim_scroll` on `_auto_follow`") shipped and made jumping
+*worse*, then had to be reverted. Any change here needs the empty-code
+diagnostic (or an equivalent live capture) to land first, so a fix can be
+verified against a real captured incident instead of guessed at again.
+
+**Next steps, in order:** (1) wait for the empty-code diagnostic to catch
+a real occurrence — confirms or rules out the lost-keystroke mechanism;
+(2) if ruled out, `_find_prompt_row` locking onto a stale scrollback line
+during a permission dialog (noted, unfiled, in the 2026-08-21 entry below)
+is the next candidate for the "obscured prompt" half specifically; (3) once
+either mechanism is confirmed, evaluate whether an unconditional,
+input-driven scroll-to-bottom (Ghostty-style) is a viable replacement for
+the reactive output-side compensation system, or whether it needs to
+coexist with `_tui_like` pinning for fullscreen apps.
+
+**Two concrete fixes landed same session (not guesses -- traced code bugs,
+mirroring patterns already proven safe elsewhere in this exact function):**
+
+1. **PageUp/PageDown "dead key" while a TUI streams.** The default
+   PageUp/PageDown branch in `AiTerminalKeypressCommand.run` (~line 6295,
+   reached by Claude and most profiles -- not `page_keys_to_pty`) did ST-
+   native page-scroll and returned *without* calling `_set_auto_follow(term,
+   False)`. A second PageUp/PageDown branch further down (reached only by
+   `page_keys_to_pty` profiles like Codex) already disengages follow, but
+   that code was dead for every profile taking the first branch. Net
+   effect, matching the `_page_keys_to_pty` docstring's own prior note
+   ("native page then moves a one-frame buffer and the key looks dead"):
+   the view scrolled up for one frame, the very next streaming render's
+   auto-follow snapped it right back down before it was perceptible --
+   PageUp read as completely unresponsive. Fixed: same
+   `_set_auto_follow(term, False)` call added to the first branch, same
+   intent as the mouse-wheel/click handlers that already disengage follow
+   on any deliberate scroll-away gesture.
+2. **Ctrl+Home/Ctrl+End did nothing.** Only `Ctrl+Shift+Home/End` had
+   explicit unconditional ST-native "jump to buffer start/end" handling;
+   plain `Ctrl+Home/Ctrl+End` fell through to the PTY-forward path, where
+   no readline-style CLI does anything with it. Added the same unconditional
+   `move_to bof/eof` handling (no Shift → no selection extend), mirroring
+   the existing Ctrl+Shift pattern immediately above it. Deliberately did
+   **not** touch plain Home/End (real line-editing use in a CLI) or plain
+   arrow Up/Down (real command-history-recall use) -- both are genuine
+   binary conflicts between "CLI wants this key" and "scrollback wants this
+   key" with no universally correct default, not bugs to fix.
+
+**Diagnostics/observability landed same session, both additive-only:**
+- Rate-limited empty-`code` logging (above).
+- `_update_debug_status()` (new, called from `_set_auto_follow`'s single
+  choke point and the end of `_do_render`): a live status-bar readout —
+  `follow=… tui=… cols×rows=… vp_y=…` — gated by
+  `debug_status_bar_enabled` (`ai_terminal.sublime-settings`, default
+  off). Motivated by a direct live report: `sublime.log_input(True)`-style
+  console firehose (every keystroke/mouse move) has no way to correlate to
+  what's on screen, unlike Ghostty's Inspector overlay; `view.set_status`
+  is the cheap ST-native equivalent -- persistent text, updates live, no
+  overlay/pane to build. **Future upgrade suggested, not built:** a
+  minihtml panel/phantom (`view.show_popup` or similar) could give a
+  richer multi-line live view instead of one status-bar line, if the
+  single-line readout proves too cramped in practice.
+
+All of the above: compiles clean, full suite 445 passed / 1 pre-existing
+unrelated failure (`AiTerminalEndSessionCommand` not registered in
+PluginLoader.py, present on baseline before this session too). Not yet
+live-verified against a real Claude session — next session should restart
+ST, enable `debug_status_bar_enabled` on a live tab, and confirm the
+status line updates on PageUp/PageDown/Ctrl+Home/Ctrl+End and tracks
+`follow` correctly during real streaming output.
+
 ## RESOLVED (2026-08-27) — Codex resize<->replay oscillation: 4-digit gutter reserve implemented
 
 **Symptom.** Pinch-zoom (or any) font_size change reloads

@@ -1626,6 +1626,7 @@ def _set_auto_follow(term, value):
     screen = getattr(term, "screen", None)
     if screen is not None and hasattr(screen, "set_trim_paused"):
         screen.set_trim_paused(not value)
+    _update_debug_status(term)
     return value
 
 
@@ -3662,6 +3663,36 @@ def _log_painted_tab(term, text):
         term._text_log.close()
 
 
+def _update_debug_status(term):
+    """Live status-bar readout of scroll/follow state (2026-08-27).
+
+    Gated by debug_status_bar_enabled (ai_terminal.sublime-settings,
+    default off) -- a live meter you can glance at while it happens,
+    per a live user report that console debug prints ("log output") are
+    a firehose (every keystroke/mouse move) with no way to correlate them
+    to what's on screen, unlike Ghostty's Inspector overlay. view.set_status
+    is the cheap ST-native equivalent: persistent status-bar text, no
+    separate pane/overlay to build.
+    """
+    view = getattr(term, "view", None)
+    if view is None or not view.is_valid():
+        return
+    if not _setting_bool("debug_status_bar_enabled", False, profile_name=_term_profile_name(term)):
+        return
+    try:
+        follow = bool(getattr(term, "_auto_follow", True))
+        tui = _tui_like(term)
+        cols = getattr(term, "_last_cols", "?")
+        rows = getattr(term, "_last_rows", "?")
+        vp_y = view.viewport_position()[1]
+        view.set_status(
+            "ai_terminal_debug",
+            f"ai_terminal: follow={follow} tui={tui} cols×rows={cols}×{rows} vp_y={vp_y:.0f}",
+        )
+    except Exception:
+        pass
+
+
 def _do_render(term):
     view = term.view
     if not view or not view.is_valid():
@@ -3801,6 +3832,7 @@ def _do_render(term):
     term._last_render_text = text
     term._last_caret_off = caret_off if caret_off is not None else -1
     term._last_render_mono = time.monotonic()
+    _update_debug_status(term)
     _rearm_if_dirty(term)
 
 
@@ -6272,6 +6304,19 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 "move_to", {"to": "bof" if key == "home" else "eof", "extend": True}
             )
             return
+        # Ctrl+Home/Ctrl+End (no Shift): same unconditional "jump to buffer
+        # start/end" as Ctrl+Shift+Home/End above, minus extending a
+        # selection. No readline-style CLI does anything meaningful with
+        # plain Ctrl+Home/Ctrl+End -- unlike plain Home/End (real line-
+        # editing use, see below), so this is a safe unconditional native
+        # scroll, not an opt-in. (2026-08-27: added after a live report that
+        # it silently did nothing -- fell through to the PTY forward below,
+        # which no CLI interprets.)
+        if not alt and ctrl and not shift and key in ("home", "end"):
+            self.view.run_command(
+                "move_to", {"to": "bof" if key == "home" else "eof", "extend": False}
+            )
+            return
         # PageUp/PageDown: scroll ST's real scrollback like an ordinary
         # terminal emulator (same motion as dragging the minimap) -- unlike
         # Home/End, no primary-screen readline-style CLI has a legitimate use
@@ -6281,6 +6326,22 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # place with no ST history (Grok) via `page_keys_to_pty`.
         if not alt and key in ("pageup", "pagedown") and not _page_keys_to_pty(term):
             self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
+            # 2026-08-27: this early return used to skip _set_auto_follow
+            # entirely -- the *other* PageUp/PageDown branch below (reached
+            # only by page_keys_to_pty profiles like Codex) already disengages
+            # follow, but that code was dead for every profile that actually
+            # takes *this* branch (Claude included). Net effect, live-reported:
+            # the view scrolled up for one frame, then the next streaming
+            # render's auto-follow snapped it right back down -- PageUp
+            # looked broken and felt like the TUI was "yanking" the position.
+            # Same intent as the mouse-wheel/click handlers, which already
+            # disengage follow on any deliberate scroll-away gesture.
+            _set_auto_follow(term, False)
+            if _DEBUG:
+                print(
+                    f"[ai_terminal][debug] {key} -> native ST page-scroll, "
+                    f"auto_follow=False (view={self.view.id()})"
+                )
             return
         # Profiles that explicitly opt in (real scrollback, no line-editing,
         # e.g. gotui) get native ST paging/navigation for these keys instead
@@ -6342,6 +6403,27 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         shift=shift,
                         application_mode=1 in term.screen.private_modes,
                     )
+        # TEMP DEBUG (ai/TODO.md "lost keystroke during permission prompt",
+        # 2026-08-27): a key that should normally produce output coming back
+        # empty here means BOTH the PTY write (term.send_string below) and
+        # the scroll-to-bottom on the "if code:" branch are silently
+        # skipped -- a plausible mechanism for "I typed text but only Enter
+        # registered." Rate-limited (once per view per ~2s) so a legitimately
+        # no-op key (e.g. a bare modifier) held down cannot spam the console.
+        # Remove once root-caused or ruled out.
+        if not code and (len(key) == 1 or key in ("enter", "return", "space", "tab", "backspace")):
+            now = time.monotonic()
+            last_log = getattr(term, "_empty_code_log_mono", 0.0) or 0.0
+            if now - last_log > 2.0:
+                term._empty_code_log_mono = now
+                print(
+                    "[ai_terminal] keypress produced EMPTY code — "
+                    f"key={key!r} ctrl={ctrl} alt={alt} shift={shift} "
+                    f"view={self.view.id()} name={self.view.name()!r} "
+                    f"private_modes={sorted(term.screen.private_modes)} "
+                    f"alt_screen={term.screen.alt_screen} "
+                    f"mouse_tracking={term.screen.mouse_tracking}"
+                )
         if code:
             # Viewport writes (scroll_to_bottom) must NOT run on keys that only
             # move within the TUI or scrollback. set_viewport_position on
