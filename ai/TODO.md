@@ -1,5 +1,41 @@
 # ai_terminal TODO
 
+## Detachable reattach could permanently pin an inactive Claude tab to 1 row — FIXED (2026-08-27, ~5am)
+
+The failed live test after commit `b165743` was not a failure of the
+disposable Testing Agent profile. Direct inspection of the live terminal
+registry showed Claude at `94x1`, while Codex and Testing Agent were both at
+normal 40-row heights. All three Sublime views had an 821px viewport by the
+time they were inspected.
+
+Root cause: `plugin_loaded()` immediately reattached every restored broker
+view. Sublime had not finished laying out the inactive Claude sheet, so
+`_measure()` returned the legitimate global floor of one row and that value
+was sent to the surviving broker. Main-screen profiles intentionally pin
+their initial row count and ignore later row-only layout changes, so Claude
+could never recover from that transient startup measurement. The tab then
+rendered repeated one-row TUI fragments and appeared completely trashed.
+
+Live recovery: deliberately cleared Claude's stale main-screen row baseline
+for one synchronized resize through `_Terminal.resize`; broker, parser, and
+bookkeeping all moved from `94x1` to `94x40`. The prompt and rate-limit footer
+became readable again without restarting Sublime.
+
+Permanent fix: broker reattachment now requires two identical layout
+measurements 250ms apart. A restored **inactive** sheet that still measures at
+the one-row floor remains detached until its normal `on_activated` path
+starts a fresh confirmed attempt. A genuinely one-row **active** pane remains
+valid; the fix does not invent a comfortable minimum or exceed the visible
+height. Regression test:
+`test_broker_reattach_does_not_pin_inactive_restored_view_to_one_row`.
+
+Live verification used a full Sublime restart with detachable Claude and
+Codex sessions. Immediately after restart only active Codex reattached, at
+`94x40`; activating Claude then reattached it at `94x40`. The non-detachable
+Testing Agent tab was correctly just an orphaned disposable buffer after the
+restart and was closed. Full suite: 448 passed, same one pre-existing failure
+(`AiTerminalEndSessionCommand` missing from `PluginLoader.py`).
+
 ## Splatter/splice corruption: one real bug found+fixed, root cause narrowed to the ctypes/native boundary (2026-08-27, ~2:30am–3:45am)
 
 **Correction to this entry's own earlier claim** (caught in review): the
