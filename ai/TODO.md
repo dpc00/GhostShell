@@ -75,15 +75,43 @@ a prior blind attempt at this exact class of change ("gate
 diagnostic (or an equivalent live capture) to land first, so a fix can be
 verified against a real captured incident instead of guessed at again.
 
+**Correction to the naive Ghostty port, from the user directly (important
+— do not implement literal scroll-to-bottom):** Ghostty's target (buffer
+bottom) works because a plain shell's prompt IS the last line, always.
+Claude's is not: its statusline/footer area **changes height frame to
+frame** (the same "6 lines below the prompt, several of which recompute
+every render" behavior already documented in the 2026-08-21 entry's
+`follow_ignore_trailing_lines` note). If the algorithm targets literal
+buffer-bottom, the viewport jumps up/down on every footer height change
+even with zero real scrolling need — a likely contributor to the
+"jiggling on keystrokes" complaint, separate from the permission-prompt
+incident. **The correct target is the command-line row itself** (the live
+`❯`/input row, from `_find_prompt_row` or equivalent), positioned at a
+fixed offset from the viewport bottom that reserves headroom for the
+footer — not "scroll to the buffer's last line." `follow_ignore_trailing_lines`
+is the existing, narrower version of this idea (a fixed per-profile
+trailing-line count); the real fix generalizes it.
+
+Second correction, same conversation: **that reserved headroom cannot be
+sized for the normal footer alone** — approval/permission prompts render
+as a noticeably larger block of text than the everyday statusline, so a
+headroom tuned to the common case will still get eaten by a permission
+prompt. The reserve either needs to be generous enough to cover the
+prompt case too, or the algorithm needs to detect "a larger interactive
+block is showing" (a menu/choice render, similar to what `_find_prompt_row`
+already has to distinguish from a live prompt per the 2026-08-21 note on
+resolved permission dialogs) and grow the reserve dynamically for it.
+
 **Next steps, in order:** (1) wait for the empty-code diagnostic to catch
 a real occurrence — confirms or rules out the lost-keystroke mechanism;
 (2) if ruled out, `_find_prompt_row` locking onto a stale scrollback line
 during a permission dialog (noted, unfiled, in the 2026-08-21 entry below)
 is the next candidate for the "obscured prompt" half specifically; (3) once
-either mechanism is confirmed, evaluate whether an unconditional,
-input-driven scroll-to-bottom (Ghostty-style) is a viable replacement for
-the reactive output-side compensation system, or whether it needs to
-coexist with `_tui_like` pinning for fullscreen apps.
+either mechanism is confirmed, implement input-driven scrolling that
+targets the **command-line row with reserved, permission-prompt-aware
+headroom** (per the two corrections above) — not literal buffer-bottom —
+as the replacement for the reactive output-side compensation system, or
+determine it needs to coexist with `_tui_like` pinning for fullscreen apps.
 
 **Two concrete fixes landed same session (not guesses -- traced code bugs,
 mirroring patterns already proven safe elsewhere in this exact function):**
