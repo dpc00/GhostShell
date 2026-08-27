@@ -242,6 +242,25 @@ already complete and committed at `b165743` and stands regardless. Only the
 "live-test only in disposable profiles" step is deferred — pending the user
 restoring a visible, paintable Sublime Text window before retrying.
 
+**Live-test in a disposable profile: RETRIED and PASSED (2026-08-27, later
+still, after a fresh ST launch).** New ST process, fresh "Testing Agent"
+spawn — measured a real `93x40` viewport this time (`viewport_extent`
+non-zero), confirming the prior block was exactly the un-painted-window
+diagnosis above, not a code defect. Drove ~30 replay cycles (mock CLI's
+`5` + Enter, repeated) via direct `term.send_string()` calls (the window-
+level MCP command's param is `string`, not `text` — a caller mistake this
+session, not a plugin bug; also reconfirmed the console is line-buffered/
+cooked, so a lone digit without a following `\r` only echoes, it doesn't
+reach the child until the line is flushed — matches the established "send
+text and Enter as two separate calls" convention). Mid-run, the buffer
+showed exactly the residual signature already characterized above: 2
+splices, a handful of duplicate `TURN-NN` headers — no new or worse
+symptom. After continued replay the buffer settled to 0 splices, 0
+duplicates over the full scrollback, matching the "later merges self-heal"
+finding from the offline `git stash` comparison. No runaway growth, no
+crash. **This closes the live-test requirement** — the row-0 alignment fix
+behaves live exactly as characterized offline.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
