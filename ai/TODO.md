@@ -1,5 +1,160 @@
 # ai_terminal TODO
 
+## FALSE ALARM, root-caused — "cursor keys don't work at all" in the portable instance was environment leakage, not an ai_terminal bug (2026-08-27, later still)
+
+**Report:** user's in-progress portable Claude session (`D:\GhostShell-caret-test`,
+terminus-stage1 worktree) had up/down/left/right doing nothing on the command
+line. Given the same evening's stage-2 viewport/caret rewrite, this looked
+like a strong candidate for a real regression.
+
+**Ruled out, with live evidence, not guesswork:**
+- Keymap/context binding: identical to `main` byte-for-byte (`diff` clean).
+- Real physical keypresses do reach `AiTerminalKeypressCommand.run` correctly
+  — confirmed by a state-based monkeypatch probe (logging `(key, ctrl, alt,
+  shift, view_id)` to a module-level list, read back after the user pressed
+  keys physically). A print-based probe was tried first and gave a false
+  negative: it used `eval_python`'s sandboxed capture-`print`, whose output
+  never reaches the real ST console, so its silence proved nothing.
+- Key encoding: both the ghostty-vt `encode_key()` and the legacy
+  `_translate_key()` path produce the correct standard sequence
+  (`b'\x1b[A'` for Up) given the session's actual terminal-mode state
+  (`private_modes={2004}`, no app-cursor mode, no win32-input-mode,
+  no alt-screen) — encoding was never the problem.
+- Right-arrow "accepting a suggestion instead of moving one column" is the
+  real Claude Code CLI's own ghost-text-autosuggest behavior (fish/zsh-style
+  accept-on-Right/End), not GhostShell mis-routing anything.
+
+**Actual root cause:** the portable ST instance's embedded `claude.exe`
+session had inherited `CLAUDE_CODE_CHILD_SESSION` (and `CLAUDECODE`,
+`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`, etc.) from the environment of
+whatever Claude Code shell launched the portable Sublime Text process in the
+first place (confirmed live: this session's own Bash/PowerShell tool
+environment carries all of these). The inner Claude Code CLI detects this
+marker and degrades itself — footer showed "Transcript saving is off —
+inherited CLAUDE_CODE_CHILD_SESSION marker" the entire time — and, per live
+comparison, prompt-history recall (Up arrow) does not work in that degraded
+mode even though it works normally in an ordinarily-launched session. This
+is upstream Claude Code CLI behavior, not an ai_terminal.py defect.
+
+**Complication while fixing it, worth remembering:** this profile is
+detachable (`agent_broker.py`), so the polluted `claude.exe` + broker
+process pair survives a Sublime Text restart independent of Sublime's own
+environment — killing/relaunching `sublime_text.exe` with a stripped
+environment did nothing, because the still-running orphaned broker just got
+silently reattached via its recorded named pipe. Getting a genuinely clean
+session required killing the actual `agent_broker.py`/`claude.exe` process
+pair by PID (found via `Get-CimInstance Win32_Process`, matched by
+`--cwd`/pipe-name in the command line), closing the stale tab, then spawning
+a brand new one (`window.run_command('ai_terminal_open_here')`). After that,
+the "inherited marker" footer line disappeared and the user confirmed live:
+"cursor keys up/dwn/lft/rght locked to command line, pgup/dwn not locked,
+cursor up rewrite prior prompt. All is normal."
+
+**Action item for next session:** launch the portable test instance from a
+shell with `CLAUDE_CODE_CHILD_SESSION`, `CLAUDECODE`,
+`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
+`CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SSE_PORT`,
+`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_PID`, `AI_AGENT`
+stripped (a `System.Diagnostics.ProcessStartInfo` with those keys removed
+from `EnvironmentVariables` before `Process.Start`, not plain
+`Start-Process`, which has no environment-stripping option in Windows
+PowerShell 5.1) — and remember that if a stale detachable session already
+exists for that worktree, its broker/claude.exe pair must be killed by PID
+first, or the clean relaunch reattaches to the same polluted process.
+
+## Terminus stage 2 merged to main — 2 of 3 original bugs confirmed fixed live, one new caret finding, permission prompt still untested (2026-08-27, later still)
+
+Real-streaming-session verification of the three originally-reported bugs
+(typing while scrolled back mid-stream, PageUp/PageDown mid-stream, a
+permission prompt staying visible) — the one item stage 2 was still
+waiting on per the entry below — was first attempted in the portable
+worktree instance with a real Claude session and initially stalled: it
+could not reliably be coaxed into a long enough streaming reply to
+exercise the mid-stream scenarios (several prompt attempts, including ones
+designed to force long output, did not produce a sustained stream to test
+against). One partial data point from that stalled attempt: typing into
+the input while scrolled back **but idle** (no active stream) worked
+correctly — it scrolled to reveal the command line and the typed text
+landed intact — but that's not the actual reported scenario, which
+requires an active stream.
+
+**User's explicit decision, given the choice between (a) merge and verify
+by living with it, (b) one more attempt at forcing a real stream, or (c)
+shelve stage 2 unmerged: chose (a).** Cherry-picked both stage 2 commits
+(`403c8ab`, `06f6de6`) from `terminus-stage1` onto `main` (clean, no
+conflicts — `main`'s only commit ahead of the branch's merge-base was a
+documentation-only change to this file). Full suite re-run on `main`
+after the merge: **448 passed, same 1 pre-existing unrelated failure**
+(`AiTerminalEndSessionCommand` not registered in `PluginLoader.py`).
+
+**Unstuck, same session, minutes later.** The fix for the stall above: have
+the assistant itself interleave short paragraphs of text with explicit
+multi-second pauses (`sleep 5` between chunks) so the session stayed
+visibly "streaming" long enough to interact with — previous short replies
+had simply completed too fast to test against.
+
+- **Typing while scrolled back, actively streaming:** no text was lost,
+  but typing anything at all causes a yank — the instant a key is
+  pressed, the viewport jumps down to expose the command line. Corrects
+  the earlier claim (below/above) of "no yank to bottom" — that was wrong.
+  This is a real, confirmed observation, not a hypothesis. **User's
+  judgment: this yank is fine** — it's the intended "typing takes you to
+  where you're typing" behavior, not the original complaint (an
+  involuntary jump into old history with no keypress involved at all).
+- **PageUp/PageDown mid-stream:** confirmed working — paging moves the
+  viewport and it stays where paged, matching the mechanical verification
+  already documented below.
+- **New finding, not yet root-caused:** after paging (specifically —
+  reported as not occurring at other times, e.g. right after a response
+  finishes with no paging involved), the ST caret is visibly off the
+  command line until the next key is pressed, at which point it corrects.
+  User confirmed this is "actually confusing," not cosmetic — you can't
+  tell where typing will land until you've already pressed a key. Not
+  diagnosed yet; a plausible but UNVERIFIED hypothesis is that caret
+  placement (`text_point(cursor.y + terminal.offset, col)`-style
+  positioning) is only recomputed on render events tied to new PTY output
+  or an explicit keypress, not on a pure Sublime-side viewport scroll —
+  so if `terminal.offset` shifted while paged away (history retiring
+  during the stream), the caret's buffer position can go stale until the
+  next keypress-driven reposition. **Do not act on this hypothesis without
+  tracing the actual code path first**, per this file's established
+  practice — record only.
+- **ROOT-CAUSED: the live tab's differing behavior all session was a stale
+  personal settings override, not a stage-2 code issue at all.**
+  `C:\Users\donal\AppData\Roaming\Sublime Text\Packages\User\ai_terminal.sublime-settings`
+  (Sublime's per-user override file, outside the repo entirely, not
+  git-tracked) contained exactly the five Terminus-deviation bisection
+  gates, all forced back to their OLD values —
+  `"host_cursor_paint_enabled": true, "click_to_cursor_fallback_enabled":
+  true, "user_owns_caret_enabled": true, "caret_footer_pinning_enabled":
+  true, "fast_caret_patch_enabled": false` — almost certainly left over
+  from the 2026-08-21 session's live `sublime.load_settings/save_settings`
+  bisection testing (that API writes to exactly this User-override file).
+  Sublime merges User settings over package defaults, User always wins —
+  so **this conversation's live tab has been running with
+  `caret_footer_pinning_enabled: true` (old path) this entire session,
+  regardless of today's `main` flip to `false`,** independent of any
+  restart. The portable instance has no such override and was correctly
+  running the real new defaults the whole time. This fully explains the
+  arrow-key-history difference (and likely explains some of today's other
+  "portable vs. live" comparisons that assumed live was just running
+  unrestarted old code, when it was actually running deliberately
+  overridden old settings that a restart would not have fixed). **Fixed**:
+  deleted the override file. Live tab will run on real `main` package
+  defaults after its next restart. GhostShell's own keymap file was
+  checked and ruled out (byte-identical between `main` and the worktree)
+  before this was found.
+
+Permission-prompt-during-streaming check (the third original symptom)
+still not exercised — user reports not knowing how to reliably trigger a
+live permission prompt on demand, and notes a permission prompt isn't
+something the user can invoke like a keypress or a page action — it's the
+agent's own tool-use decision, not a deliberate user gesture with
+predictable timing. Needs either a known reliable trick to force one on
+demand, or accepting this check only happens opportunistically during
+real use.
+
 ## Detachable reattach could permanently pin an inactive Claude tab to 1 row — FIXED (2026-08-27, ~5am)
 
 The failed live test after commit `b165743` was not a failure of the
