@@ -268,6 +268,36 @@ continued load (bounded, not worse), and the profile survives 30 replay
 cycles. **This closes the live-test requirement** on that basis — live
 behavior matches the offline characterization, including its limitation.
 
+## Terminus rewrite, stage 1: raw-cursor path verified in a genuinely isolated process (2026-08-27, later still)
+
+The in-code note at `_do_render` (added earlier this session after a
+reverted attempt) required this be "live-verified in a genuinely separate
+process" before `caret_footer_pinning_enabled`'s live default could be
+touched. Built that: a portable Sublime Text install
+(`D:\Programs\Sublime Text`, own `Data` dir, own `sublime-mcp` on ports
+9520/9522) pointed at a real `git worktree` (`D:\GhostShell-caret-test`,
+branch `terminus-stage1`) rather than a junction to the live repo — a
+junction would have let the live process's own file watcher pick up the
+same edits and hot-reload into this conversation's tab, which is exactly
+what the in-code note was guarding against. Isolation confirmed
+empirically before any behavioral edit: touched a comment in the worktree,
+checked the live instance's console — no reload, no output. Copied the
+gitignored `ghostty-vt.dll` into the worktree by hand (not tracked in
+git). In the worktree's `ai_terminal.sublime-settings` only, flipped
+`caret_footer_pinning_enabled` to `false` (settings-only change, code
+untouched, so this stage's actual code deletion is still separately
+pending). Restarted the portable instance; live instance's console stayed
+silent, confirming no crossover.
+
+**User tested a real profile there directly: "multiline typed in, ST
+cursor appearance and position perfect."** This is the confirmed fix for
+the multi-line-prompt cursor bug (CURSOR_SYSTEM_HISTORY item 2) this whole
+rewrite was chasing. Permission-prompt-obscured-by-typed-input scenario
+not yet tested. Not yet decided: whether to carry this settings flip back
+to the main repo (making it the default for real profiles) or proceed to
+the plan's literal code deletion first. Both need the user's call — do not
+default the live gate without asking, per the original directive.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
