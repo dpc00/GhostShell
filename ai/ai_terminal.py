@@ -3730,11 +3730,32 @@ def _do_render(term):
     # (Claude). When it does not (Grok / shells), paint_host_cursor puts a
     # white █ on the blank insertion cell (display-only). Caret row must come
     # from adjust_display_caret — Grok's live `│ >` row, not a history `>`.
-
+    #
+    # 2026-08-27 (Terminus-style rewrite, stage 1, ai/TODO.md /
+    # CURSOR_SYSTEM_HISTORY.md item 2) -- NOT YET the default anywhere live:
+    # caret_footer_pinning_enabled's False branch (raw hardware cursor, no
+    # remap) is the Terminus-equivalent target for this whole gate, and is
+    # the confirmed fix for the multi-line cursor bug / stale-prompt-lock
+    # theory. But ai_terminal.sublime-settings itself documents a specific,
+    # unreconciled 2026-08-21 report of real scrollback content loss ("300
+    # lines missing, still shrinking") when this gate was previously
+    # disabled, attributed to trim_display_rows. Investigated 2026-08-27:
+    # trim_display_rows hasn't changed since before that report (git log),
+    # and tests/test_trim_display.py's test_content_below_cursor_is_kept
+    # proves it cannot drop non-blank content regardless of cursor position
+    # (last_nb is computed independent of cy) -- nor does scrollback
+    # eviction (screen.py) or native scrollback sync (ghostty_engine.py)
+    # depend on cursor row at all. Strong evidence this is already safe, but
+    # not fully reconciled with the original report, and this exact code
+    # backs two live, in-progress conversations (this one and a concurrent
+    # Codex session) that share this same loaded plugin process -- a reload
+    # affects both. Per explicit user direction: do NOT flip this gate's
+    # default; only the "Testing Agent" mock profile
+    # (ai_terminal.sublime-settings' per-profile override, all five gates
+    # false) may exercise the unpinned path until this is live-verified in
+    # a genuinely separate process.
     with term._lock:
         rows, cy, cx = term.screen.render_cells()
-        # Bisection gate (ai_terminal.sublime-settings): raw hardware
-        # position when disabled, Terminus-style -- see settings comment.
         if _setting_bool("caret_footer_pinning_enabled", False, profile_name=_term_profile_name(term)):
             cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
