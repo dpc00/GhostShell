@@ -304,6 +304,57 @@ profiles) or proceed to the plan's literal code deletion first. Both need
 the user's call — do not default the live gate without asking, per the
 original directive.
 
+## Terminus rewrite, stage 2: single-anchor viewport-follow, mechanically verified (2026-08-27, later still)
+
+Built and committed on `terminus-stage1` (worktree `D:\GhostShell-caret-test`)
+in two deliberately small commits, per advisor guidance after tracing that
+the "dead" pin/settle machinery wasn't actually dead: `_pin_viewport_rest`
+sets `term._last_vp_y = rest` (rest is always 0.0) as a side effect
+independent of whether the guarded `_set_viewport` write executes, and
+that same `_last_vp_y` field is read by the live, load-bearing auto-follow
+drift check a few lines earlier in `_do_render` — so it already had two
+incompatible writers before any of this started, not zero live readers.
+
+**Commit 1** (`403c8ab`): introduced `term._live_anchor_y`, a single-writer
+field mirroring every one of the 11 existing `_last_vp_y` write sites.
+Nothing reads it yet — purely additive, `_SCROLL_MANIPULATION_ENABLED`
+stays `False`. 448 passed, same 1 pre-existing failure.
+
+**Commit 2** (`06f6de6`): the one follow-decision comparison now reads
+`term._live_anchor_y` instead of `term._last_vp_y` (a no-op today since
+commit 1 made them always equal — establishes which field the decision
+actually depends on going forward), and `_SCROLL_MANIPULATION_ENABLED`
+flips to `True`, making every `_set_viewport()` call in the file live
+instead of a no-op for the first time since 2026-08-18. Deliberately did
+NOT delete `_settle_viewport` / `_pin_viewport_rest` / `_pin_terminal_viewport`
+/ `_host_rest_y` in this commit — they're no longer a correctness risk
+(both fields written consistently since commit 1), only an architectural
+cleanup, kept separate so a regression is traceable to one of two changed
+lines. 448 passed, same 1 pre-existing failure.
+
+**Mechanically verified live** (portable ST instance, own `sublime-mcp`
+connection on port 9522, driven directly via `eval_python` against the
+mock "Testing Agent" replay profile — not a real streaming agent, see
+caveat below): spawned a session, confirmed the viewport actually moves
+now (`vp == layout_extent - viewport_extent`, exact, where it was
+permanently stuck at `(0, 0)` before this stage); grew the transcript and
+confirmed it kept following (`_live_anchor_y` tracks `vp[1]` exactly at
+each step); manually set the viewport away from bottom and grew the
+transcript again — `auto_follow` correctly flipped `False` and the
+viewport did NOT get yanked back (stayed exactly where set) despite the
+buffer growing underneath it; manually scrolled back near bottom and grew
+the transcript once more — `auto_follow` correctly re-engaged and the
+viewport snapped to the new exact bottom. All three mechanics behave as
+designed.
+
+**Not yet done — still required before this reaches main:** the mock
+profile's growth is a synchronous burst, not real streaming output, so
+this hasn't exercised the actual reported bugs (typing while scrolled
+back into a *live* response, paging away mid-stream, a permission prompt
+staying visible) against a real agent. Needs the user watching a real
+Claude/Codex session in the portable window for those three specific
+checks before this settings flip + code change is proposed for main.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
