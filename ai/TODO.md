@@ -218,6 +218,30 @@ Full precise findings (byte-for-byte before/after, every intermediate
 regression and its fix) in the scratchpad `repro_notes.md`, same path as
 before.
 
+**Live-test in a disposable profile: attempted, BLOCKED (2026-08-27, later
+still).** Committed the fix, restarted Sublime Text to load it, respawned
+the "Testing Agent" profile. Console showed `[ai_terminal] resized PTY to
+94x1` immediately after spawn, and it never self-corrected even after
+repeated waits and re-sends. Root cause confirmed by reading code, not
+guessed: `_measure()`'s row math is `max(_min_rows(), int(ex[1]/lh) - 1)`
+and `_min_rows()` floors at 1 (`ai_terminal.py:1813`) — so `94x1` is exactly
+what falls out when `view.viewport_extent()[1]` reads ~0. That means the
+Sublime Text window had no real paintable viewport right after the
+automated restart (minimized/occluded/not yet composited), not a
+measurement bug: the 250ms layout watcher (`_LayoutWatcher._run`) polls
+continuously and would have corrected a transient 0-height reading once the
+extent recovered, and it did not, for either tab. Separately, the "Claude"
+tab (this session's own render pane) was visibly producing garbled/
+corrupted output around the same time, and `next_view`/`get_view_size`
+round-trips through sublime-mcp started landing on the wrong tab (asked for
+"Claude", got "Codex" twice) — an unreliable signal on top of an already
+un-paintable window. Stopped there rather than keep sending blind input.
+**Disposition:** the fix's substantive verification (failing regression
+first, fix, 447-pass suite, real-cast replay, honest before/after diff) is
+already complete and committed at `b165743` and stands regardless. Only the
+"live-test only in disposable profiles" step is deferred — pending the user
+restoring a visible, paintable Sublime Text window before retrying.
+
 ## SUPERSEDES the "command-row + headroom" plan below — Terminus-style rewrite, decided (2026-08-27, ~2am)
 
 **The "command-row detection with permission-aware headroom" architecture
