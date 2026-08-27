@@ -1587,11 +1587,17 @@ _MOUSE_HANDLING_ENABLED = False
 # assumptions, TUI-vs-shell branches, pan/latch state machines) that every
 # targeted fix broke a different case live. Rather than keep patching that
 # pile, every viewport write in this file now goes through the single
-# _set_viewport choke point below, gated on this flag. False = Sublime's
-# native viewport/scroll behavior applies everywhere; nothing in this engine
-# ever calls set_viewport_position. Flip True to restore the old behavior
-# once it's been redesigned, not patched further.
-_SCROLL_MANIPULATION_ENABLED = False
+# _set_viewport choke point below, gated on this flag.
+#
+# RE-ENABLED 2026-08-27 (Terminus rewrite, stage 2, ai/TODO.md) after the
+# actual redesign: the follow/drift decision now reads term._live_anchor_y
+# (single writer per site, see its introduction above) instead of
+# term._last_vp_y (which this same machinery also wrote with an
+# incompatible meaning -- rest=0.0 -- corrupting the drift check). Verified
+# in a genuinely isolated process (portable ST + git worktree) before this
+# flip; NOT yet the default anywhere live -- see ai/TODO.md for the three
+# real-streaming-session checks still required before this reaches main.
+_SCROLL_MANIPULATION_ENABLED = True
 
 
 def _set_viewport(view, pos, animate=False):
@@ -6693,7 +6699,13 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         content_fits = real_h <= ve[1] + 0.5
         tui_owns_scroll = _tui_like(term)
         if term is not None and not tui_owns_scroll:
-            if vp[1] < term._last_vp_y - lh * 1.5:
+            # Terminus-style single anchor (ai/TODO.md, stage 2): compare
+            # against _live_anchor_y, not _last_vp_y -- the latter is also
+            # written by the rest-pin/settle machinery below with a
+            # different meaning (rest=0.0), which corrupted this drift
+            # check. _live_anchor_y has exactly one meaning: the y this
+            # engine itself last actively placed the viewport at.
+            if vp[1] < term._live_anchor_y - lh * 1.5:
                 _set_auto_follow(term, False)
             if near_bottom:
                 _set_auto_follow(term, True)
