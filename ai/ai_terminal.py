@@ -868,7 +868,7 @@ try:
     )
     from .terminal import launcher as _launcher
     from .terminal import history_scan as _history_scan
-    from .terminal.layout import accepted_cols as _accepted_cols
+    from .terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
     from .terminal.render import (
         HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
         build_text_and_regions as _build_text_and_regions_pure,
@@ -960,7 +960,7 @@ except ImportError as _term_imp_err:
         )
         from ai.terminal import launcher as _launcher
         from ai.terminal import history_scan as _history_scan
-        from ai.terminal.layout import accepted_cols as _accepted_cols
+        from ai.terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
         from ai.terminal.render import (
             HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
             build_text_and_regions as _build_text_and_regions_pure,
@@ -3044,7 +3044,7 @@ class _LayoutWatcher:
         except Exception:
             pass
         try:
-            size = _measure(view)
+            size = _measure(view, profile_name=getattr(self.term, "profile_name", None))
         except Exception as e:
             print(f"[ai_terminal] layout measure error: {e}")
             return
@@ -3347,7 +3347,7 @@ def _migrate_terminal_view(term, new_view):
         old_view.close()
 
 
-def _measure(view):
+def _measure(view, profile_name=None):
     ex = view.viewport_extent()
     cw = view.em_width() or 7.0
     lh = view.line_height() or 18.0
@@ -3367,6 +3367,22 @@ def _measure(view):
     else:
         ml = mr = margin
     usable_w = ex[0] - ml - mr
+    # ST's native gutter (excluded from viewport_extent above) widens by one
+    # digit every time total_lines crosses 10**n (999->1000, 9999->10000...).
+    # During an active full-history replay that crossing happens repeatedly
+    # as lines are added/rebuilt, so the *real* gutter digit count -- and
+    # therefore usable_w and cols -- genuinely changes mid-replay. That is
+    # the resize<->replay oscillation (ai/TODO.md "4-digit gutter reserve").
+    # Compensate here so our column math always behaves as if the gutter
+    # were reserved at the digit width of this profile's scrollback cap
+    # (scrollback_history_size -- the buffer's real ceiling, so the digit
+    # count it implies never changes once reached), regardless of the
+    # buffer's actual current line count. ST's own gutter still resizes for
+    # real, but that no longer moves `cols`, so it can't retrigger a PTY
+    # resize mid-replay.
+    if view.settings().get("line_numbers", True):
+        total_lines = view.rowcol(view.size())[0] + 1
+        usable_w -= _gutter_digit_delta(total_lines, _scrollback_size(profile_name)) * cw
     # The ~4 blank columns after wrapped text are a bug in the *view*, not
     # a feature. They exist because ST's layout width is (line + ~3) cells
     # (EOL caret + padding), not the glyph count. If we report a wider PTY
@@ -5121,7 +5137,7 @@ def _spawn(window, path, profile=None):
 
     view = _terminal_view(window, name=tab_name)
     window.focus_view(view)
-    cols, rows = _measure(view)
+    cols, rows = _measure(view, profile_name=profile_name)
     
     # Host (ST plugin host / agent shells) often has NO_COLOR=1, FORCE_COLOR=0,
     # TERM=dumb — Grok doctor then reports color=none. Sanitize before spawn;
@@ -5256,7 +5272,7 @@ def _reattach_broker_view(view, pipe_name):
         print(f"[ai_terminal] reattach: {e}")
         return
 
-    cols, rows = _measure(view)
+    cols, rows = _measure(view, profile_name=profile_name)
     try:
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
         parser = _make_parser(screen, _force_main_screen(profile_name))

@@ -486,7 +486,7 @@ def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch
     monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
     monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
     monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
-    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (80, 24))
     monkeypatch.setattr(
         ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
     )
@@ -576,7 +576,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
     monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
     monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
     monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
-    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (80, 24))
     monkeypatch.setattr(
         ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
     )
@@ -769,7 +769,7 @@ def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
     monkeypatch.setattr(ai_terminal, "_PTY_OK", True)
     monkeypatch.setattr(ai_terminal, "_Pty", FakePty)
     monkeypatch.setattr(ai_terminal, "_PosixPty", FakePty)
-    monkeypatch.setattr(ai_terminal, "_measure", lambda view: (80, 24))
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (80, 24))
     monkeypatch.setattr(
         ai_terminal, "_resolve_launch_argv", lambda argv, env=None: list(argv)
     )

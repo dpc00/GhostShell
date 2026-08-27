@@ -9,7 +9,7 @@ Would fail if accepted_cols started returning last+1.
 """
 import unittest
 
-from ai.terminal.layout import accepted_cols, follow_line_count
+from ai.terminal.layout import accepted_cols, follow_line_count, gutter_digit_delta
 
 
 class AcceptedColsTests(unittest.TestCase):
@@ -39,6 +39,51 @@ class AcceptedColsTests(unittest.TestCase):
         for measured in (32, 33, 32, 33, 32, 33):
             cols = accepted_cols(cols, measured)
         self.assertEqual(cols, 32)
+
+
+class GutterDigitDeltaTests(unittest.TestCase):
+    """Cancel ST's real gutter-digit fluctuation with a fixed reservation.
+
+    ai/TODO.md "4-digit gutter reserve": ST's native line-number gutter
+    widens by a digit at every 10**n line-count boundary, so during an
+    active full-history replay that crosses one, usable_w -- and
+    therefore cols -- moves too, retriggering a PTY resize that restarts
+    the replay at the new width, crossing the boundary again. Reserving
+    at the profile's scrollback_history_size digit width instead of the
+    buffer's current, moving line count cancels that.
+
+    Would fail if gutter_digit_delta used a bare constant a bigger cap
+    could still outgrow, or stopped tracking scrollback_cap entirely.
+    """
+
+    def test_same_digit_width_as_cap_needs_no_correction(self):
+        self.assertEqual(gutter_digit_delta(150, 300), 0)
+
+    def test_reserves_up_to_the_cap_digit_width(self):
+        # cap=300 -> 3 digits; a 1-line buffer still gets reserved as 3.
+        self.assertEqual(gutter_digit_delta(1, 300), 2)
+
+    def test_boundary_crossing_cancels_out(self):
+        # The real ST gutter widens by one digit at 999->1000; the
+        # compensation must shrink by exactly one to net to zero, keeping
+        # cols pinned at the same value on both sides of the crossing.
+        cap = 2000
+        before = gutter_digit_delta(999, cap)
+        after = gutter_digit_delta(1000, cap)
+        self.assertEqual(before - after, 1)
+
+    def test_net_reservation_is_pinned_to_cap_digit_width(self):
+        # actual_digits + delta must always equal the cap's own digit
+        # width, for any line count -- that invariant is what stops the
+        # oscillation, not any single delta value in isolation.
+        cap = 2000
+        for total_lines in (1, 9, 10, 99, 100, 999, 1000, 1999, 2000):
+            delta = gutter_digit_delta(total_lines, cap)
+            actual_digits = len(str(total_lines))
+            self.assertEqual(actual_digits + delta, len(str(cap)))
+
+    def test_scrollback_cap_of_zero_is_treated_as_one_digit(self):
+        self.assertEqual(gutter_digit_delta(5, 0), 0)
 
 
 class FollowLineCountTests(unittest.TestCase):
