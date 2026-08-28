@@ -44,6 +44,7 @@ _ERROR_HANDLE_EOF = 38
 _ERROR_BROKEN_PIPE = 109
 _ERROR_PIPE_CONNECTED = 535
 _ERROR_NO_DATA = 232
+_ERROR_PIPE_NOT_CONNECTED = 233
 
 _PIPE_ACCESS_DUPLEX = 0x00000003
 _PIPE_ACCESS_OUTBOUND = 0x00000002
@@ -409,6 +410,17 @@ class _OutputServer:
                 raise OSError("WriteFile accepted 0 bytes to pipe client")
             data = data[written.value:]
 
+    def disconnect_client(self):
+        """Release the output side when the matching input client leaves.
+
+        An outbound-only named pipe cannot notice a quiet client disappearing
+        until the next WriteFile.  The input server *can* notice immediately,
+        so it uses this hook to prevent a silent session from remaining pinned
+        forever to a dead client.
+        """
+        with self._client_lock:
+            self._client_handle = None
+
     def run_forever(self):
         while self._pty.is_alive():
             handle = _k32.CreateNamedPipeW(
@@ -460,9 +472,10 @@ class _InputServer:
     (<name>-in). Read-only from the broker's side -- nothing else ever
     writes to this handle, so no concurrent-read/write risk here either."""
 
-    def __init__(self, name, pty):
+    def __init__(self, name, pty, on_disconnect=None):
         self._name = name + "-in"
         self._pty = pty
+        self._on_disconnect = on_disconnect
 
     def run_forever(self):
         while self._pty.is_alive():
@@ -487,6 +500,8 @@ class _InputServer:
             finally:
                 _k32.DisconnectNamedPipe(handle)
                 _k32.CloseHandle(handle)
+                if self._on_disconnect is not None:
+                    self._on_disconnect()
 
     def _serve_client(self, handle):
         buf = (c_char * 4096)()
@@ -495,7 +510,8 @@ class _InputServer:
             ok = _k32.ReadFile(handle, buf, 4096, byref(n), None)
             if not ok:
                 err = ctypes.get_last_error()
-                if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA, _ERROR_HANDLE_EOF):
+                if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
+                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_HANDLE_EOF):
                     return
                 print("[agent_broker] ReadFile on input pipe failed (GetLastError %d)" % err)
                 return
@@ -617,7 +633,9 @@ def main():
 
     scrollback = _Scrollback(args.scrollback_bytes)
     out_server = _OutputServer(args.pipe_name, pty, scrollback)
-    in_server = _InputServer(args.pipe_name, pty)
+    in_server = _InputServer(
+        args.pipe_name, pty, on_disconnect=out_server.disconnect_client
+    )
 
     reader = threading.Thread(target=pty.read, args=(out_server.feed,), daemon=True)
     reader.start()

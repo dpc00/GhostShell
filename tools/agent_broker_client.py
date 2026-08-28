@@ -27,6 +27,7 @@ _ERROR_PIPE_BUSY = 231
 _ERROR_BROKEN_PIPE = 109
 _ERROR_HANDLE_EOF = 38
 _ERROR_NO_DATA = 232
+_ERROR_PIPE_NOT_CONNECTED = 233
 _ERROR_FILE_NOT_FOUND = 2
 
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -69,7 +70,8 @@ def _pump_output(handle, stop_evt):
         ok = _k32.ReadFile(handle, buf, 4096, byref(n), None)
         if not ok:
             err = ctypes.get_last_error()
-            if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA, _ERROR_HANDLE_EOF):
+            if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA, _ERROR_PIPE_NOT_CONNECTED,
+                       _ERROR_HANDLE_EOF):
                 break
             print("\n[client] ReadFile failed (GetLastError %d)" % err, file=sys.stderr)
             break
