@@ -35,6 +35,7 @@ from GhostShell.ai.ai_terminal import (
     AiTerminalTrackpadScrollCommand,
     AiTerminalViewListener,
     AiTerminalKeyInterceptor,
+    AiTerminalWindowCloseListener,
 )
 
 

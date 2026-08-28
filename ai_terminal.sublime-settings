@@ -198,19 +198,20 @@
             // 1003l) at startup, never enables -- confirmed across 100+
             // recorded asciicast sessions (2026-08-11). No PTY-side receiver
             // for a forwarded click.
-            // follow_ignore_trailing_lines: was 2, too small now that
-            // ccstatusline's footer grew to 6 lines below the prompt
-            // (divider, Ctx Used, Model, Session, Reset, auto-mode) --
-            // several of those recompute every render (cost/session/weekly
-            // %), so with only 2 ignored the auto-scroll target kept
-            // chasing them, worst while typing (2 scroll_to_bottom() calls
-            // per keystroke -- one on keypress, one on the next render).
-            // 6 clears exactly the footer band -- do NOT go higher, the
-            // prompt row itself sits right above it and 8 pushed the
-            // follow target above the prompt, obscuring the command line
-            // with auto-follow unable to hold anywhere else (confirmed live
-            // 2026-08-18).
-            "follow_ignore_trailing_lines": 2,
+            // follow_ignore_trailing_lines deliberately EXCLUDES that many
+            // trailing rows from the auto-scroll target -- raising it hides
+            // more of the bottom (footer/statusline), it does not fix
+            // visibility. A prior attempt at 6 (up from 2) was meant to stop
+            // scroll churn from ccstatusline's footer recomputing every
+            // render, but confirmed live 2026-08-27 that it costs 4 lines of
+            // real bottom content (337 -> 333) -- the actual statusline
+            // going unreadable is worse than the churn it was trading away.
+            // Reverted to 0: always follow true bottom, footer included.
+            // Confirmed live 2026-08-27: 0 puts the true last line (339)
+            // exactly at the bottom, correct. -1 (overshoot) was only a
+            // one-off diagnostic to double-check nothing was clipped; not
+            // needed as the steady-state value.
+            "follow_ignore_trailing_lines": 0,
             "launch_command": [
                 "claude"
             ],

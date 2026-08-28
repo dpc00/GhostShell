@@ -483,12 +483,15 @@ class _BrokerPty:
     """Client of a tools/agent_broker.py session over a named pipe.
 
     start() first tries to connect to an already-running broker on
-    --pipe-name; only if that fails does it spawn a new detached broker and
-    retry. This makes the same code path serve both a fresh session and
-    reattaching to one that survived a Sublime restart.
+    --pipe-name; only if that fails -- and only if allow_spawn is true --
+    does it spawn a new detached broker and retry. allow_spawn=False makes
+    a failed connect raise instead of silently starting an unrelated new
+    session under an old tab's identity; that's what the ST-restart reattach
+    path (_reattach_broker_view) wants, since the old broker being gone is a
+    real failure to report, not a cue to spawn a same-named replacement.
     """
 
-    def __init__(self, pipe_name, argv, cwd, cols, rows, env):
+    def __init__(self, pipe_name, argv, cwd, cols, rows, env, allow_spawn=True):
         self.pipe_name = pipe_name
         self.argv = list(argv)
         self.pid = 0
@@ -496,6 +499,7 @@ class _BrokerPty:
         self._env = env
         self._cols = cols
         self._rows = rows
+        self._allow_spawn = allow_spawn
         self._h_out = None
         self._h_in = None
         self._h_ctl = None
@@ -535,8 +539,17 @@ class _BrokerPty:
         out_path = _broker_pipe_path(self.pipe_name)
         in_path = _broker_pipe_path(self.pipe_name + "-in")
 
-        h_out = self._try_connect(out_path, _GENERIC_READ, 0.3)
+        # allow_spawn=False (reattach) has no fallback if this first attempt
+        # gives up too soon, so it gets the full 10s instead of the fresh-open
+        # path's fast 0.3s fail-through-to-spawn.
+        initial_timeout = 0.3 if self._allow_spawn else 10.0
+        h_out = self._try_connect(out_path, _GENERIC_READ, initial_timeout)
         if h_out is None:
+            if not self._allow_spawn:
+                raise OSError(
+                    f"no broker answering on pipe {self.pipe_name!r} -- "
+                    f"the detachable session is gone, not reattaching"
+                )
             self._spawn_broker()
             h_out = self._try_connect(out_path, _GENERIC_READ, 10.0)
             if h_out is None:
@@ -2996,6 +3009,28 @@ _BROKER_REATTACH_PENDING = set()
 _BROKER_REATTACH_CANDIDATE = {}
 _BROKER_REATTACH_CONFIRM_MS = 250
 
+# view.on_close() fires identically whether the user closed just that one
+# tab or the whole window is going down (confirmed: ViewEventListener has no
+# on_pre_close_window -- only the global EventListener does, and on_close's
+# own doc doesn't distinguish either). EventListener.on_pre_close_window
+# fires first and marks every detachable-broker view in that window here, so
+# on_close can tell "this view's window is closing" apart from "the user
+# deliberately closed this one tab" and only explicit_kill() in the latter
+# case.
+_WINDOW_CLOSING_TERM_IDS = set()
+
+
+class AiTerminalWindowCloseListener(sublime_plugin.EventListener):
+    """Marks detachable-broker views so on_close (AiTerminalViewListener,
+    below) can tell a window closing apart from a deliberate single-tab
+    close. See _WINDOW_CLOSING_TERM_IDS."""
+
+    def on_pre_close_window(self, window):
+        for view in window.views():
+            term = _Terminal.from_id(view.id())
+            if term is not None and isinstance(term.pty, _BrokerPty):
+                _WINDOW_CLOSING_TERM_IDS.add(view.id())
+
 
 def _vwrite(view, text):
     def _do(t=text):
@@ -4208,14 +4243,25 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         with _term_lock():
             _term_registry().pop(self.view.id(), None)
 
+        # on_close fires identically whether the user closed just this one
+        # tab or the whole window is going down (confirmed live 2026-08-27:
+        # closing Sublime via the title-bar X killed a detachable
+        # broker/claude.exe pair here, even though this file's own
+        # documented contract says closing the tab must NOT end the agent --
+        # see the _BrokerPty class comment). AiTerminalWindowCloseListener's
+        # on_pre_close_window runs first and records which views belong to a
+        # closing window, so this is the one place that can tell "this
+        # view's window is closing" apart from "the user deliberately closed
+        # this one tab".
+        vid = self.view.id()
+        window_closing = vid in _WINDOW_CLOSING_TERM_IDS
+        _WINDOW_CLOSING_TERM_IDS.discard(vid)
+
         def _do_close():
-            if isinstance(term.pty, _BrokerPty):
-                # Closing the tab is a deliberate "end this session" action,
-                # unlike Sublime quitting: hot-exit does NOT fire on_close
-                # per view (confirmed live -- reattach across a real ST
-                # restart works), so this is the only place a detachable
-                # session should actually be ended rather than just
-                # disconnected.
+            if isinstance(term.pty, _BrokerPty) and not window_closing:
+                # A deliberate single-tab close ends the session for real.
+                # (Window closes, and ST-restart reattach failures, must not
+                # -- see term.kill()'s own docstring.)
                 try:
                     term.pty.explicit_kill()
                 except Exception as e:
@@ -5405,12 +5451,17 @@ def _reattach_broker_view(view, pipe_name):
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
 
-    pty = _BrokerPty(pipe_name, argv, path, cols, rows, env)
+    pty = _BrokerPty(pipe_name, argv, path, cols, rows, env, allow_spawn=False)
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
     term.prepare()
     try:
         pty.start()
     except Exception as e:
+        # The old broker is confirmed gone. Leave this tab dead -- no
+        # fallback spawn, no auto-resume. A resumed session replays the
+        # prior conversation through the model again, which costs real
+        # tokens; that must never happen silently just because a tab failed
+        # to reattach. Ending or restarting the session is the user's call.
         print("[ai_terminal] reattach: broker connect failed:\n%s" % traceback.format_exc())
         sublime.status_message(f"Ai terminal: could not reattach ({e})")
         return
@@ -5942,7 +5993,13 @@ def _real_content_height(view):
 
 
 def _follow_ignore_trailing_lines(term):
-    """How many trailing rows snap-to-bottom should skip. Default 0."""
+    """How many trailing rows snap-to-bottom should skip. Default 0.
+
+    Negative values are allowed (deliberately not clamped to 0) and mean the
+    opposite: overshoot the follow target that many extra lines past real
+    content height. Live diagnostic lever for a persistent one-line-short
+    follow target -- see _follow_content_height.
+    """
     if term is None:
         return 0
     n = _setting_number(
@@ -5951,7 +6008,7 @@ def _follow_ignore_trailing_lines(term):
         profile_name=_term_profile_name(term),
     )
     try:
-        return max(0, int(n or 0))
+        return int(n or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -5961,9 +6018,11 @@ def _follow_content_height(view, ignore_trailing=0):
 
     Subtracts follow_ignore_trailing_lines (a profile setting, default 0)
     so a TUI whose last N rows wobble does not move the follow target.
+    A negative value ADDS instead (overshoot past real content) -- not
+    clamped to 0, see _follow_ignore_trailing_lines.
     """
     lh = view.line_height() or 12.0
-    drop = max(0, int(ignore_trailing or 0))
+    drop = int(ignore_trailing or 0)
     return max(0.0, _real_content_height(view) - drop * lh)
 
 
