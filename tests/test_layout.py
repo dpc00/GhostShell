@@ -9,7 +9,7 @@ Would fail if accepted_cols started returning last+1.
 """
 import unittest
 
-from ai.terminal.layout import accepted_cols, follow_line_count, gutter_digit_delta
+from terminal.layout import accepted_cols, follow_line_count, gutter_digit_delta
 
 
 class AcceptedColsTests(unittest.TestCase):

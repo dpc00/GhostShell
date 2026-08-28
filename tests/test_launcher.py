@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai.terminal import launcher  # noqa: E402
+from terminal import launcher  # noqa: E402
 
 
 NOW = 1_800_000_000.0

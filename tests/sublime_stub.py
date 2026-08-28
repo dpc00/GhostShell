@@ -99,6 +99,7 @@ def install(message_sink=None):
     m.status_message = _message("status")
     m.error_message = _message("error")
     m.message_dialog = _message("dialog")
+    m.ok_cancel_dialog = lambda msg, ok_title="", title="": False
     m.windows = lambda: []
     m.active_window = lambda: None
     m.run_command = lambda *a, **k: None

@@ -6,7 +6,7 @@ the live Sublime plugin_host via eval_python -- doing that once already
 leaked 39 threads into the real session and plausibly triggered the
 symptom via self-inflicted resource contention instead of isolating the
 real cause. This file replicates the actual production locking pattern
-(ai/ai_terminal.py's _on_data / AiTerminalRenderCommand._run) faithfully:
+(ai_terminal.py's _on_data / AiTerminalRenderCommand._run) faithfully:
 one writer thread feeding text under a lock, one reader thread calling
 render_cells() under the SAME lock, exactly as the live code does -- so a
 failure here means the bug reproduces under correct locking discipline,
@@ -28,8 +28,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ai.terminal.ghostty_engine import GhosttyParser
-from ai.terminal.screen import Screen
+from terminal.ghostty_engine import GhosttyParser
+from terminal.screen import Screen
 
 DLL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "ai", "terminal", "bin", "ghostty-vt.dll"

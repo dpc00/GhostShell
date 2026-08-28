@@ -8,7 +8,7 @@ Would fail if trim_display_rows went back to last_real = cy.
 """
 import unittest
 
-from ai.terminal.render import trim_display_rows
+from terminal.render import trim_display_rows
 
 
 def _rows(*lines):

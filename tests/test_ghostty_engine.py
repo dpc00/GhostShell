@@ -11,8 +11,8 @@ Run from repo root:
 import ctypes
 import unittest
 
-from ai.terminal import ghostty_vt as gvt
-from ai.terminal.colors import (
+from terminal import ghostty_vt as gvt
+from terminal.colors import (
     ATTR_BG_MASK,
     ATTR_FG_MASK,
     BG_SHIFT,
@@ -23,7 +23,7 @@ from ai.terminal.colors import (
     UNDERLINE,
     quantize256,
 )
-from ai.terminal.ghostty_engine import (
+from terminal.ghostty_engine import (
     GhosttyParser,
     _AltScreenFilter,
     _color_id,
@@ -247,7 +247,7 @@ def _dll_available():
         return False
 
 
-# The gitignored DLL (ai/terminal/bin/ghostty-vt.dll, built from the ~/tools
+# The gitignored DLL (terminal/bin/ghostty-vt.dll, built from the ~/tools
 # ghostty checkout) isn't in the repo, so these tests skip cleanly wherever
 # it's absent rather than failing the suite.
 @unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
@@ -260,7 +260,7 @@ class WritePtyCallbackTests(unittest.TestCase):
     docstrings on bind_write_pty/_on_size_query."""
 
     def setUp(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         self.responses = []
         self.parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
         self.parser.bind_write_pty(self.responses.append)
@@ -269,7 +269,7 @@ class WritePtyCallbackTests(unittest.TestCase):
         self.parser._g.terminal_free(self.parser._term)
 
     def test_unbound_sink_is_a_noop_not_a_crash(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
         try:
             parser.feed("\x1b[c")  # DA1 query, sink never bound
@@ -310,7 +310,7 @@ class SyncOutputModeTests(unittest.TestCase):
     could."""
 
     def setUp(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         self.screen = Screen(80, 24)
         self.parser = GhosttyParser(self.screen, force_main_screen=False)
 
@@ -349,12 +349,12 @@ class ParserCloseTests(unittest.TestCase):
     past it) would be the actual bug this class exists to catch."""
 
     def test_close_is_safe_with_no_keys_ever_encoded(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
         parser.close()  # no exception is the assertion
 
     def test_close_frees_the_lazily_created_key_encoder_too(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
         # Allocates _key_encoder/_key_event on first use -- see encode_key.
         parser.encode_key("a")
@@ -362,7 +362,7 @@ class ParserCloseTests(unittest.TestCase):
         parser.close()  # no exception is the assertion
 
     def test_close_is_idempotent(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
         parser.close()
         parser.close()  # must not double-free; no exception is the assertion
@@ -396,7 +396,7 @@ class HomeReplaceScrollTests(unittest.TestCase):
     """
 
     def setUp(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
 
         self.screen = Screen(20, 4, history_cap=200)
         self.parser = GhosttyParser(self.screen, force_main_screen=True)
@@ -419,7 +419,7 @@ class HomeReplaceScrollTests(unittest.TestCase):
         self.assertEqual(_visible_text(self.screen).count("LINE-00"), 1)
 
     def test_fifty_testing_agent_dumps_keep_one_copy(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
 
         self.parser._g.terminal_free(self.parser._term)
@@ -443,7 +443,7 @@ class HomeReplaceScrollTests(unittest.TestCase):
         self.assertIn("EEE", joined)
 
     def test_growing_replay_dumps_keep_earliest_turn_once(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
         from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
 
         self.parser._g.terminal_free(self.parser._term)
@@ -466,7 +466,7 @@ class HomeReplaceScrollTests(unittest.TestCase):
         self.assertEqual(vis.count("TURN-00"), 29)
 
     def test_home_dump_preserves_unrelated_prior_scrollback(self):
-        from ai.terminal.screen import Screen
+        from terminal.screen import Screen
 
         self.parser._g.terminal_free(self.parser._term)
         self.screen = Screen(80, 4, history_cap=200)
@@ -488,7 +488,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
     """
 
     def test_full_replay_keeps_one_copy(self):
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [_cells("LINE-%02d" % i) for i in range(8)]
         new = [_cells("LINE-%02d" % i) for i in range(9)]
@@ -496,7 +496,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
         self.assertEqual(_row_texts(merged), ["LINE-%02d" % i for i in range(9)])
 
     def test_spliced_overflow_prefers_clean_old_row(self):
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [_cells("user prompt TURN-00"), _cells("TURN-00 L00"), _cells("TURN-00 L01")]
         new = [
@@ -513,7 +513,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
         self.assertEqual(texts[1:], ["TURN-00 L00", "TURN-00 L01", "TURN-00 L02"])
 
     def test_unrelated_prior_rows_are_kept(self):
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [_cells("UNIQUE-A"), _cells("UNIQUE-B"), _cells("LINE-00"), _cells("LINE-01")]
         new = [_cells("LINE-00"), _cells("LINE-01"), _cells("LINE-02")]
@@ -534,7 +534,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
         2026-08-27 live-reproduced root cause (ai/TODO.md), traced to a
         `break` on the first match in the old_rows scan below.
         """
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [
             _cells("user prompt TURN-00"),  # 0: stale, from an earlier cycle
@@ -575,7 +575,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
         new_rows[0] AT ALL, so the fix must search evidence across
         multiple rows, not just retry the same row-0 anchor differently.
         """
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [
             _cells("PRE-A"),
@@ -607,7 +607,7 @@ class ReplaceScrollMergeTests(unittest.TestCase):
         self.assertEqual(texts[texts.index("SHARED-03") + 1], "SHARED-04")
 
     def test_wrapped_replay_aligns_on_first_overflow_line(self):
-        from ai.terminal.ghostty_engine import merge_replace_scroll_history
+        from terminal.ghostty_engine import merge_replace_scroll_history
 
         old = [
             _cells("LINE-00"),
@@ -630,28 +630,28 @@ class ReplaceScrollMergeTests(unittest.TestCase):
 
 class ReplaceScrollStateTests(unittest.TestCase):
     def test_2026_then_home_marks_replace(self):
-        from ai.terminal.ghostty_engine import update_replace_scroll
+        from terminal.ghostty_engine import update_replace_scroll
 
         open_, replace = update_replace_scroll(False, False, "\x1b[?2026h\x1b[Hhello")
         self.assertTrue(open_)
         self.assertTrue(replace)
 
     def test_home_after_open_batch_from_prior_feed(self):
-        from ai.terminal.ghostty_engine import update_replace_scroll
+        from terminal.ghostty_engine import update_replace_scroll
 
         open_, replace = update_replace_scroll(True, False, "\x1b[Hmore")
         self.assertTrue(open_)
         self.assertTrue(replace)
 
     def test_replace_latches_across_chunks_until_2026_closes(self):
-        from ai.terminal.ghostty_engine import update_replace_scroll
+        from terminal.ghostty_engine import update_replace_scroll
 
         open_, replace = update_replace_scroll(True, True, "LINE-00\nLINE-01\n")
         self.assertTrue(open_)
         self.assertTrue(replace)
 
     def test_2026_without_home_does_not_replace(self):
-        from ai.terminal.ghostty_engine import update_replace_scroll
+        from terminal.ghostty_engine import update_replace_scroll
 
         open_, replace = update_replace_scroll(False, False, "\x1b[?2026hspin\x1b[?2026l")
         self.assertFalse(open_)

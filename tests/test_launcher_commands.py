@@ -14,8 +14,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai.terminal import launcher  # noqa: E402
-from ai.terminal import history_scan  # noqa: E402
+from terminal import launcher  # noqa: E402
+from terminal import history_scan  # noqa: E402
 
 
 def test_profile_items_call_shape():

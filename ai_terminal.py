@@ -6,7 +6,7 @@ ANSI renderer tailored to the subset Claude's ratatui TUI emits. Because all of
 the rendering/state code is ours, every bug is fixable here.
 
 Architecture:
-  ai/terminal/  -- pure core (Screen, Parser, colours, keys, render) — unit-testable
+  terminal/  -- pure core (Screen, Parser, colours, keys, render) — unit-testable
   _Pty          -- ConPTY wrapper (ctypes). Spawns the child, gives us a byte stream.
   _Terminal     -- owns a _Pty + Screen + Parser; registry keyed by view id.
   renderer      -- debounced, walks Screen -> view text on the main thread.
@@ -28,6 +28,7 @@ import codecs
 import collections
 import ctypes
 import errno
+import gc
 import json
 import os
 import queue
@@ -45,7 +46,7 @@ from functools import lru_cache
 import sublime
 import sublime_plugin
 
-# ─── ctypes ConPTY binding (guarded: a failure must not crash PluginLoader.py) ─────
+# ─── ctypes ConPTY binding (guarded: a failure must not crash the plugin load) ─────
 
 _PTY_OK = False
 _k32 = None
@@ -449,6 +450,7 @@ _GENERIC_WRITE = 0x40000000
 _OPEN_EXISTING = 3
 _ERROR_PIPE_BUSY = 231
 _ERROR_NO_DATA = 232
+_ERROR_PIPE_NOT_CONNECTED = 233
 _ERROR_FILE_NOT_FOUND = 2
 _ERROR_OPERATION_ABORTED = 995
 _DETACHED_PROCESS = 0x00000008
@@ -461,7 +463,7 @@ def _broker_pipe_path(name):
 
 
 def _broker_script_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "agent_broker.py")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_broker.py")
 
 
 def _broker_python_exe():
@@ -619,7 +621,7 @@ class _BrokerPty:
                 err = ctypes.get_last_error()
                 self._alive = False
                 if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
-                           _ERROR_OPERATION_ABORTED):
+                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_OPERATION_ABORTED):
                     return
                 raise OSError("ReadFile on broker output pipe failed (GetLastError %d)" % err)
             if n.value == 0:
@@ -656,8 +658,15 @@ class _BrokerPty:
         """Disconnect this client only. The broker and its agent process keep
         running -- that's the point of a detachable session. See
         explicit_kill() to actually end the session."""
+        # Do not return early when _alive is already false.  A natural child
+        # exit makes read() clear that flag before the view's on_close path
+        # calls kill(); the pipe handles still belong to this client and must
+        # be closed.  Leaving them open kept the broker side connected after
+        # Claude's /exit and made the clean EOF look like a pipe failure.
         self._alive = False
-        for h in (self._h_out, self._h_in, self._h_ctl):
+        handles = (self._h_out, self._h_in, self._h_ctl)
+        self._h_out = self._h_in = self._h_ctl = None
+        for h in handles:
             if h is not None:
                 # CancelIoEx unblocks the reader thread's pending ReadFile on
                 # this handle from here (a different thread). Without this,
@@ -667,7 +676,6 @@ class _BrokerPty:
                 # thread solid when called there directly.
                 _k32.CancelIoEx(h, None)
                 _k32.CloseHandle(h)
-        self._h_out = self._h_in = self._h_ctl = None
 
     def explicit_kill(self):
         """End the underlying agent/shell for real (not just disconnect)."""
@@ -818,9 +826,9 @@ class _PosixPty:
 
 
 # ─── pure terminal core (testable without Sublime) ───────────────────────────
-# Screen, Parser, colours, keys, and text layout live in ai/terminal/*.
+# Screen, Parser, colours, keys, and text layout live in terminal/*.
 # This file is the Sublime adapter: ConPTY, view I/O, commands, color-scheme.
-# Session recordings (cast, text transcript, debug logs) live in ai/terminal/.
+# Session recordings (cast, text transcript, debug logs) live in terminal/.
 
 try:
     from .terminal.colors import (
@@ -915,7 +923,7 @@ except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
     try:
-        from ai.terminal.colors import (
+        from terminal.colors import (
             quantize256 as _quantize256,
             pack_attr as _attr,
             xterm256_rgb as _xterm256_rgb,
@@ -940,9 +948,9 @@ except ImportError as _term_imp_err:
             BG_NEAR_BLACK as _BG_NEAR_BLACK,
             _ANSI16_RGB,
         )
-        from ai.terminal.screen import Screen as _Screen, BLANK as _BLANK
-        from ai.terminal.ghostty_engine import GhosttyParser as _GhosttyParser
-        from ai.terminal.keys import (
+        from terminal.screen import Screen as _Screen, BLANK as _BLANK
+        from terminal.ghostty_engine import GhosttyParser as _GhosttyParser
+        from terminal.keys import (
             KEY_MAP as _KEY_MAP,
             APP_MODE_KEY_MAP as _APP_MODE_KEY_MAP,
             CTRL_KEY_MAP as _CTRL_KEY_MAP,
@@ -955,26 +963,26 @@ except ImportError as _term_imp_err:
             translate_key as _translate_key,
             encode_win32_key as _encode_win32_key,
         )
-        from ai.terminal.pty_env import sanitize_pty_env as _sanitize_pty_env
-        from ai.terminal.profile_availability import (
+        from terminal.pty_env import sanitize_pty_env as _sanitize_pty_env
+        from terminal.profile_availability import (
             command_exists as _command_exists,
             menu_caption as _menu_caption_pure,
             profile_is_available as _profile_is_available_pure,
             reset_update_from_text as _reset_update_from_text,
             usage_update_from_text as _usage_update_from_text,
         )
-        from ai.terminal.agent_catalog import (
+        from terminal.agent_catalog import (
             CATALOG as _AGENT_CATALOG,
             profile_from_entry as _agent_profile_from_entry,
         )
-        from ai.terminal.usage_scan import (
+        from terminal.usage_scan import (
             gather_usage as _gather_usage,
             provider_for_profile as _provider_for_profile,
         )
-        from ai.terminal import launcher as _launcher
-        from ai.terminal import history_scan as _history_scan
-        from ai.terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
-        from ai.terminal.render import (
+        from terminal import launcher as _launcher
+        from terminal import history_scan as _history_scan
+        from terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
+        from terminal.render import (
             HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
             build_text_and_regions as _build_text_and_regions_pure,
             cursor_text_offset as _cursor_text_offset,
@@ -982,14 +990,14 @@ except ImportError as _term_imp_err:
             punch_host_cursor_region as _punch_host_cursor_region,
             trim_display_rows as _trim_display_rows,
         )
-        from ai.terminal.caret import (
+        from terminal.caret import (
             adjust_display_caret as _adjust_display_caret,
             pad_row_for_caret as _pad_row_for_caret,
             find_prompt_row as _find_prompt_row,
             input_start_col as _input_start_col,
             field_right_limit as _field_right_limit,
         )
-        from ai.terminal.mouse import (
+        from terminal.mouse import (
             BTN_RELEASE_X10 as _BTN_RELEASE_X10,
             encode_click as _encode_click,
             encode_mouse as _encode_mouse,
@@ -997,12 +1005,12 @@ except ImportError as _term_imp_err:
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
-        from ai.terminal.log_paths import DEBUG as _DEBUG
-        from ai.terminal.color_scheme_log import color_scheme_log as _color_scheme_log
-        from ai.terminal.settings_debug_log import settings_debug_log as _settings_debug_log
-        from ai.terminal.raw_debug_log import debug_log as _debug_log
-        from ai.terminal.cast_recorder import CastRecorder
-        from ai.terminal.session_text_log import SessionTextLog
+        from terminal.log_paths import DEBUG as _DEBUG
+        from terminal.color_scheme_log import color_scheme_log as _color_scheme_log
+        from terminal.settings_debug_log import settings_debug_log as _settings_debug_log
+        from terminal.raw_debug_log import debug_log as _debug_log
+        from terminal.cast_recorder import CastRecorder
+        from terminal.session_text_log import SessionTextLog
     except ImportError:
         raise _term_imp_err
 
@@ -1446,7 +1454,7 @@ def _scope_for(attr):
     try:
         from .terminal.colors import scope_name_for as _pure_scope
     except ImportError:
-        from ai.terminal.colors import scope_name_for as _pure_scope
+        from terminal.colors import scope_name_for as _pure_scope
     scope = _pure_scope(attr)
     if scope is None:
         return None
@@ -1635,7 +1643,7 @@ def _set_auto_follow(term, value):
     the buffer out from under the read position (2026-08-18 -- "if I am
     scrolled back into the buffer, the text should not trim off the top").
     The pause/resume + deferred-catchup logic itself lives in Screen
-    (ai/terminal/screen.py, pure/testable), not here -- this just keeps the
+    (terminal/screen.py, pure/testable), not here -- this just keeps the
     two flags in lockstep from the one place ai_terminal.py has both.
     """
     value = bool(value)
@@ -1819,7 +1827,7 @@ def _log_tab_text(profile_name=None):
 
 
 def _make_parser(screen, force_main_screen):
-    """libghostty-vt is the sole VT engine. See ai/terminal/ghostty_engine.py."""
+    """libghostty-vt is the sole VT engine. See terminal/ghostty_engine.py."""
     return _GhosttyParser(screen, force_main_screen=force_main_screen)
 
 
@@ -2375,7 +2383,7 @@ def _resolve_secret_refs(env):
 
 
 # ─── on-disk logs ────────────────────────────────────────────────────────────
-# Implementations live in ai/terminal/{log_paths,color_scheme_log,
+# Implementations live in terminal/{log_paths,color_scheme_log,
 # settings_debug_log,raw_debug_log,cast_recorder,session_text_log}.py.
 # Same filenames, messages, and failure handling as the former inlined copies.
 
@@ -3008,6 +3016,10 @@ _BROKER_CWD_SETTING = "ai_terminal_broker_cwd"
 _BROKER_REATTACH_PENDING = set()
 _BROKER_REATTACH_CANDIDATE = {}
 _BROKER_REATTACH_CONFIRM_MS = 250
+# Views whose named-pipe connection is currently being attempted by a worker.
+# CreateFileW/WaitNamedPipeW may wait for several seconds on a stale broker;
+# this set prevents activation/plugin reload from starting duplicate attempts.
+_BROKER_CONNECTING = set()
 
 # view.on_close() fires identically whether the user closed just that one
 # tab or the whole window is going down (confirmed: ViewEventListener has no
@@ -3030,6 +3042,75 @@ class AiTerminalWindowCloseListener(sublime_plugin.EventListener):
             term = _Terminal.from_id(view.id())
             if term is not None and isinstance(term.pty, _BrokerPty):
                 _WINDOW_CLOSING_TERM_IDS.add(view.id())
+
+
+class AiTerminalNoopWindowCommand(sublime_plugin.WindowCommand):
+    """Window-command sink used when a terminal consumes native tab-close."""
+
+    def run(self):
+        pass
+
+
+class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
+    """Turn tab-close into a graceful exit request for opted-in profiles.
+
+    Sublime's view ``on_close`` notification is too late to save the tab: the
+    view has already been destroyed.  Native tab close is dispatched as a
+    window command first, so replace that command with a no-op after queueing
+    the profile's configured terminal input.  The ordinary PTY EOF path owns
+    the eventual view.close(), meaning the tab never disappears before the
+    child actually exits.
+
+    This is deliberately profile-gated while it is exercised with Testing
+    Agent.  Different agents use different exit commands and may need a
+    prompt-clearing prelude; none should inherit an unverified generic value.
+    """
+
+    _CLOSE_COMMANDS = {"close_file", "close_by_index"}
+
+    @staticmethod
+    def _target_view(window, command_name, args):
+        if command_name == "close_by_index":
+            args = args or {}
+            try:
+                views = window.views_in_group(int(args["group"]))
+                return views[int(args["index"])]
+            except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+                return None
+        return window.active_view()
+
+    def on_window_command(self, window, command_name, args):
+        if command_name not in self._CLOSE_COMMANDS:
+            return None
+        view = self._target_view(window, command_name, args)
+        if view is None or not view.settings().get(_VIEW_SETTING):
+            return None
+        term = _Terminal.from_id(view.id())
+        if term is None or view.id() in _WINDOW_CLOSING_TERM_IDS:
+            return None
+
+        profile = _profile_settings(getattr(term, "profile_name", None))
+        exit_input = profile.get("tab_close_input") if profile else None
+        if not isinstance(exit_input, str) or not exit_input:
+            return None
+
+        if not getattr(term, "_tab_close_requested", False):
+            confirmed = sublime.ok_cancel_dialog(
+                "End %s session?\n\n"
+                "The tab will remain open until the agent exits."
+                % (term.profile_name or "agent"),
+                "Exit Agent",
+                "Close Agent Session",
+            )
+            if not confirmed:
+                return ("ai_terminal_noop_window", {})
+            term._tab_close_requested = True
+            term.send_string(exit_input)
+            sublime.status_message(
+                "Ai terminal: waiting for %s to exit"
+                % (term.profile_name or "process")
+            )
+        return ("ai_terminal_noop_window", {})
 
 
 def _vwrite(view, text):
@@ -3135,7 +3216,7 @@ class _LayoutWatcher:
         self._candidate_count = 0
         cols, rows = size
         # 32↔33 (and 99→100 gutter) attractor: never grow by exactly one
-        # column. See ai.terminal.layout.accepted_cols and ai/TODO.md
+        # column. See terminal.layout.accepted_cols and ai/TODO.md
         # "Status-line resize/rewrap loop".
         cols = _accepted_cols(self.term._last_cols, cols)
         # In main-screen mode term.resize() pins rows and only ever forwards
@@ -3984,12 +4065,12 @@ def _apply_color_regions(view, regs):
 
 
 # ─── debug / recording env gates ──────────────────────────────────────────────
-# Raw ANSI debug log: ai/terminal/raw_debug_log.py (gated on _DEBUG).
-# Asciicast v3 recording: ai/terminal/cast_recorder.py. On if
+# Raw ANSI debug log: terminal/raw_debug_log.py (gated on _DEBUG).
+# Asciicast v3 recording: terminal/cast_recorder.py. On if
 # AI_TERMINAL_LOG_LINES is set in spawn_env OR in ST's process env, or if
 # the record_asciicast setting is true (default). Per stext-settings-json-strict
 # the env toggle is NOT a top-level setting key; it lives in spawn_env.
-# Session text logs: ai/terminal/session_text_log.py -- see _log_tab_text().
+# Session text logs: terminal/session_text_log.py -- see _log_tab_text().
 _LOG_LINES = bool(os.environ.get("AI_TERMINAL_LOG_LINES"))
 
 
@@ -4200,6 +4281,14 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             return
         sel = view.sel()
         if len(sel) != 1:
+            return
+        # A non-empty selection is unambiguously user-owned, even when its
+        # active endpoint happens to land inside the TUI's command-line row.
+        # Treating only that endpoint as a caret click let the next render
+        # collapse a visibly selected range; Ctrl+C then saw an empty
+        # selection and forwarded ETX to the agent instead of copying.
+        if not sel[0].empty():
+            term._user_owns_caret = True
             return
         pt = sel[0].b
         row = view.rowcol(pt)[0]
@@ -5365,6 +5454,8 @@ def _maybe_reattach_broker(view, _confirm=False):
             return
 
         vid = view.id()
+        if vid in _BROKER_CONNECTING:
+            return
         if not _confirm:
             if vid in _BROKER_REATTACH_PENDING:
                 return
@@ -5417,6 +5508,15 @@ def _maybe_reattach_broker(view, _confirm=False):
 def _reattach_broker_view(view, pipe_name):
     if not _PTY_OK or os.name != "nt":
         return
+    vid = view.id()
+    if vid in _BROKER_CONNECTING:
+        return
+    _BROKER_CONNECTING.add(vid)
+    # Workspace-restored views do not pass through _terminal_view(). Reapply
+    # the complete terminal view configuration before parsing the broker's
+    # redraw, especially the generated ANSI colour scheme. Sublime may restore
+    # only the user's global scheme for an untitled scratch buffer.
+    _apply_terminal_view_settings(view)
     profile_name = view.settings().get(_BROKER_PROFILE_SETTING)
     path = view.settings().get(_BROKER_CWD_SETTING)
     s = _settings_obj()
@@ -5440,6 +5540,7 @@ def _reattach_broker_view(view, pipe_name):
     try:
         argv = _resolve_launch_argv(argv, env)
     except FileNotFoundError as e:
+        _BROKER_CONNECTING.discard(vid)
         print(f"[ai_terminal] reattach: {e}")
         return
 
@@ -5448,27 +5549,58 @@ def _reattach_broker_view(view, pipe_name):
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
         parser = _make_parser(screen, _force_main_screen(profile_name))
     except Exception:
+        _BROKER_CONNECTING.discard(vid)
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
 
     pty = _BrokerPty(pipe_name, argv, path, cols, rows, env, allow_spawn=False)
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
     term.prepare()
-    try:
-        pty.start()
-    except Exception as e:
-        # The old broker is confirmed gone. Leave this tab dead -- no
-        # fallback spawn, no auto-resume. A resumed session replays the
-        # prior conversation through the model again, which costs real
-        # tokens; that must never happen silently just because a tab failed
-        # to reattach. Ending or restarting the session is the user's call.
-        print("[ai_terminal] reattach: broker connect failed:\n%s" % traceback.format_exc())
-        sublime.status_message(f"Ai terminal: could not reattach ({e})")
-        return
-    with _term_lock():
-        _term_registry()[view.id()] = term
-    term.start_reader()
-    print(f"[ai_terminal] reattached view {view.id()} to pipe {pipe_name!r}")
+
+    def _finish_connected():
+        _BROKER_CONNECTING.discard(vid)
+        try:
+            usable = bool(view.is_valid() and view.window())
+        except Exception:
+            usable = False
+        if not usable:
+            # The user closed the restored view while the worker connected.
+            # BrokerPty.kill is detach-only and never sends the broker KILL
+            # control message.
+            pty.kill()
+            return
+        with _term_lock():
+            existing = _term_registry().get(vid)
+            if existing is not None:
+                pty.kill()
+                return
+            _term_registry()[vid] = term
+        term.start_reader()
+        print(f"[ai_terminal] reattached view {vid} to pipe {pipe_name!r}")
+
+    def _finish_failed(message, trace):
+        _BROKER_CONNECTING.discard(vid)
+        # Leave the view inert. In particular, do not clear its persisted pipe
+        # identity or auto-resume Codex; a later explicit recovery may still
+        # succeed without replaying or spending tokens.
+        print("[ai_terminal] reattach: broker connect failed:\n%s" % trace)
+        sublime.status_message(f"Ai terminal: could not reattach ({message})")
+
+    def _connect_worker():
+        try:
+            pty.start()
+        except Exception as e:
+            trace = traceback.format_exc()
+            sublime.set_timeout(
+                lambda message=str(e), detail=trace: _finish_failed(message, detail), 0
+            )
+            return
+        sublime.set_timeout(_finish_connected, 0)
+
+    # Named-pipe connection is blocking by design. Never perform it on
+    # Sublime's main thread: stale/busy restored sessions previously froze the
+    # entire editor on startup and on every tab activation.
+    threading.Thread(target=_connect_worker, daemon=True).start()
 
 
 class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
@@ -6856,6 +6988,205 @@ class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
         return term is not None and isinstance(term.pty, _BrokerPty)
 
 
+class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
+    """Reconnect a detachable broker already held by this GhostShell process.
+
+    This is deliberately different from End Session: it closes only the local
+    named-pipe handles and never sends KILL to the broker.  It also provides a
+    manual recovery path when automatic workspace-restore reattachment leaves
+    a live Codex/agent session trapped behind an unusable or hidden tab.
+    """
+
+    def run(self):
+        # A broken/closed view can remove its terminal from the registry while
+        # the standalone broker (and Codex child) remain alive.  Search both
+        # the registry and old-generation Terminal objects retained by their
+        # reader threads, then merge those with the authoritative broker
+        # process list.  Process discovery can be slow on Windows, so never do
+        # it on Sublime's UI thread.
+        threading.Thread(target=self._discover, daemon=True).start()
+
+    @staticmethod
+    def _local_terms():
+        with _term_lock():
+            terms = list(_term_registry().values())
+        seen = {id(term) for term in terms}
+        # A terminal whose view crashed may no longer be registered, but its
+        # reader/writer daemon still retains the object and its open handles.
+        # Finding it lets recovery close those exact stale handles safely.
+        for obj in gc.get_objects():
+            try:
+                if (
+                    id(obj) not in seen
+                    and obj.__class__.__name__ == "_Terminal"
+                    and getattr(getattr(obj, "pty", None), "pipe_name", None)
+                ):
+                    terms.append(obj)
+                    seen.add(id(obj))
+            except Exception:
+                continue
+        return terms
+
+    @staticmethod
+    def _running_brokers():
+        command = (
+            "Get-CimInstance Win32_Process -Filter \"Name='python.exe' or "
+            "Name='pythonw.exe'\" | Select-Object -ExpandProperty CommandLine"
+        )
+        output = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", command],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        pattern = re.compile(
+            r"agent_broker\.py.*?--pipe-name\s+(ghostshell_[0-9a-f]+)"
+            r".*?--cwd\s+(\S+).*?--\s+(.+)$",
+            re.IGNORECASE,
+        )
+        brokers = []
+        for line in output.splitlines():
+            match = pattern.search(line)
+            if match:
+                brokers.append({
+                    "pipe_name": match.group(1),
+                    "cwd": match.group(2),
+                    "child": match.group(3).strip(),
+                })
+        return brokers
+
+    def _discover(self):
+        terms = self._local_terms()
+        try:
+            brokers = self._running_brokers()
+            error = None
+        except Exception as exc:
+            brokers = []
+            error = str(exc)
+        sublime.set_timeout(
+            lambda: self._show_choices(terms, brokers, error), 0
+        )
+
+    def _show_choices(self, terms, brokers, error=None):
+        terms_by_pipe = {
+            getattr(getattr(term, "pty", None), "pipe_name", None): term
+            for term in terms
+            if getattr(getattr(term, "pty", None), "pipe_name", None)
+        }
+        sessions = []
+        seen_pipes = set()
+        for broker in brokers:
+            pipe_name = broker["pipe_name"]
+            if pipe_name in seen_pipes:
+                continue
+            seen_pipes.add(pipe_name)
+            sessions.append((pipe_name, terms_by_pipe.get(pipe_name), broker))
+        # Still show a locally attached terminal if process discovery failed
+        # or its broker exited between the two snapshots.
+        for pipe_name, term in terms_by_pipe.items():
+            if pipe_name not in seen_pipes:
+                sessions.append((pipe_name, term, None))
+
+        if not sessions:
+            detail = f" ({error})" if error else ""
+            sublime.status_message(
+                "Ai terminal: no detachable sessions found" + detail
+            )
+            return
+
+        rows = []
+        active = self.window.active_view()
+        for pipe_name, term, broker in sessions:
+            view = getattr(term, "view", None) if term is not None else None
+            try:
+                name = view.name() if view is not None and view.is_valid() else None
+            except Exception:
+                name = None
+            if term is None:
+                state = "orphaned broker"
+            elif view is active:
+                state = "active tab"
+            else:
+                state = "stale/attached client"
+            cwd = broker.get("cwd") if broker else getattr(
+                getattr(term, "pty", None), "_cwd", ""
+            )
+            rows.append([f"{name or 'Codex'} — {state}", pipe_name, cwd or ""])
+
+        def _picked(index):
+            if index < 0 or index >= len(sessions):
+                return
+            pipe_name, term, broker = sessions[index]
+            if term is not None:
+                self._reattach(term)
+            else:
+                self._attach_orphan(pipe_name, broker or {})
+
+        self.window.show_quick_panel(rows, _picked)
+
+    def _attach_orphan(self, pipe_name, broker):
+        # Use the normal terminal-view constructor so recovered tabs receive
+        # the dedicated ANSI colour scheme and every input/layout setting.
+        target = _terminal_view(self.window, name="Recovered Codex")
+        target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
+        target.settings().set(_BROKER_PROFILE_SETTING, "Codex")
+        cwd = broker.get("cwd")
+        if cwd:
+            target.settings().set(_BROKER_CWD_SETTING, cwd)
+        sublime.status_message(f"Ai terminal: reconnecting {pipe_name}")
+        _reattach_broker_view(target, pipe_name)
+
+    def _reattach(self, term):
+        old_view = term.view
+        pty = term.pty
+        pipe_name = pty.pipe_name
+        profile_name = getattr(term, "profile_name", None)
+        cwd = getattr(pty, "_cwd", None)
+        view_name = None
+        view_is_usable = False
+        try:
+            view_is_usable = bool(old_view and old_view.is_valid() and old_view.window())
+            if view_is_usable:
+                view_name = old_view.name()
+        except Exception:
+            view_is_usable = False
+
+        with _term_lock():
+            for vid, candidate in list(_term_registry().items()):
+                if candidate is term:
+                    _term_registry().pop(vid, None)
+
+        # BrokerPty.kill is detach-only. It closes this plugin's pipe handles
+        # but leaves the broker and its child process untouched.
+        pty.kill()
+
+        if view_is_usable:
+            target = old_view
+        else:
+            target = self.window.new_file()
+            target.set_scratch(True)
+            if view_name:
+                target.set_name(view_name)
+            elif profile_name:
+                target.set_name(profile_name)
+            else:
+                target.set_name("Recovered Ai Terminal")
+
+        target.settings().set(_VIEW_SETTING, True)
+        target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
+        if profile_name:
+            target.settings().set(_BROKER_PROFILE_SETTING, profile_name)
+        if cwd:
+            target.settings().set(_BROKER_CWD_SETTING, cwd)
+
+        sublime.status_message(f"Ai terminal: reconnecting {pipe_name}")
+        # Give the broker's input/output server loops time to observe both
+        # closed client handles and create fresh pipe instances.
+        sublime.set_timeout(
+            lambda v=target, p=pipe_name: _reattach_broker_view(v, p), 500
+        )
+
+
 class AiTerminalNukeCommand(sublime_plugin.TextCommand):
     """Clear the view and reset the terminal screen (terminus_nuke equivalent).
 
@@ -7284,6 +7615,8 @@ def plugin_loaded():
     # the restart even though this plugin instance is brand new.
     for window in sublime.windows():
         for view in window.views():
+            if view.settings().get(_VIEW_SETTING):
+                _apply_terminal_view_settings(view)
             _maybe_reattach_broker(view)
     print("[ai_terminal] loaded (trackpad pan→TUI scroll armed)")
 

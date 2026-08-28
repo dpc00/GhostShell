@@ -1,11 +1,11 @@
-"""Unit tests for ai/terminal/mouse.py (xterm mouse report encoding).
+"""Unit tests for terminal/mouse.py (xterm mouse report encoding).
 
 Run from repo root:
     python -m unittest tests.test_mouse -v
 """
 import unittest
 
-from ai.terminal.mouse import (
+from terminal.mouse import (
     BTN_LEFT,
     BTN_RIGHT,
     BTN_WHEEL_DOWN,

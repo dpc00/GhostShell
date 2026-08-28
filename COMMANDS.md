@@ -1,10 +1,9 @@
 # Command reference
 
 Every `sublime_plugin` class GhostShell registers, and every surface it's
-exposed on. All classes live in `ai/ai_terminal.py` and are registered for
-Sublime's scan by being imported into `PluginLoader.py` (see
-`tests/test_plugin_registration.py`, which fails the build if a class is
-defined but not imported there).
+exposed on. All classes live in `ai_terminal.py` at the repo root, which
+Sublime auto-loads and scans directly -- no loader, nothing to forget to
+register.
 
 Sublime derives the ST command name from the class name automatically:
 `AiTerminalOpenHereCommand` -> `ai_terminal_open_here` (`Command` suffix
@@ -37,7 +36,7 @@ so the "why isn't this in a menu" question has one place to be answered.
 | `AiTerminalSendStringWindowCommand` | `ai_terminal_send_string_window` | WindowCommand | Same, but resolves the target terminal view within the window without it needing focus |
 | `AiTerminalRenderCommand` | `ai_terminal_render` | TextCommand | `ai_terminal.py`'s own PTY-output loop (`view.run_command("ai_terminal_render", ...)`) on every screen update |
 | `AiTerminalNoopCommand` | `ai_terminal_noop` | TextCommand | `AiTerminalKeyInterceptor.on_text_command` returns this to swallow a command it intercepted (e.g. blocking a default ST binding while a terminal view is focused) |
-| `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | Meant for a `.sublime-mousemap` (see `PluginLoader.py` comment); no mousemap ships in this package, so it's currently inert until a user adds one |
+| `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | Meant for a `.sublime-mousemap`; no mousemap ships in this package, so it's currently inert until a user adds one |
 | `AiTerminalDumpScreenCommand` | `ai_terminal_dump_screen` | TextCommand | Manual invocation from the console (`view.run_command("ai_terminal_dump_screen")`) for debugging; prints the screen grid/cursor to the ST console |
 
 ## Listeners (not commands — no ST command name, nothing to bind)

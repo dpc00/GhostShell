@@ -653,6 +653,10 @@
                 "python",
                 "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
             ],
+            // Experimental tab-X lifecycle: the close is swallowed, this
+            // input asks the mock process to exit, and normal PTY EOF closes
+            // the tab afterward. Isolated here until live-tested.
+            "tab_close_input": "q",
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             },

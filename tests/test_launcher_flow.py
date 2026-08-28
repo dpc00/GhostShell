@@ -19,6 +19,7 @@ order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 
 import os
 import sys
+import types
 import threading
 
 import pytest
@@ -126,7 +127,7 @@ class FakeWindow:
 _messages = []
 _install_stubs(message_sink=_messages)
 
-from ai import ai_terminal  # noqa: E402
+import ai_terminal  # noqa: E402
 
 
 PROFILES = {
@@ -846,3 +847,120 @@ def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().clear()
+
+
+def test_broker_kill_closes_pipe_handles_after_natural_exit(monkeypatch):
+    """read() clears _alive at EOF before on_close calls kill().  Cleanup
+    must still close every client handle in that ordinary /exit ordering."""
+    events = []
+
+    class FakeKernel32:
+        def CancelIoEx(self, handle, _overlapped):
+            events.append(("cancel", handle))
+
+        def CloseHandle(self, handle):
+            events.append(("close", handle))
+
+    monkeypatch.setattr(ai_terminal, "_k32", FakeKernel32())
+    pty = ai_terminal._BrokerPty("pipe", [], None, 80, 24, {})
+    pty._h_out, pty._h_in, pty._h_ctl = 11, 12, 13
+    pty._alive = False
+
+    pty.kill()
+
+    assert events == [
+        ("cancel", 11), ("close", 11),
+        ("cancel", 12), ("close", 12),
+        ("cancel", 13), ("close", 13),
+    ]
+    assert (pty._h_out, pty._h_in, pty._h_ctl) == (None, None, None)
+
+
+def test_testing_agent_tab_close_requests_exit_and_swallows_close(
+    clean_state, monkeypatch
+):
+    view = FakeView(vid=901)
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    window = FakeWindow(active_view=view)
+    sent = []
+    term = types.SimpleNamespace(
+        profile_name="Testing Agent",
+        send_string=sent.append,
+    )
+    clean_state["profiles"]["Testing Agent"] = {"tab_close_input": "q"}
+    monkeypatch.setattr(
+        sys.modules["sublime"], "ok_cancel_dialog", lambda *args: True
+    )
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    try:
+        result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+            window, "close_file", None
+        )
+        assert result == ("ai_terminal_noop_window", {})
+        assert sent == ["q"]
+
+        # Repeated clicks while shutdown is pending remain swallowed but do
+        # not enqueue a second exit command.
+        result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+            window, "close_file", None
+        )
+        assert result == ("ai_terminal_noop_window", {})
+        assert sent == ["q"]
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_canceling_testing_agent_tab_close_keeps_session_running(
+    clean_state, monkeypatch
+):
+    view = FakeView(vid=903)
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    window = FakeWindow(active_view=view)
+    sent = []
+    term = types.SimpleNamespace(
+        profile_name="Testing Agent",
+        send_string=sent.append,
+    )
+    clean_state["profiles"]["Testing Agent"] = {"tab_close_input": "q"}
+    monkeypatch.setattr(
+        sys.modules["sublime"], "ok_cancel_dialog", lambda *args: False
+    )
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    try:
+        result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+            window, "close_file", None
+        )
+        assert result == ("ai_terminal_noop_window", {})
+        assert sent == []
+        assert not getattr(term, "_tab_close_requested", False)
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_window_close_is_not_converted_to_agent_exit(clean_state):
+    view = FakeView(vid=902)
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    window = FakeWindow(active_view=view)
+    sent = []
+    term = types.SimpleNamespace(
+        profile_name="Testing Agent",
+        send_string=sent.append,
+    )
+    clean_state["profiles"]["Testing Agent"] = {"tab_close_input": "q"}
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    ai_terminal._WINDOW_CLOSING_TERM_IDS.add(view.id())
+    try:
+        result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+            window, "close_file", None
+        )
+        assert result is None
+        assert sent == []
+    finally:
+        ai_terminal._WINDOW_CLOSING_TERM_IDS.discard(view.id())
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)

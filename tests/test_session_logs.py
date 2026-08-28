@@ -1,16 +1,16 @@
-"""Smoke GhostShell session-log modules in ai/terminal/."""
+"""Smoke GhostShell session-log modules in terminal/."""
 
 import json
 import os
 from pathlib import Path
 
-from ai.terminal import color_scheme_log as csl
-from ai.terminal import log_paths as lp
-from ai.terminal import raw_debug_log as rdl
-from ai.terminal.cast_recorder import CastRecorder
-from ai.terminal.session_text_log import SessionTextLog
-from ai.terminal import cast_recorder as cr
-from ai.terminal import session_text_log as stl
+from terminal import color_scheme_log as csl
+from terminal import log_paths as lp
+from terminal import raw_debug_log as rdl
+from terminal.cast_recorder import CastRecorder
+from terminal.session_text_log import SessionTextLog
+from terminal import cast_recorder as cr
+from terminal import session_text_log as stl
 
 
 def test_color_scheme_log_and_recorders_write_under_log_root(tmp_path, monkeypatch):

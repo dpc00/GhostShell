@@ -1,13 +1,13 @@
-"""Unit tests for ai/terminal/parser.py (ANSI/VT state machine).
+"""Unit tests for terminal/parser.py (ANSI/VT state machine).
 
 Run from repo root:
     python -m unittest tests.test_parser -v
 """
 import unittest
 
-from ai.terminal.colors import ATTR_BG_MASK, ATTR_FG_MASK, BG_SHIFT, BOLD, FAINT, REVERSE
-from ai.terminal.parser import Parser
-from ai.terminal.screen import BLANK, Screen
+from terminal.colors import ATTR_BG_MASK, ATTR_FG_MASK, BG_SHIFT, BOLD, FAINT, REVERSE
+from terminal.parser import Parser
+from terminal.screen import BLANK, Screen
 
 
 def _feed(text, cols=20, rows=4, **kwargs):
@@ -210,7 +210,7 @@ class SgrTests(unittest.TestCase):
         self.assertEqual((self._attr("\x1b[48;5;0m") & ATTR_BG_MASK) >> BG_SHIFT, 1)
 
     def test_truecolor_background_is_quantized(self):
-        from ai.terminal.colors import quantize256
+        from terminal.colors import quantize256
 
         bg = (self._attr("\x1b[48;2;0;0;255m") & ATTR_BG_MASK) >> BG_SHIFT
         self.assertEqual(bg, quantize256(0, 0, 255) + 1)

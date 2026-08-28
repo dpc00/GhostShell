@@ -8,7 +8,7 @@ Run from repo root:
 """
 import unittest
 
-from ai.terminal.caret import (
+from terminal.caret import (
     adjust_display_caret,
     content_end_col,
     field_right_limit,
@@ -16,7 +16,7 @@ from ai.terminal.caret import (
     input_start_col,
     pad_row_for_caret,
 )
-from ai.terminal.colors import (
+from terminal.colors import (
     BOLD,
     ITALIC,
     UNDERLINE,
@@ -30,7 +30,7 @@ from ai.terminal.colors import (
     style_id_for,
     xterm_hex,
 )
-from ai.terminal.render import (
+from terminal.render import (
     HOST_CURSOR_SCOPE,
     build_text_and_regions,
     cell_needs_host_cursor,
@@ -38,7 +38,7 @@ from ai.terminal.render import (
     paint_host_cursor,
     punch_host_cursor_region,
 )
-from ai.terminal.screen import Screen
+from terminal.screen import Screen
 
 
 def _screen_with(lines, cols=40, rows=None):

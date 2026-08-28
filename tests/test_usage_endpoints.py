@@ -15,7 +15,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from ai.terminal.usage_scan import (
+from terminal.usage_scan import (
     _get_json,
     _iso_to_epoch,
     _openrouter_key_from_qwen,

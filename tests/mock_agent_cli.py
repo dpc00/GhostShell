@@ -116,7 +116,7 @@ class ReplayAgent:
 
 # ─── Box mode: deterministic Ink-style prompt, self-reporting ground truth ──
 
-_PROMPT = "❯ "  # "❯ " -- same marker ai/terminal/caret.py's find_prompt_row expects
+_PROMPT = "❯ "  # "❯ " -- same marker terminal/caret.py's find_prompt_row expects
 _BANNER_ROWS = 2   # rows 0-1: title + blank
 _BOX_TOP_ROW = 2   # row 2: box top border
 _BOX_INPUT_ROW = 3  # row 3: "│ ❯ <input> │"

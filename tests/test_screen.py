@@ -1,11 +1,11 @@
-"""Unit tests for ai/terminal/screen.py (grid, scrollback, erase ops).
+"""Unit tests for terminal/screen.py (grid, scrollback, erase ops).
 
 Run from repo root:
     python -m unittest tests.test_screen -v
 """
 import unittest
 
-from ai.terminal.screen import BLANK, Screen
+from terminal.screen import BLANK, Screen
 
 
 def _row_text(screen, y):

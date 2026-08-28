@@ -33,69 +33,6 @@ assigned a fix — do not attempt one without a concrete design, and do not
 flip `click_to_cursor_fallback_enabled`'s default without asking first, per
 the standing directive already on that gate.
 
-## FALSE ALARM, root-caused — "cursor keys don't work at all" in the portable instance was environment leakage, not an ai_terminal bug (2026-08-27, later still)
-
-**Report:** user's in-progress portable Claude session (`D:\GhostShell-caret-test`,
-terminus-stage1 worktree) had up/down/left/right doing nothing on the command
-line. Given the same evening's stage-2 viewport/caret rewrite, this looked
-like a strong candidate for a real regression.
-
-**Ruled out, with live evidence, not guesswork:**
-- Keymap/context binding: identical to `main` byte-for-byte (`diff` clean).
-- Real physical keypresses do reach `AiTerminalKeypressCommand.run` correctly
-  — confirmed by a state-based monkeypatch probe (logging `(key, ctrl, alt,
-  shift, view_id)` to a module-level list, read back after the user pressed
-  keys physically). A print-based probe was tried first and gave a false
-  negative: it used `eval_python`'s sandboxed capture-`print`, whose output
-  never reaches the real ST console, so its silence proved nothing.
-- Key encoding: both the ghostty-vt `encode_key()` and the legacy
-  `_translate_key()` path produce the correct standard sequence
-  (`b'\x1b[A'` for Up) given the session's actual terminal-mode state
-  (`private_modes={2004}`, no app-cursor mode, no win32-input-mode,
-  no alt-screen) — encoding was never the problem.
-- Right-arrow "accepting a suggestion instead of moving one column" is the
-  real Claude Code CLI's own ghost-text-autosuggest behavior (fish/zsh-style
-  accept-on-Right/End), not GhostShell mis-routing anything.
-
-**Actual root cause:** the portable ST instance's embedded `claude.exe`
-session had inherited `CLAUDE_CODE_CHILD_SESSION` (and `CLAUDECODE`,
-`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`, etc.) from the environment of
-whatever Claude Code shell launched the portable Sublime Text process in the
-first place (confirmed live: this session's own Bash/PowerShell tool
-environment carries all of these). The inner Claude Code CLI detects this
-marker and degrades itself — footer showed "Transcript saving is off —
-inherited CLAUDE_CODE_CHILD_SESSION marker" the entire time — and, per live
-comparison, prompt-history recall (Up arrow) does not work in that degraded
-mode even though it works normally in an ordinarily-launched session. This
-is upstream Claude Code CLI behavior, not an ai_terminal.py defect.
-
-**Complication while fixing it, worth remembering:** this profile is
-detachable (`agent_broker.py`), so the polluted `claude.exe` + broker
-process pair survives a Sublime Text restart independent of Sublime's own
-environment — killing/relaunching `sublime_text.exe` with a stripped
-environment did nothing, because the still-running orphaned broker just got
-silently reattached via its recorded named pipe. Getting a genuinely clean
-session required killing the actual `agent_broker.py`/`claude.exe` process
-pair by PID (found via `Get-CimInstance Win32_Process`, matched by
-`--cwd`/pipe-name in the command line), closing the stale tab, then spawning
-a brand new one (`window.run_command('ai_terminal_open_here')`). After that,
-the "inherited marker" footer line disappeared and the user confirmed live:
-"cursor keys up/dwn/lft/rght locked to command line, pgup/dwn not locked,
-cursor up rewrite prior prompt. All is normal."
-
-**Action item for next session:** launch the portable test instance from a
-shell with `CLAUDE_CODE_CHILD_SESSION`, `CLAUDECODE`,
-`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`, `CLAUDE_CODE_SESSION_ID`,
-`CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
-`CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SSE_PORT`,
-`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_PID`, `AI_AGENT`
-stripped (a `System.Diagnostics.ProcessStartInfo` with those keys removed
-from `EnvironmentVariables` before `Process.Start`, not plain
-`Start-Process`, which has no environment-stripping option in Windows
-PowerShell 5.1) — and remember that if a stale detachable session already
-exists for that worktree, its broker/claude.exe pair must be killed by PID
-first, or the clean relaunch reattaches to the same polluted process.
-
 ## Terminus stage 2 merged to main — 2 of 3 original bugs confirmed fixed live, one new caret finding, permission prompt still untested (2026-08-27, later still)
 
 Real-streaming-session verification of the three originally-reported bugs

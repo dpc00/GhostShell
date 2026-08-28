@@ -21,12 +21,12 @@ def main():
     install_sublime_stubs()
 
     try:
-        from ai import ai_terminal
+        import ai_terminal
     except Exception as e:
         import traceback
 
         traceback.print_exc()
-        print("\ncheck_import: FAILED to import ai.ai_terminal: %r" % (e,))
+        print("\ncheck_import: FAILED to import ai_terminal: %r" % (e,))
         return 1
 
     expected = [
@@ -84,7 +84,7 @@ def main():
         print("check_import: usage refresh interval wrong:\n" + "\n".join(failures))
         return 1
 
-    print("check_import: ai.ai_terminal imports cleanly; %d classes present; "
+    print("check_import: ai_terminal imports cleanly; %d classes present; "
           "usage refresh interval OK" % len(expected))
     return 0
 

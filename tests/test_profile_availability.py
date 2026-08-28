@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from ai.terminal.profile_availability import (
+from terminal.profile_availability import (
     command_exists,
     menu_caption,
     profile_is_available,

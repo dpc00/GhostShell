@@ -1,11 +1,11 @@
-"""Unit tests for ai/terminal/keys.py (key name -> byte sequences).
+"""Unit tests for terminal/keys.py (key name -> byte sequences).
 
 Run from repo root:
     python -m unittest tests.test_keys -v
 """
 import unittest
 
-from ai.terminal.keys import (
+from terminal.keys import (
     ENHANCED_KEY,
     LEFT_ALT_PRESSED,
     LEFT_CTRL_PRESSED,

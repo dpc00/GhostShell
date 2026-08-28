@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import unittest
 
-from ai.terminal import (
+from terminal import (
     HOST_CURSOR_SCOPE,
     Parser,
     Screen,
@@ -27,9 +27,9 @@ from ai.terminal import (
     translate_key,
     view_point_to_cell,
 )
-from ai.terminal import ghostty_vt
-from ai.terminal.colors import FAINT, REVERSE
-from ai.terminal.history_scan import read_only_uri
+from terminal import ghostty_vt
+from terminal.colors import FAINT, REVERSE
+from terminal.history_scan import read_only_uri
 
 
 class TestKeys(unittest.TestCase):
@@ -70,7 +70,7 @@ class TestColors(unittest.TestCase):
 
     def test_reverse_default_is_visible_scope(self):
         """TUI block cursor: reverse space on default colours must not be None."""
-        from ai.terminal.colors import REVERSE as R
+        from terminal.colors import REVERSE as R
         attr = R  # reverse only, fg=0 bg=0
         scope = scope_name_for(attr)
         self.assertIsNotNone(scope)
@@ -78,7 +78,7 @@ class TestColors(unittest.TestCase):
         self.assertEqual(scope, "ai.fb.1.16")
 
     def test_reverse_colored_swaps(self):
-        from ai.terminal.colors import REVERSE as R
+        from terminal.colors import REVERSE as R
         attr = pack_attr(fg=2, bg=0) | R  # red on default bg -> black on red
         self.assertEqual(scope_name_for(attr), "ai.fb.1.2")
 
@@ -210,7 +210,7 @@ class TestParser(unittest.TestCase):
         s = Screen(10, 3)
         p = Parser(s)
         p.feed("\x1b[38;2;255;0;0mR")
-        from ai.terminal.colors import scope_name_for
+        from terminal.colors import scope_name_for
         scope = scope_name_for(s.attrs[0][0])
         self.assertIsNotNone(scope)
         # Quantized red should be a non-default fg on default bg.
@@ -222,7 +222,7 @@ class TestParser(unittest.TestCase):
         s = Screen(10, 3)
         p = Parser(s)
         p.feed("\x1b[38:2:255:255:255mW")
-        from ai.terminal.colors import scope_name_for, quantize256
+        from terminal.colors import scope_name_for, quantize256
         scope = scope_name_for(s.attrs[0][0])
         # white → palette index 15 or nearby grey/white (1-based in scope)
         fg = int(scope.split(".")[2])
@@ -233,7 +233,7 @@ class TestParser(unittest.TestCase):
         s = Screen(10, 3)
         p = Parser(s)
         p.feed("\x1b[38:2::255:128:64mX")
-        from ai.terminal.colors import scope_name_for, quantize256
+        from terminal.colors import scope_name_for, quantize256
         scope = scope_name_for(s.attrs[0][0])
         fg = int(scope.split(".")[2])
         self.assertEqual(fg, quantize256(255, 128, 64) + 1)
@@ -241,19 +241,19 @@ class TestParser(unittest.TestCase):
 
 class TestSchemeContrast(unittest.TestCase):
     def test_black_on_default_bg_becomes_readable(self):
-        from ai.terminal.colors import scheme_colors_for, hex_luma
+        from terminal.colors import scheme_colors_for, hex_luma
         fg, bg = scheme_colors_for(1, 0)  # ANSI black on default
         self.assertGreaterEqual(abs(hex_luma(fg) - hex_luma(bg)), 48)
 
     def test_default_fg_on_dark_bg_has_foreground(self):
-        from ai.terminal.colors import scheme_colors_for, DEFAULT_FG_HEX
+        from terminal.colors import scheme_colors_for, DEFAULT_FG_HEX
         fg, bg = scheme_colors_for(0, 2)  # default fg on red bg
         self.assertEqual(fg, DEFAULT_FG_HEX)
         self.assertTrue(fg.startswith("#"))
         self.assertTrue(bg.startswith("#"))
 
     def test_ensure_contrast_lifts_black_on_nearblack(self):
-        from ai.terminal.colors import ensure_contrast
+        from terminal.colors import ensure_contrast
         self.assertEqual(ensure_contrast("#000000", "#000001"), "#FFFFFF")
 
 
@@ -272,8 +272,8 @@ class TestRender(unittest.TestCase):
 
 class TestCaretContentEnd(unittest.TestCase):
     def _row(self, s: str, cols: int = 0):
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import content_end_col, input_start_col, find_prompt_row
+        from terminal.screen import Screen
+        from terminal.caret import content_end_col, input_start_col, find_prompt_row
 
         cols = cols or max(len(s), 40)
         scr = Screen(cols, 3)
@@ -312,8 +312,8 @@ class TestCaretContentEnd(unittest.TestCase):
 
     def test_grok_box_prompt_not_history_gt(self):
         """Grok live input is `│ > …`; history `> msg` must not steal the caret."""
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import (
+        from terminal.screen import Screen
+        from terminal.caret import (
             find_prompt_row,
             input_start_col,
             content_end_col,
@@ -338,8 +338,8 @@ class TestCaretContentEnd(unittest.TestCase):
         self.assertEqual((cy, cx), (4, 6))
 
     def test_grok_box_empty_input_start(self):
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import find_prompt_row, input_start_col, content_end_col
+        from terminal.screen import Screen
+        from terminal.caret import find_prompt_row, input_start_col, content_end_col
 
         scr = Screen(60, 3)
         box = "  \u2502 > " + (" " * 40) + "\u2502"
@@ -351,8 +351,8 @@ class TestCaretContentEnd(unittest.TestCase):
 
     def test_live_prompt_trusts_mid_line_hardware(self):
         """On the prompt row, display caret follows PTY x (not content_end)."""
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import adjust_display_caret, content_end_col
+        from terminal.screen import Screen
+        from terminal.caret import adjust_display_caret, content_end_col
 
         scr = Screen(80, 3)
         box = "  \u2502 > hello world" + (" " * 40) + "\u2502"
@@ -367,8 +367,8 @@ class TestCaretContentEnd(unittest.TestCase):
 
     def test_caret_after_trailing_space_not_snapped_to_word(self):
         """After typing 'word ', caret stays after the space (not on 'd')."""
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import (
+        from terminal.screen import Screen
+        from terminal.caret import (
             adjust_display_caret,
             content_end_col,
             input_start_col,
@@ -405,8 +405,8 @@ class TestCaretContentEnd(unittest.TestCase):
         self.assertNotEqual(reg1, reg2)
 
     def test_content_end_stops_at_box_border(self):
-        from ai.terminal.screen import Screen
-        from ai.terminal.caret import content_end_col, input_start_col
+        from terminal.screen import Screen
+        from terminal.caret import content_end_col, input_start_col
 
         scr = Screen(40, 2)
         # Short pad so a naive scan would treat │ as text.

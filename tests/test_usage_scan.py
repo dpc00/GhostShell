@@ -3,8 +3,8 @@ import os
 import tempfile
 import unittest
 
-from ai.terminal import usage_scan
-from ai.terminal.usage_scan import (
+from terminal import usage_scan
+from terminal.usage_scan import (
     _claude_token_expired,
     _persist_claude_oauth,
     _read_claude_oauth,

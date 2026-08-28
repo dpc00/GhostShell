@@ -1,4 +1,4 @@
-"""Unit tests for ai/terminal/history_scan.py (agent history sweep).
+"""Unit tests for terminal/history_scan.py (agent history sweep).
 
 Every test builds a throwaway fake home/%LOCALAPPDATA% tree, so nothing
 touches the real machine's agent history.
@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from ai.terminal.history_scan import (
+from terminal.history_scan import (
     _mtime,
     _parse_iso_to_epoch,
     scan_all,

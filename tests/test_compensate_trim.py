@@ -19,8 +19,8 @@ from tests.sublime_stub import install as _install_stubs  # noqa: E402
 
 _install_stubs()
 
-from ai import ai_terminal  # noqa: E402
-from ai.terminal.screen import Screen  # noqa: E402
+import ai_terminal  # noqa: E402
+from terminal.screen import Screen  # noqa: E402
 
 
 class _FakeView:

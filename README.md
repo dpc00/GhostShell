@@ -44,7 +44,6 @@ ai/
     launcher.py, profile_availability.py, pty_env.py -- profile/launch plumbing
     history_scan.py, usage_scan.py   -- scrollback/usage helpers
     bin/ghostty-vt.dll  -- libghostty-vt, built from https://github.com/ghostty-org/ghostty
-PluginLoader.py        -- top-level plugin entry point (ST only auto-loads top-level .py)
 Default.sublime-keymap -- key-forwarding bindings, gated by setting.ai_terminal_view
 Main.sublime-menu       -- Tools > Ai Terminal submenu
 Default.sublime-commands, Context.sublime-menu, Side Bar.sublime-menu,
@@ -52,7 +51,7 @@ Tab Context.sublime-menu -- command palette / context-menu entries
 ai_terminal.sublime-settings     -- profiles (shells/agents), rendering knobs
 ai_terminal.sublime-color-scheme -- color scheme with the ai.terminal.* scopes
 tools/                  -- check_import.py (import sanity check), stale-scheme cleanup script
-tests/                  -- unit tests for ai/terminal/*, no Sublime required
+tests/                  -- unit tests for terminal/*, no Sublime required
 ```
 
 See [COMMANDS.md](COMMANDS.md) for every registered command: ST command name,
@@ -66,13 +65,13 @@ Symlink this repo into your Sublime Text `Packages/` directory:
 New-Item -ItemType SymbolicLink -Path "$env:APPDATA\Sublime Text\Packages\GhostShell" -Target "<path to this repo checkout>"
 ```
 
-If the symlinked folder name is anything other than `GhostShell`, update the
-`GhostShell.ai.ai_terminal` import prefix in `PluginLoader.py` to match.
+The symlinked folder can be named anything -- ai_terminal.py has no hardcoded
+package-name import, so nothing needs updating to match.
 
 ### Getting libghostty-vt.dll
 
 The DLL isn't tracked in git (it's a built binary artifact). Download it and
-place it at `ai/terminal/bin/ghostty-vt.dll`:
+place it at `terminal/bin/ghostty-vt.dll`:
 
 https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h
 

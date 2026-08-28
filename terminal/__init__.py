@@ -1,7 +1,7 @@
 """Pure terminal core (no Sublime dependency).
 
 Import these modules for unit tests outside ST. The ST plugin facade is
-ai.ai_terminal which wires these into ConPTY + view rendering.
+ai_terminal.py which wires these into ConPTY + view rendering.
 """
 from .colors import pack_attr, quantize256, scope_name_for, rstrip_cells
 from .keys import translate_key, encode_win32_key

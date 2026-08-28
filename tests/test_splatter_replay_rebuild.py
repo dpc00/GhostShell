@@ -31,8 +31,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ai.terminal.ghostty_engine import GhosttyParser
-from ai.terminal.screen import Screen
+from terminal.ghostty_engine import GhosttyParser
+from terminal.screen import Screen
 
 DLL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "ai", "terminal", "bin", "ghostty-vt.dll"

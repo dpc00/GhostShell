@@ -12,9 +12,9 @@ console) does NOT kill the broker or its child -- run this again with the
 same pipe (or re-run with no args to re-detect) to reattach.
 
 Usage:
-    python attach_console.py                  # auto-detect, prompt if >1 match
-    python attach_console.py --pipe-name NAME # attach to a known pipe directly
-    python attach_console.py --list           # just list candidate sessions
+    python recover_console.py                  # auto-detect, prompt if >1 match
+    python recover_console.py --pipe-name NAME # attach to a known pipe directly
+    python recover_console.py --list           # just list candidate sessions
 """
 import argparse
 import ctypes
@@ -91,13 +91,49 @@ def connect(path, access, timeout_s=10.0):
             return h
         err = ctypes.get_last_error()
         if time.time() > deadline:
-            raise OSError("could not connect to pipe %r (GetLastError %d)" % (path, err))
+            raise ctypes.WinError(err)
         if err == _ERROR_PIPE_BUSY:
             _k32.WaitNamedPipeW(path, 2000)
         elif err == _ERROR_FILE_NOT_FOUND:
             time.sleep(0.2)
         else:
-            raise OSError("could not connect to pipe %r (GetLastError %d)" % (path, err))
+            raise ctypes.WinError(err)
+
+
+def connect_output(pipe_name):
+    """Connect to output, recovering a quiet stale output attachment.
+
+    Old brokers only discover a disconnected output reader on their next
+    write.  If output is busy but input is free, no complete client is
+    attached: briefly send Ctrl+L on input to request a harmless redraw.  The
+    resulting output makes the old broker discard its dead output handle.
+    An active session has a busy input pipe, so this cannot steal it.
+    """
+    out_path = "\\\\.\\pipe\\" + pipe_name
+    output_error = None
+    try:
+        return connect(out_path, _GENERIC_READ)
+    except OSError as error:
+        if getattr(error, "winerror", None) != _ERROR_PIPE_BUSY:
+            raise
+        output_error = error
+
+    in_path = "\\\\.\\pipe\\" + pipe_name + "-in"
+    try:
+        h_in = connect(in_path, _GENERIC_WRITE, timeout_s=0.5)
+    except OSError:
+        raise output_error
+
+    try:
+        written = DWORD(0)
+        redraw = b"\x0c"
+        if not _k32.WriteFile(h_in, redraw, len(redraw), byref(written), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        _k32.CloseHandle(h_in)
+
+    print("[attach] released a stale quiet output attachment; retrying", file=sys.stderr)
+    return connect(out_path, _GENERIC_READ, timeout_s=5.0)
 
 
 def _pump_output(handle, stop_evt):
@@ -149,7 +185,7 @@ def main():
 
     pipe_name = pick_pipe_name(args.pipe_name)
 
-    h_out = connect("\\\\.\\pipe\\" + pipe_name, _GENERIC_READ)
+    h_out = connect_output(pipe_name)
     h_in = connect("\\\\.\\pipe\\" + pipe_name + "-in", _GENERIC_WRITE)
     print("[attach] connected to \\\\.\\pipe\\%s (+ -in) -- Ctrl+C to detach "
           "(session keeps running)" % pipe_name, file=sys.stderr)
