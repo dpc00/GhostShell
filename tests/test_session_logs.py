@@ -50,7 +50,7 @@ def test_color_scheme_log_and_recorders_write_under_log_root(tmp_path, monkeypat
     log.flush_live_lines(["live", ""])
     log.close()
     log_path = Path(stl.TEXT_LOG_DIR) / "ai_2026-08-15_000000.log"
-    assert log_path.read_text(encoding="utf-8") == "retired\nlive\n"
+    assert log_path.read_text(encoding="utf-8") == "live\n\n"
 
     rdl.debug_log(b"\x1b[31mraw")
     raw = Path(rdl.DEBUG_PATH) / "raw.log"
@@ -64,7 +64,7 @@ def _open_text_log(tmp_path, monkeypatch):
     return log, tmp_path / "ai_observe.log"
 
 
-def test_observe_writes_new_tab_lines_once(tmp_path, monkeypatch):
+def test_observe_keeps_the_latest_complete_tab_paint(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["hello", "world"])
     assert path.read_text(encoding="utf-8") == "hello\nworld\n"
@@ -74,14 +74,14 @@ def test_observe_writes_new_tab_lines_once(tmp_path, monkeypatch):
     assert path.read_text(encoding="utf-8") == "hello\nworld\nmore\n"
 
 
-def test_observe_writes_a_line_when_it_changes_on_the_tab(tmp_path, monkeypatch):
+def test_observe_replaces_a_line_when_it_changes_on_the_tab(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["a"])
     log.observe(["ab"])
-    assert path.read_text(encoding="utf-8") == "a\nab\n"
+    assert path.read_text(encoding="utf-8") == "ab\n"
 
 
-def test_observe_does_not_reprint_a_line_that_stayed_on_the_tab(
+def test_observe_does_not_preserve_superseded_tab_frames(
     tmp_path, monkeypatch
 ):
     log, path = _open_text_log(tmp_path, monkeypatch)
@@ -91,6 +91,58 @@ def test_observe_does_not_reprint_a_line_that_stayed_on_the_tab(
     log.observe([chrome, "done"])
     text = path.read_text(encoding="utf-8")
     assert text.count(chrome) == 1
-    assert "a\n" in text
-    assert "ab\n" in text
+    assert "a\n" not in text
+    assert "ab\n" not in text
     assert "done\n" in text
+
+
+def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["top  ", "", "bottom"])
+    assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
+
+
+def test_cast_recorder_uses_supplied_correlated_stamp(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
+    rec = CastRecorder()
+    rec.open(80, 24, ["codex"], filename_stamp="stamp_reattach")
+    rec.close()
+    path = tmp_path / "ai_stamp_reattach.cast"
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["version"] == 3
+
+
+def test_cast_header_is_fsynced_before_open_returns(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(cr.os, "fsync", lambda fd: calls.append(fd))
+    rec = CastRecorder()
+    rec.open(80, 24, ["codex"], filename_stamp="durable")
+    assert calls == [rec.file.fileno()]
+    rec.close()
+
+
+def test_failed_cast_header_does_not_leave_zero_byte_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
+
+    class BrokenHandle:
+        def __init__(self, path):
+            self._handle = open(path, "w", encoding="utf-8")
+
+        def write(self, _text):
+            raise OSError("simulated header failure")
+
+        def close(self):
+            self._handle.close()
+
+    monkeypatch.setattr(
+        cr, "open_private",
+        lambda path, mode, **kwargs: BrokenHandle(path),
+    )
+    rec = CastRecorder()
+    try:
+        rec.open(80, 24, ["codex"], filename_stamp="broken")
+        assert False, "open should propagate the header failure"
+    except OSError as error:
+        assert "simulated header failure" in str(error)
+    assert rec.file is None
+    assert not (tmp_path / "ai_broken.cast").exists()

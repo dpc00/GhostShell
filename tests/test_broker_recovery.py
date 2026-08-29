@@ -87,6 +87,19 @@ def test_broker_reattach_never_connects_named_pipes_on_sublime_main_thread():
     assert "_apply_terminal_view_settings(view)" in reattach_source
 
 
+def test_broker_reattach_prepares_logs_only_after_connection_and_registry_win():
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("def _reattach_broker_view(")
+    end = source.index("class AiTerminalOpenHereCommand", start)
+    reattach_source = source[start:end]
+    finish = reattach_source.index("def _finish_connected():")
+    registry_check = reattach_source.index("if existing is not None:")
+    prepare = reattach_source.index("term.prepare(reattach=True)")
+    worker = reattach_source.index("def _connect_worker():")
+    assert finish < registry_check < prepare < worker
+    assert "term.prepare(" not in reattach_source[:finish]
+
+
 def test_plugin_load_reapplies_terminal_view_styling_before_reattach():
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
     start = source.index("def plugin_loaded():")

@@ -1,0 +1,27 @@
+{
+    "folders":
+    [
+        {
+            "path": "."
+        }
+    ],
+    "debugger_configurations":
+    [
+        {
+            "name": "GhostShell (isolated Sublime)",
+            "type": "sublime",
+            "request": "launch",
+            "entry": "GhostShell.ai_terminal",
+            "args":
+            [
+                "-n",
+                "${project_path}/GhostShell-debug.sublime-project"
+            ],
+            "linked_packages":
+            [
+                "${project_path}",
+                "${packages}/User/Preferences.sublime-settings"
+            ]
+        }
+    ]
+}

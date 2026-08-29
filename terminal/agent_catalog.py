@@ -182,7 +182,13 @@ def profile_from_entry(entry):
     """
     profile = {
         "launch_command": list(entry["launch_command"]),
-        "spawn_env": dict(entry["spawn_env"]),
+        # Recording is a GhostShell profile/global setting, not a child
+        # process concern. Do not copy the legacy compatibility variable into
+        # newly generated profiles; existing hand-written profiles still work.
+        "spawn_env": {
+            key: value for key, value in entry["spawn_env"].items()
+            if key != "AI_TERMINAL_LOG_LINES"
+        },
     }
     if "mouse_handling" in entry:
         profile["mouse_handling"] = entry["mouse_handling"]

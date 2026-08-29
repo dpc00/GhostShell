@@ -706,7 +706,9 @@
     // Record every ai_terminal session as an asciicast v3 file under
     // ~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering.
     // Set false to disable recording globally. Legacy per-profile
-    // AI_TERMINAL_LOG_LINES values remain supported.
+    // AI_TERMINAL_LOG_LINES values remain supported but are deprecated;
+    // prefer a per-profile "record_asciicast" boolean when an override is
+    // actually needed. Resolution is profile override, then global, then true.
     "record_asciicast": true,
     // ai_terminal — ConPTY terminal for Sublime Text (currently Claude Code).
     // Edit this file to retune without source edits; changes apply live

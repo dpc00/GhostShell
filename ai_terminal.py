@@ -883,6 +883,7 @@ try:
         CATALOG as _AGENT_CATALOG,
         profile_from_entry as _agent_profile_from_entry,
     )
+    from .terminal.profile_schema import validate_profiles as _validate_profiles
     from .terminal.usage_scan import (
         gather_usage as _gather_usage,
         provider_for_profile as _provider_for_profile,
@@ -975,6 +976,7 @@ except ImportError as _term_imp_err:
             CATALOG as _AGENT_CATALOG,
             profile_from_entry as _agent_profile_from_entry,
         )
+        from terminal.profile_schema import validate_profiles as _validate_profiles
         from terminal.usage_scan import (
             gather_usage as _gather_usage,
             provider_for_profile as _provider_for_profile,
@@ -1536,6 +1538,20 @@ def _profile_settings(profile_name, settings=None):
     return profile if isinstance(profile, dict) else None
 
 
+def _report_profile_validation(settings=None):
+    """Validate the merged profile catalog and make configuration drift visible."""
+    errors, warnings = _validate_profiles(_all_profiles(_settings_obj(settings)))
+    for message in errors:
+        print("[ai_terminal] profile settings ERROR: %s" % message)
+    for message in warnings:
+        print("[ai_terminal] profile settings warning: %s" % message)
+    if errors:
+        sublime.status_message(
+            "Ai terminal: %d invalid profile setting(s); see console" % len(errors)
+        )
+    return errors, warnings
+
+
 def _profile_bool(profile_name, key, default, settings=None):
     """Per-profile boolean override for `key`, else `default`.
 
@@ -1817,9 +1833,8 @@ def _close_tab_on_exit(profile_name=None):
 
 
 def _log_tab_text(profile_name=None):
-    """Whether a plain-text, agent-readable transcript of this tab should be
-    kept alongside the .cast recording. After each tab paint, lines that
-    are newly visible (were not on the previous paint) are appended.
+    """Whether a plain-text snapshot of the latest tab paint should be kept.
+
     Source is the text just written to the Sublime tab. Default true, same posture as
     record_asciicast. A profile may set ``"log_tab_text": false`` to opt out.
     """
@@ -2393,6 +2408,7 @@ def _on_settings_change():
     the new cap. Column bounds are picked up by the resize poller's next
     _measure (~750ms), so nothing to do here for cols."""
     _settings_debug_log(">>> _on_settings_change CALLED")
+    _report_profile_validation()
 
     with _term_lock():
         terms = list(_term_registry().values())
@@ -2609,10 +2625,15 @@ class _Terminal:
         with _term_lock():
             return _term_registry().get(view_id)
 
-    def prepare(self):
-        """Open session logs and start the writer. Call before pty.start().
+    def prepare(self, reattach=False):
+        """Open session logs and start the writer.
 
-        Grok (and other TUIs) emit capability probes the instant the child
+        Call before ``pty.start()`` for a fresh child. A broker reattach calls
+        this only after its existing pipe connection succeeds, because no new
+        child is being started and failed connection attempts must not create
+        recording files.
+
+        Grok (and other TUIs) emit capability probes the instant a fresh child
         exists and do not retry a timed-out keyboard-handling probe in the
         same session. The writer -- and the write_pty bind in __init__ --
         must already be live so the first CSI ? u can be answered.
@@ -2634,8 +2655,8 @@ class _Terminal:
         # environment variable. Existing AI_TERMINAL_LOG_LINES overrides remain
         # supported for backward compatibility.
         try:
-            log_on = bool(
-                sublime.load_settings(_SETTINGS_NAME).get("record_asciicast", True)
+            log_on = _setting_bool(
+                "record_asciicast", True, profile_name=self.profile_name
             )
         except Exception:
             log_on = True
@@ -2648,14 +2669,33 @@ class _Terminal:
         if log_on:
             try:
                 argv = self.pty.argv if hasattr(self.pty, "argv") else []
-                self._cast_recorder.open(self.screen.cols, self.screen.rows, argv)
+                # One timestamp shared by the cast and text snapshot makes
+                # correlation mechanical. Microseconds prevent two terminals
+                # opened in the same second from truncating the same cast.
+                wall = time.time()
+                stamp = "%s_%06d%s" % (
+                    time.strftime("%Y-%m-%d_%H%M%S", time.localtime(wall)),
+                    int((wall % 1.0) * 1000000),
+                    "_reattach" if reattach else "",
+                )
+                self._cast_recorder.open(
+                    self.screen.cols, self.screen.rows, argv,
+                    filename_stamp=stamp,
+                )
             except Exception:
                 print("[ai_terminal] cast open failed:\n%s" % traceback.format_exc())
                 self._cast_recorder = CastRecorder(notify=self._notify)
                 self._notify("recording disabled: could not open the .cast file")
         if _log_tab_text(self.profile_name):
             try:
-                self._text_log.open(time.strftime("%Y-%m-%d_%H%M%S"))
+                if "stamp" not in locals():
+                    wall = time.time()
+                    stamp = "%s_%06d%s" % (
+                        time.strftime("%Y-%m-%d_%H%M%S", time.localtime(wall)),
+                        int((wall % 1.0) * 1000000),
+                        "_reattach" if reattach else "",
+                    )
+                self._text_log.open(stamp)
             except Exception:
                 print("[ai_terminal] text log open failed:\n%s" % traceback.format_exc())
                 self._text_log = SessionTextLog()
@@ -5566,7 +5606,6 @@ def _reattach_broker_view(view, pipe_name):
 
     pty = _BrokerPty(pipe_name, argv, path, cols, rows, env, allow_spawn=False)
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
-    term.prepare()
 
     def _finish_connected():
         _BROKER_CONNECTING.discard(vid)
@@ -5585,6 +5624,11 @@ def _reattach_broker_view(view, pipe_name):
             if existing is not None:
                 pty.kill()
                 return
+            # A restored broker connection is now proven live and this view
+            # has won the registry race. Only now create its recording files;
+            # preparing before the blocking pipe connection produced orphaned
+            # and zero-byte casts when reconnect failed or lost this race.
+            term.prepare(reattach=True)
             view.settings().set(_VIEW_SETTING, True)
             view.settings().erase("ai_terminal_orphaned")
             _term_registry()[vid] = term
@@ -7611,6 +7655,7 @@ def plugin_loaded():
     # writes through this same cached object (Settings objects are singletons
     # per base name), so a re-sync is visible immediately without a reload.
     _generated_settings = sublime.load_settings(_GENERATED_SETTINGS_NAME)
+    _report_profile_validation(_settings)
     # The registry deliberately survives module reloads so active ConPTY
     # sessions are not killed. Upgrade those objects to this generation of the
     # class as well; otherwise an existing tab keeps the old synchronous
