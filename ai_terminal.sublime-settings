@@ -1,4 +1,11 @@
 {
+    // Raw terminal output retained by detachable brokers for reconstruction
+    // after Sublime Text restarts. The old 262144-byte broker default was too
+    // small for Codex's ANSI repaint frames and could restore only a fragment.
+    // 2 MiB targets roughly 300 recent displayed lines for crash recovery,
+    // not full-session archival. May be overridden per profile; GhostShell
+    // clamps it to 1-256 MiB.
+    "broker_scrollback_bytes": 2097152,
     // --- Cursor/caret deviation-from-Terminus bisection gates (2026-08-21) ---
     // Terminus's entire cursor model (verified directly against its real
     // source): take the PTY's raw cursor position, add the scrollback
@@ -29,12 +36,6 @@
     // PageUp/PageDown all confirmed correct with this off. Revert to true
     // only if scrollback loss actually reproduces again.
     "caret_footer_pinning_enabled": false,
-    // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
-    // a visible block/bar/underline/hollow glyph or reverse-video cell on top
-    // of the plain rendered text. False = rely solely on the real ST caret
-    // (still positioned per caret_footer_pinning_enabled above) plus
-    // whatever reverse-video the app itself already sends.
-    "host_cursor_paint_enabled": false,
     // click_to_cursor_fallback_enabled: _route_click_to_cursor_fallback --
     // synthesizes Left/Right keypresses so a mouse click repositions the
     // app's real PTY-side cursor for agents with no DEC mouse-tracking
@@ -42,37 +43,6 @@
     // False = clicking only moves ST's local selection, same as raw PTY
     // click-to-position has always meant for these agents.
     "click_to_cursor_fallback_enabled": false,
-    // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
-    // selection outside the live prompt row permanently hold the ST caret in
-    // place instead of the render loop re-snapping it to the PTY cursor every
-    // frame. False = the render loop always re-syncs the caret to the PTY
-    // cursor, every frame, unconditionally.
-    "user_owns_caret_enabled": false,
-    // fast_caret_patch_enabled: AiTerminalRenderCommand's diff-patch shortcut
-    // -- instead of replacing the whole view text every frame, it writes only
-    // the handful of cells that changed (built for paint_host_cursor's 0-2-
-    // cell glyph move). Its safety assumption is that cursor row/column stay
-    // stable frame to frame, which caret_footer_pinning_enabled normally
-    // guarantees; with that disabled, the raw hardware cursor can jump to
-    // Claude's footer and back, changing how much padding a row gets even
-    // when real content hasn't -- the diff-patch then writes a few
-    // characters at the wrong offsets (a visible splatter that self-heals on
-    // the next full-buffer render). False = always do the full-buffer
-    // replace, no partial patching, Terminus-style (Terminus does not have
-    // an equivalent optimization at all).
-    // REVERTED TO FALSE 2026-08-21, same session: character-splatter
-    // corruption still reproduced with caret_footer_pinning_enabled back on,
-    // disproving the "only unstable cx/cy" theory above -- the diff-patch is
-    // unreliable on its own, not just in combination with the other gate.
-    // Leave false: correctness over the cosmetic footer jiggle.
-    "fast_caret_patch_enabled": false,
-    // Environment shared by every terminal profile. Keep installation paths
-    // here once instead of copying them into each provider's hook config.
-    "shared_spawn_env": {
-        "STLOGS_HOME": "$env:STLOGS_HOME",
-        "STLOGS_ENDPOINT": "http://127.0.0.1:9511/event",
-        "STLOGS_LOG_ROOT": "$env:USERPROFILE\\data\\logs"
-    },
     // Close a terminal tab automatically ~1.5s after its process exits
     // (crash, clean quit, or the user typing `exit`) -- a dead tab that just
     // sits there isn't normal terminal-app behavior. Default true. A profile
@@ -95,6 +65,11 @@
         // "C:\\Users\\donal\\projects\\SText\\agents.md",
         // "C:\\Users\\donal\\projects\\SText\\CLAUDE.md"
     ],
+    // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
+    // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
+    // Off by default (extra text in every terminal tab's status bar
+    // otherwise). Read fresh every render tick, no reload needed.
+    "debug_status_bar_enabled": false,
     // The default profile to run if no profile name is explicitly requested
     "default_profile": "Claude",
     // Mouse drag vs text selection when a TUI enables xterm mouse tracking:
@@ -104,10 +79,38 @@
     //           (Grok trust dialog / buttons). Wheel still works. Live-read each drag.
     //           Default false = copy-first.
     "drag_forwards_by_default": false,
+    // fast_caret_patch_enabled: AiTerminalRenderCommand's diff-patch shortcut
+    // -- instead of replacing the whole view text every frame, it writes only
+    // the handful of cells that changed (built for paint_host_cursor's 0-2-
+    // cell glyph move). Its safety assumption is that cursor row/column stay
+    // stable frame to frame, which caret_footer_pinning_enabled normally
+    // guarantees; with that disabled, the raw hardware cursor can jump to
+    // Claude's footer and back, changing how much padding a row gets even
+    // when real content hasn't -- the diff-patch then writes a few
+    // characters at the wrong offsets (a visible splatter that self-heals on
+    // the next full-buffer render). False = always do the full-buffer
+    // replace, no partial patching, Terminus-style (Terminus does not have
+    // an equivalent optimization at all).
+    // REVERTED TO FALSE 2026-08-21, same session: character-splatter
+    // corruption still reproduced with caret_footer_pinning_enabled back on,
+    // disproving the "only unstable cx/cy" theory above -- the diff-patch is
+    // unreliable on its own, not just in combination with the other gate.
+    // Leave false: correctness over the cosmetic footer jiggle.
+    "fast_caret_patch_enabled": false,
+    // Snap-to-bottom can skip the last N buffer rows so a TUI whose
+    // footer height wobbles does not jiggle the viewport. Default 0
+    // (follow the real last line). Override per profile.
+    "follow_ignore_trailing_lines": 0,
     // Ignore the TUI's alt-screen (DECSET 1049) toggle so our renderer keeps
     // real ST scrollback. Default true = scrollback on. Set false to let a
     // TUI take over the view with a fixed fullscreen matrix (loses scrollback).
     "force_main_screen": true,
+    // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
+    // a visible block/bar/underline/hollow glyph or reverse-video cell on top
+    // of the plain rendered text. False = rely solely on the real ST caret
+    // (still positioned per caret_footer_pinning_enabled above) plus
+    // whatever reverse-video the app itself already sends.
+    "host_cursor_paint_enabled": false,
     // Legacy fallback keys (fully supported for backward compatibility)
     // argv list used to spawn the terminal program. Default runs Claude Code
     // via the Ollama local proxy (127.0.0.1:11434, glm-5.2:cloud). Swap to e.g.
@@ -141,10 +144,6 @@
     // or trailing blank PTY rows can hide real content on scroll-to-bottom
     // (confirmed: broke Claude Code's TUI after typing).
     "min_rows": 1,
-    // Snap-to-bottom can skip the last N buffer rows so a TUI whose
-    // footer height wobbles does not jiggle the viewport. Default 0
-    // (follow the real last line). Override per profile.
-    "follow_ignore_trailing_lines": 0,
     // Rename the ST tab to the app's OSC 0/2 window title (ssh, vim, npm
     // scripts, etc. all set one). Default false: the existing profile-name-
     // based tab titling is relied upon and must not change unless opted in.
@@ -194,6 +193,7 @@
             "spawn_env": {}
         },
         "Claude": {
+            "detachable": true,
             // Mouse tracking: only ever sends the disable form (?1000/1002/
             // 1003l) at startup, never enables -- confirmed across 100+
             // recorded asciicast sessions (2026-08-11). No PTY-side receiver
@@ -218,8 +218,20 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-            },
-            "detachable": true
+            }
+        },
+        "Claude --chrome": {
+            "follow_ignore_trailing_lines": 2,
+            "launch_command": [
+                "claude",
+                "--chrome"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1",
+                "CLAUDE_CODE_AI_TERMINAL_SENTINEL": "propagated",
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                // "OLLAMA_MODEL":"glm-5.2:cloud"
+            }
         },
         "Claude → Cloud": {
             // --cloud attaches to a cloud-hosted session (the kind the
@@ -245,19 +257,6 @@
                 "cmd.exe"
             ],
             "spawn_env": {}
-        },
-        "Claude --chrome": {
-            "follow_ignore_trailing_lines": 2,
-            "launch_command": [
-                "claude",
-                "--chrome"
-            ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
-                "CLAUDE_CODE_AI_TERMINAL_SENTINEL": "propagated",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-                // "OLLAMA_MODEL":"glm-5.2:cloud"
-            }
         },
         "Claude →⇢⇨ Ollama": {
             "follow_ignore_trailing_lines": 2,
@@ -306,6 +305,7 @@
             }
         },
         "Codex": {
+            "detachable": true,
             // Mouse tracking: never enables DEC ?1000/1002/1003 (34 recorded
             // asciicast sessions checked, 2026-08-11).
             // page_keys_to_pty: Codex's Ctrl+T transcript pager is a real
@@ -321,8 +321,7 @@
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
-            },
-            "detachable": true
+            }
         },
         "Codex →⇢⇨ Ollama": {
             // page_keys_to_pty: same underlying `codex` binary as the
@@ -357,7 +356,20 @@
             ],
             "spawn_env": {}
         },
+        "dsh": {
+            // DeepSeek Harness. Ollama owns its separate integration config,
+            // profiles, sessions, and credentials.
+            "launch_command": [
+                "ollama",
+                "launch",
+                "dsh"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
         "Grok Build": {
+            "detachable": true,
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords,
             // combined-param DECSET form) -- confirmed across 56+ recorded
             // asciicast sessions (2026-08-11). Real PTY-side receiver exists;
@@ -382,6 +394,7 @@
             }
         },
         "Grok Build --minimal": {
+            "detachable": true,
             // --minimal is Grok's other rendering mode: finished blocks print
             // as real linear output into native ST scrollback instead of the
             // fixed-region full-screen repaint "Grok Build" above uses (see
@@ -401,19 +414,8 @@
                 "AI_TERMINAL_LOG_LINES": "1"
             }
         },
-        "dsh": {
-            // DeepSeek Harness. Ollama owns its separate integration config,
-            // profiles, sessions, and credentials.
-            "launch_command": [
-                "ollama",
-                "launch",
-                "dsh"
-            ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
-        },
         "jcode": {
+            "detachable": true,
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords)
             // -- confirmed across 18+ recorded asciicast sessions (2026-08-11).
             // page_keys_to_pty: confirmed directly in source (not docs --
@@ -437,6 +439,7 @@
             }
         },
         "Junie": {
+            "detachable": true,
             // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
             // in the project cwd — not the PyCharm plugin panel. Prefer full
             // path so a long-lived ST process still finds the shim.
@@ -450,6 +453,7 @@
             }
         },
         "Kimi": {
+            "detachable": true,
             // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
             // asciicast sessions checked, 2026-08-11).
             "launch_command": [
@@ -460,6 +464,7 @@
             }
         },
         "Kiro": {
+            "detachable": true,
             // Mouse tracking: never enables DEC ?1000/1002/1003 (9 recorded
             // asciicast sessions checked, 2026-08-11).
             "launch_command": [
@@ -470,6 +475,7 @@
             }
         },
         "Mimo": {
+            "detachable": true,
             // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
             // any-motion, SGR coords) -- confirmed across recorded asciicast
             // sessions (2026-08-11).
@@ -492,6 +498,7 @@
             }
         },
         "OpenCode": {
+            "detachable": true,
             // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
             // any-motion, SGR coords) -- confirmed across 14+ recorded
             // asciicast sessions (2026-08-11). Same for the --mini and
@@ -517,6 +524,7 @@
             }
         },
         "OpenCode --mini": {
+            "detachable": true,
             "launch_command": [
                 "opencode",
                 "--mini"
@@ -530,6 +538,7 @@
             }
         },
         "OpenCode →⇢⇨ Ollama": {
+            "detachable": true,
             "launch_command": [
                 "ollama",
                 "launch",
@@ -551,6 +560,7 @@
             }
         },
         "OpenCode →⇢⇨ Ollama --mini": {
+            "detachable": true,
             "launch_command": [
                 "ollama",
                 "launch",
@@ -567,16 +577,16 @@
             }
         },
         "PowerShell": {
+            // Keep the PowerShell process outside Sublime's lifetime so the
+            // terminal can reconnect to it after an ST restart.
+            "detachable": true,
             "launch_command": [
                 "powershell.exe"
             ],
-            "spawn_env": {},
-            // Keep the PowerShell process outside Sublime's lifetime so the
-            // terminal can reconnect to it after an ST restart.
-            "detachable": true
+            "spawn_env": {}
         },
         "Pybackup Go TUI": {
-            "force_main_screen": false,
+            "force_main_screen": true,
             "home_end_native": true,
             // gotui.exe spawns `python ui/app.py` itself and talks to it over
             // HTTP -- see ui/gotui/backend.go.
@@ -617,6 +627,7 @@
             "wheel_to_pty": false
         },
         "Qwen": {
+            "detachable": true,
             // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
             // SGR coords; no bare 1000) -- confirmed across 25+ recorded
             // asciicast sessions (2026-08-11). Same for the →⇢⇨ Ollama
@@ -638,6 +649,7 @@
             }
         },
         "Qwen →⇢⇨ Ollama": {
+            "detachable": true,
             "launch_command": [
                 "ollama",
                 "launch",
@@ -649,20 +661,6 @@
             }
         },
         "Testing Agent": {
-            // Default mock_agent_cli mode is Codex replay: each Enter
-            // dumps the whole transcript after ESC[H inside CSI ?2026.
-            // Search the tab for TURN-00. One hit = clean scrollback.
-            "launch_command": [
-                "python",
-                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
-            ],
-            // Experimental tab-X lifecycle: the close is swallowed, this
-            // input asks the mock process to exit, and normal PTY EOF closes
-            // the tab afterward. Isolated here until live-tested.
-            "tab_close_input": "q",
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
             // 2026-08-21: per-profile bisection-gate override, isolated to
             // this profile only (ai_terminal.py's five _setting_bool call
             // sites now pass profile_name=_term_profile_name(term), profile
@@ -670,12 +668,28 @@
             // TODO.md). All five false = raw Terminus baseline, safe to
             // test here without touching any other live tab/profile.
             "caret_footer_pinning_enabled": false,
-            "host_cursor_paint_enabled": false,
             "click_to_cursor_fallback_enabled": false,
-            "user_owns_caret_enabled": false,
-            "fast_caret_patch_enabled": false
+            "detachable": true,
+            "fast_caret_patch_enabled": false,
+            "host_cursor_paint_enabled": false,
+            // Default mock_agent_cli mode is Codex replay: each Enter
+            // dumps the whole transcript after ESC[H inside CSI ?2026.
+            // Search the tab for TURN-00. One hit = clean scrollback.
+            "launch_command": [
+                "python",
+                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            },
+            // Experimental tab-X lifecycle: the close is swallowed, this
+            // input asks the mock process to exit, and normal PTY EOF closes
+            // the tab afterward. Isolated here until live-tested.
+            "tab_close_input": "q",
+            "user_owns_caret_enabled": false
         },
         "Vibe": {
+            "detachable": true,
             "launch_command": [
                 "vibe"
             ],
@@ -696,6 +710,7 @@
             }
         },
         "WSL Bash": {
+            "detachable": true,
             // Explicit wsl.exe — do not use bare "bash" (WindowsApps stub).
             "launch_command": [
                 "C:\\Windows\\System32\\wsl.exe"
@@ -725,11 +740,13 @@
     // size. Decreasing it may improve performance.
     // Live: changing this swaps the live deque (trims oldest if smaller).
     "scrollback_history_size": 300,
-    // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
-    // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
-    // Off by default (extra text in every terminal tab's status bar
-    // otherwise). Read fresh every render tick, no reload needed.
-    "debug_status_bar_enabled": false,
+    // Environment shared by every terminal profile. Keep installation paths
+    // here once instead of copying them into each provider's hook config.
+    "shared_spawn_env": {
+        "STLOGS_ENDPOINT": "http://127.0.0.1:9511/event",
+        "STLOGS_HOME": "$env:STLOGS_HOME",
+        "STLOGS_LOG_ROOT": "$env:USERPROFILE\\data\\logs"
+    },
     // claude --model gemini-2.5-pro
     // Env vars applied to the spawned terminal process (merged on top of
     // os.environ). Swap or add agent-specific vars here without editing the
@@ -796,5 +813,11 @@
     // Set 0 to disable and rely on the load-time sweep plus the manual
     // "Ai: Refresh Usage & Quota" command. Values below 1 are clamped to 1.
     // Changes apply immediately; no reload needed.
-    "usage_refresh_minutes": 20
+    "usage_refresh_minutes": 20,
+    // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
+    // selection outside the live prompt row permanently hold the ST caret in
+    // place instead of the render loop re-snapping it to the PTY cursor every
+    // frame. False = the render loop always re-syncs the caret to the PTY
+    // cursor, every frame, unconditionally.
+    "user_owns_caret_enabled": false
 }

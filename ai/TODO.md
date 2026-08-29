@@ -1,5 +1,19 @@
 # ai_terminal TODO
 
+Before expanding process reattachment, transcript logging, or restart-time
+screen reconstruction, read `ai/ARCHITECTURAL_BOUNDARIES.md`. It records the
+comparison with SublimeREPL, TerminalView, Terminus, and terminus-persistence,
+plus the explicit stop rule for bounded restart recovery.
+
+## Saved working directory survives restart — LIVE VERIFIED (2026-08-29)
+
+Selected the GhostShell directory with **Set Ai Terminal Working Directory**,
+launched and exited Qwen, restarted Sublime Text, then launched Qwen from
+**Tools | Ai Terminal**. It opened directly in the saved GhostShell directory
+without showing the directory picker, as intended. Automated verification for
+the accompanying launcher, bounded broker replay, and exact painted-tab log
+changes: **482 passed, 2 skipped**.
+
 ## OPEN, UNSOLVED — no reliable keyboard-or-click way to reposition the edit cursor for cut/paste; mouse-drag selection is the only precise mechanism (2026-08-27, later still)
 
 **User's live report, same session as the caret-staleness confirmation

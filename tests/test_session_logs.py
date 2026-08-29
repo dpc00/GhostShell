@@ -103,6 +103,21 @@ def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch
     assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
 
 
+def test_observe_preserves_absence_of_final_newline(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["exact", "paint"], trailing_newline=False)
+    log.close()
+    assert path.read_bytes() == b"exact\npaint"
+
+
+def test_painted_tab_passes_its_actual_final_newline_state():
+    source = Path("ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("def _log_painted_tab(term, text):")
+    end = source.index("\n\n\ndef _update_debug_status", start)
+    log_source = source[start:end]
+    assert 'trailing_newline=painted.endswith("\\n")' in log_source
+
+
 def test_text_log_close_waits_for_an_in_progress_paint(tmp_path, monkeypatch):
     log, _path = _open_text_log(tmp_path, monkeypatch)
     entered_replace = threading.Event()
@@ -186,6 +201,31 @@ def test_failed_atomic_replace_keeps_old_snapshot_and_can_retry(
     log.observe(["new"])
     log.close()
     assert path.read_text(encoding="utf-8") == "new\n"
+
+
+def test_temp_file_permission_failure_does_not_truncate_old_snapshot(
+    tmp_path, monkeypatch
+):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["old"])
+    original_open = stl.open_private
+    calls = []
+
+    def fail_temp_open(target, mode, **kwargs):
+        calls.append((target, mode))
+        if target.endswith(".tmp"):
+            raise PermissionError("simulated temp permission failure")
+        return original_open(target, mode, **kwargs)
+
+    monkeypatch.setattr(stl, "open_private", fail_temp_open)
+    try:
+        log.observe(["new"])
+        assert False, "observe should report a temp-file permission failure"
+    except PermissionError as error:
+        assert "simulated temp permission failure" in str(error)
+
+    assert path.read_text(encoding="utf-8") == "old\n"
+    assert not any(target == str(path) and mode == "w" for target, mode in calls)
 
 
 def test_terminal_close_does_not_replace_painted_snapshot_with_live_screen():

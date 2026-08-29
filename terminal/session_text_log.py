@@ -18,6 +18,7 @@ class SessionTextLog:
         self.file = None
         self._path = None
         self._prev = []
+        self._prev_trailing_newline = None
         self._last_written = None
         self._lock = threading.Lock()
 
@@ -29,6 +30,7 @@ class SessionTextLog:
             self.file = handle
             self._path = path
             self._prev = []
+            self._prev_trailing_newline = None
             self._last_written = None
 
     def write_line(self, text):
@@ -42,7 +44,7 @@ class SessionTextLog:
             self.file.flush()
             self._last_written = text
 
-    def observe(self, lines, now=None):
+    def observe(self, lines, now=None, trailing_newline=True):
         """Replace the log with the current tab paint.
 
         ``now`` remains accepted for compatibility with older callers.
@@ -50,12 +52,21 @@ class SessionTextLog:
         """
         present = ["" if line is None else str(line) for line in (lines or ())]
         with self._lock:
-            if self.file is None or present == self._prev:
+            if (
+                self.file is None
+                or (
+                    present == self._prev
+                    and trailing_newline == self._prev_trailing_newline
+                )
+            ):
                 return
             path = self._path
             temp_path = path + ".tmp"
-            snapshot = "\n".join(present) + "\n" if present else ""
+            snapshot = "\n".join(present)
+            if present and trailing_newline:
+                snapshot += "\n"
             replacement = None
+            fallback = None
             try:
                 replacement = open_private(
                     temp_path, "w", encoding="utf-8", newline="\n"
@@ -67,42 +78,33 @@ class SessionTextLog:
 
                 self.file.close()
                 self.file = None
-                os.replace(temp_path, path)
-                self.file = open_private(path, "a", encoding="utf-8", newline="\n")
-            except PermissionError:
-                # Windows refuses os.replace() while some readers keep the
-                # destination open without FILE_SHARE_DELETE. Keep logging
-                # usable for tailers by falling back to the old in-place
-                # rewrite in that specific case.
-                fallback = None
                 try:
-                    fallback = open_private(
-                        path, "w", encoding="utf-8", newline="\n"
-                    )
+                    os.replace(temp_path, path)
+                except PermissionError:
+                    # Windows refuses os.replace() while some readers keep
+                    # the destination open without FILE_SHARE_DELETE. Only
+                    # that operation gets the in-place fallback; a permission
+                    # failure creating/writing the temporary file is a real
+                    # logging failure and must not truncate the old snapshot.
+                    fallback = open_private(path, "w", encoding="utf-8", newline="\n")
                     fallback.write(snapshot)
                     fallback.flush()
                     fallback.close()
                     fallback = None
                     os.remove(temp_path)
+                finally:
                     self.file = open_private(
                         path, "a", encoding="utf-8", newline="\n"
                     )
-                except Exception:
-                    if fallback is not None:
-                        try:
-                            fallback.close()
-                        except Exception:
-                            pass
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                    except Exception:
-                        pass
-                    raise
             except Exception:
                 if replacement is not None:
                     try:
                         replacement.close()
+                    except Exception:
+                        pass
+                if fallback is not None:
+                    try:
+                        fallback.close()
                     except Exception:
                         pass
                 try:
@@ -119,6 +121,7 @@ class SessionTextLog:
                         pass
                 raise
             self._prev = present
+            self._prev_trailing_newline = trailing_newline
             self._last_written = present[-1] if present else None
 
     def flush_live_lines(self, lines):
@@ -138,3 +141,4 @@ class SessionTextLog:
             self.file = None
             self._path = None
             self._prev = []
+            self._prev_trailing_newline = None

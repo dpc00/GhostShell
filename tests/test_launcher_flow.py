@@ -28,6 +28,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from tests.sublime_stub import Settings, install as _install_stubs  # noqa: E402
+from terminal import cast_recorder as cast_recorder_module  # noqa: E402
+from terminal import session_text_log as session_text_log_module  # noqa: E402
 
 
 # ─── fake window/view the commands are driven through ────────────────────────
@@ -141,12 +143,18 @@ BETA = os.path.join(REPO, "tests")
 
 
 @pytest.fixture(autouse=True)
-def clean_state(monkeypatch):
+def clean_state(monkeypatch, tmp_path):
     """Fresh settings per test; never touch real state."""
     del _messages[:]
     settings = Settings()
     settings.update({"profiles": PROFILES, "default_profile": "Claude"})
     monkeypatch.setattr(ai_terminal, "_settings", settings, raising=False)
+    monkeypatch.setattr(
+        cast_recorder_module, "CAST_DIR", str(tmp_path / "casts")
+    )
+    monkeypatch.setattr(
+        session_text_log_module, "TEXT_LOG_DIR", str(tmp_path / "text_logs")
+    )
     monkeypatch.setattr(sys.modules["sublime"], "load_settings", lambda n: settings)
     # Treat every profile as installed unless a test says otherwise.
     monkeypatch.setattr(ai_terminal, "_profile_is_available", lambda n, s=None: True)
@@ -423,6 +431,109 @@ def test_pick_cwd_then_uses_sticky_dir_without_prompting():
     ai_terminal._pick_cwd_then(win, picked.append)
     assert picked == [BETA]
     assert not win.panels, "a sticky directory must never open a picker"
+
+
+def test_working_directory_survives_window_restart(monkeypatch):
+    settings = Settings()
+    saved = []
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(
+        ai_terminal.sublime, "save_settings", lambda name: saved.append(name)
+    )
+    first = FakeWindow(folders=[ALPHA, BETA])
+    ai_terminal._set_working_dir(first, BETA)
+
+    ai_terminal._working_dirs.clear()
+    restored = FakeWindow(folders=[ALPHA, BETA])
+    assert ai_terminal._get_working_dir(restored) == BETA
+    assert saved == [ai_terminal._WORKING_DIR_SETTINGS_NAME]
+
+
+def test_launcher_uses_saved_working_directory_without_directory_picker(
+    monkeypatch
+):
+    settings = Settings()
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(ai_terminal.sublime, "save_settings", lambda name: None)
+    win = FakeWindow(folders=[ALPHA, BETA])
+    ai_terminal._set_working_dir(win, BETA)
+
+    command = ai_terminal.AiTerminalLauncherCommand(win)
+    command._pick_dir(Settings(), "Codex", preset_dir=None)
+
+    assert win.commands[-1] == (
+        "ai_terminal_open_here",
+        {"profile": "Codex", "paths": [BETA]},
+    )
+    assert not win.panels
+
+
+def test_clear_working_directory_removes_persisted_value(monkeypatch):
+    win = FakeWindow(folders=[ALPHA, BETA])
+    identity = ai_terminal._working_dir_identity(win)
+    settings = Settings({"directories": {identity: BETA}})
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(ai_terminal.sublime, "save_settings", lambda name: None)
+    ai_terminal._clear_working_dir(win)
+    assert settings["directories"] == {}
+
+
+def test_saved_directory_survives_folder_list_changes(monkeypatch):
+    settings = Settings()
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(ai_terminal.sublime, "save_settings", lambda name: None)
+    original = FakeWindow(folders=[ALPHA, BETA])
+    ai_terminal._set_working_dir(original, BETA)
+
+    ai_terminal._working_dirs.clear()
+    changed = FakeWindow(folders=[BETA])
+    assert ai_terminal._get_working_dir(changed) == BETA
+
+
+def test_saved_directory_survives_project_to_folder_only_open(monkeypatch):
+    settings = Settings()
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(ai_terminal.sublime, "save_settings", lambda name: None)
+    project = FakeWindow(folders=[BETA])
+    project.project_file_name = lambda: os.path.join(BETA, "GhostShell.sublime-project")
+    ai_terminal._set_working_dir(project, BETA)
+
+    ai_terminal._working_dirs.clear()
+    folder_only = FakeWindow(folders=[BETA])
+    assert ai_terminal._get_working_dir(folder_only) == BETA
+
+
+def test_legacy_project_identity_self_migrates_to_folder_alias(monkeypatch):
+    project = FakeWindow(folders=[BETA])
+    project.project_file_name = lambda: os.path.join(BETA, "GhostShell.sublime-project")
+    primary = ai_terminal._working_dir_identity(project)
+    settings = Settings({"directories": {primary: BETA}})
+    saved = []
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(
+        ai_terminal.sublime, "save_settings", lambda name: saved.append(name)
+    )
+
+    assert ai_terminal._get_working_dir(project) == BETA
+    folder_alias = "folder:" + os.path.normcase(os.path.abspath(BETA))
+    assert settings["directories"][folder_alias] == BETA
+    assert saved == [ai_terminal._WORKING_DIR_SETTINGS_NAME]
+
+
+def test_stale_saved_directory_is_removed_with_status(monkeypatch):
+    win = FakeWindow(folders=[ALPHA])
+    identity = ai_terminal._working_dir_identity(win)
+    missing = os.path.join(ALPHA, "does-not-exist")
+    settings = Settings({"directories": {identity: missing}})
+    saved = []
+    monkeypatch.setattr(ai_terminal.sublime, "load_settings", lambda name: settings)
+    monkeypatch.setattr(
+        ai_terminal.sublime, "save_settings", lambda name: saved.append(name)
+    )
+    assert ai_terminal._get_working_dir(win) is None
+    assert settings["directories"] == {}
+    assert saved == [ai_terminal._WORKING_DIR_SETTINGS_NAME]
+    assert any("no longer exists" in text for kind, text in _messages)
 
 
 def test_pick_cwd_then_reports_ambiguity_instead_of_a_picker():
@@ -874,6 +985,39 @@ def test_broker_kill_closes_pipe_handles_after_natural_exit(monkeypatch):
         ("cancel", 13), ("close", 13),
     ]
     assert (pty._h_out, pty._h_in, pty._h_ctl) == (None, None, None)
+
+
+def test_broker_replay_budget_defaults_to_2_mib_and_is_bounded(monkeypatch):
+    monkeypatch.setattr(ai_terminal, "_settings", Settings(), raising=False)
+    assert ai_terminal._broker_scrollback_bytes() == 2 * 1024 * 1024
+
+    monkeypatch.setattr(
+        ai_terminal, "_settings",
+        Settings({"broker_scrollback_bytes": 1}), raising=False,
+    )
+    assert ai_terminal._broker_scrollback_bytes() == 1024 * 1024
+
+    monkeypatch.setattr(
+        ai_terminal, "_settings",
+        Settings({"broker_scrollback_bytes": 1024 ** 4}), raising=False,
+    )
+    assert ai_terminal._broker_scrollback_bytes() == 256 * 1024 * 1024
+
+
+def test_broker_spawn_passes_replay_budget(monkeypatch):
+    launched = []
+    monkeypatch.setattr(ai_terminal, "_broker_python_exe", lambda: "python.exe")
+    monkeypatch.setattr(
+        ai_terminal.subprocess, "Popen",
+        lambda command, **kwargs: launched.append((command, kwargs)),
+    )
+    pty = ai_terminal._BrokerPty(
+        "pipe", ["codex"], BETA, 80, 24, {}, scrollback_bytes=1234567
+    )
+    pty._spawn_broker()
+    command, _kwargs = launched[0]
+    index = command.index("--scrollback-bytes")
+    assert command[index + 1] == "1234567"
 
 
 def test_testing_agent_tab_close_requests_exit_and_swallows_close(

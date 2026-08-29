@@ -7,6 +7,7 @@ def test_valid_profile_schema():
             "launch_command": ["codex"],
             "spawn_env": {"RUST_LOG": "warn"},
             "detachable": True,
+            "broker_scrollback_bytes": 2097152,
             "scrollback_history_size": 300,
             "record_asciicast": False,
         }
