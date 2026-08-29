@@ -89,15 +89,15 @@ class CastRecorder:
         the previous event (relative timing -- v3 change from v2's absolute
         timestamps). One write per event under the lock; flush so a crash
         doesn't truncate the file. No-op when recording is off."""
-        if self.file is None:
-            return
-        now = time.time()
-        delta = now - self._last
-        self._last = now
-        # Round to ms (v3 spec recommends error-diffusion for drift; simple
-        # rounding is fine for sessions of realistic length).
-        line = json.dumps([round(delta, 3), code, data])
         with self._lock:
+            if self.file is None:
+                return
+            now = time.time()
+            delta = now - self._last
+            self._last = now
+            # Round to ms (v3 recommends error-diffusion for drift; simple
+            # rounding is fine for sessions of realistic length).
+            line = json.dumps([round(delta, 3), code, data])
             try:
                 self.file.write(line + "\n")
                 self.file.flush()
@@ -115,13 +115,21 @@ class CastRecorder:
                     self._notify("recording stopped after a write failure: %s" % e)
 
     def close(self):
-        if self.file is None:
-            return
-        self.write("x", "0")
         with self._lock:
+            if self.file is None:
+                return
+            handle = self.file
             try:
-                if self.file is not None:
-                    self.file.close()
+                now = time.time()
+                delta = now - self._last
+                self._last = now
+                handle.write(json.dumps([round(delta, 3), "x", "0"]) + "\n")
+                handle.flush()
             except Exception:
                 pass
-        self.file = None
+            finally:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                self.file = None

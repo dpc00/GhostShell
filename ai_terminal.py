@@ -2737,19 +2737,18 @@ class _Terminal:
             log.close()
 
     def _close_text_log(self):
-        """Observe the final live screen, write anything still held, close.
-        Safe to call more than once or before start()."""
+        """Close without replacing the last complete painted-tab snapshot.
+
+        ``_log_painted_tab`` records the exact text placed in the Sublime
+        view, including visible scrollback.  ``screen.live_lines_text()`` is
+        only the terminal's live screen, so using it as a final flush erases
+        scrollback from an otherwise-correct log when a session closes.
+        Safe to call more than once or before start().
+        """
         log = getattr(self, "_text_log", None)
         if log is None or log.file is None:
             return
-        try:
-            with self._lock:
-                lines = self.screen.live_lines_text()
-            log.flush_live_lines(lines)
-        except Exception as e:
-            print(f"[ai_terminal] text log final flush failed: {e}")
-        finally:
-            log.close()
+        log.close()
 
     def _ensure_writer(self):
         """Create the ordered PTY writer, including for hot-reloaded terminals."""
