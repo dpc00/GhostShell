@@ -1,8 +1,9 @@
-"""Tab text log: what was just painted on the Sublime tab.
+"""A live text snapshot of what was last painted on the Sublime tab.
 
-Only input is the lines of that paint. The logger does not open or read
-any other file. Unchanged paints are ignored. A line is written when it
-is newly present on the tab compared with the previous paint.
+Each paint already contains the complete rendered tab (scrollback and live
+screen).  Keep that snapshot verbatim instead of trying to turn successive
+frames into an append-only transcript: appending records every input edit,
+spinner frame, and status-line redraw that the user only saw temporarily.
 """
 import os
 
@@ -35,23 +36,23 @@ class SessionTextLog:
         self._last_written = text
 
     def observe(self, lines, now=None):
-        """`lines` is the current tab paint. `now` is ignored (kept so old calls work)."""
+        """Replace the log with the current tab paint.
+
+        ``now`` remains accepted for compatibility with older callers.
+        Blank lines and horizontal spacing are significant parts of the paint.
+        """
         if self.file is None:
             return
-        present = []
-        for ln in lines or ():
-            if not ln:
-                continue
-            text = ln.rstrip()
-            if text.strip():
-                present.append(text)
+        present = ["" if line is None else str(line) for line in (lines or ())]
         if present == self._prev:
             return
-        seen = set(self._prev)
         self._prev = present
-        for line in present:
-            if line not in seen:
-                self.write_line(line)
+        self.file.seek(0)
+        self.file.truncate()
+        if present:
+            self.file.write("\n".join(present) + "\n")
+        self.file.flush()
+        self._last_written = present[-1] if present else None
 
     def flush_live_lines(self, lines):
         self.observe(lines)

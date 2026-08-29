@@ -32,16 +32,16 @@ class CastRecorder:
         self._last = 0.0
         self._notify = notify
 
-    def open(self, cols, rows, argv):
+    def open(self, cols, rows, argv, filename_stamp=None):
         """Create the .cast file and write its v3 header. Raises on failure
         so the caller can report/roll back -- mirrors the old inline
         try/except in _Terminal.prepare()."""
         makedirs_private(CAST_DIR)
         self._t0 = time.time()
         self._last = self._t0
-        fname = f"ai_{time.strftime('%Y-%m-%d_%H%M%S')}.cast"
+        stamp = filename_stamp or time.strftime("%Y-%m-%d_%H%M%S")
+        fname = f"ai_{stamp}.cast"
         path = os.path.join(CAST_DIR, fname)
-        self.file = open_private(path, "w", encoding="utf-8", newline="")
         header = {
             "version": 3,
             "term": {
@@ -56,8 +56,33 @@ class CastRecorder:
             # verbatim, so key-shaped words are redacted.
             "command": redact_secrets(" ".join(argv) if argv else ""),
         }
-        self.file.write(json.dumps(header) + "\n")
-        self.file.flush()
+        # Do not publish the handle until a complete header is durable.  The
+        # old ordering assigned self.file immediately after O_TRUNC; an
+        # interrupted/failed reattach could therefore leave a zero-byte file
+        # that looked like recording had started successfully.
+        handle = None
+        try:
+            handle = open_private(path, "w", encoding="utf-8", newline="")
+            handle.write(json.dumps(header) + "\n")
+            handle.flush()
+            # A valid header is the minimum useful cast. Make it visible and
+            # durable before the terminal reader can enqueue a large broker
+            # replay event; otherwise an external observer can briefly see a
+            # zero-byte reattach file while that first event is being encoded.
+            os.fsync(handle.fileno())
+        except Exception:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+            try:
+                if os.path.exists(path) and os.path.getsize(path) == 0:
+                    os.remove(path)
+            except Exception:
+                pass
+            raise
+        self.file = handle
 
     def write(self, code, data):
         """Asciicast v3 event: [delta, code, data]. delta is seconds since
