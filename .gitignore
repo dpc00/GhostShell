@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .pytest*/
+.codex-test-tmp-*/
+.tmp/
 
 
 # Built binary artifact -- keep on disk (required at runtime) but don't track in git.
