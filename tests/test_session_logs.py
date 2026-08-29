@@ -102,6 +102,16 @@ def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch
     assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
 
 
+def test_terminal_close_does_not_replace_painted_snapshot_with_live_screen():
+    source = Path("ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("    def _close_text_log(self):")
+    end = source.index("\n\n\ndef _maybe_apply_osc_title", start)
+    close_source = source[start:end]
+    assert "lines = self.screen.live_lines_text()" not in close_source
+    assert "log.flush_live_lines" not in close_source
+    assert "log.close()" in close_source
+
+
 def test_cast_recorder_uses_supplied_correlated_stamp(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
     rec = CastRecorder()
@@ -109,6 +119,19 @@ def test_cast_recorder_uses_supplied_correlated_stamp(tmp_path, monkeypatch):
     rec.close()
     path = tmp_path / "ai_stamp_reattach.cast"
     assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["version"] == 3
+
+
+def test_cast_close_is_terminal_and_later_writes_are_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
+    rec = CastRecorder()
+    rec.open(80, 24, ["codex"], filename_stamp="closed")
+    rec.write("o", "before")
+    rec.close()
+    rec.write("o", "after")
+
+    lines = (tmp_path / "ai_closed.cast").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines[1:]]
+    assert [event[1:] for event in events] == [["o", "before"], ["x", "0"]]
 
 
 def test_cast_header_is_fsynced_before_open_returns(tmp_path, monkeypatch):
