@@ -493,7 +493,8 @@ class _BrokerPty:
     real failure to report, not a cue to spawn a same-named replacement.
     """
 
-    def __init__(self, pipe_name, argv, cwd, cols, rows, env, allow_spawn=True):
+    def __init__(self, pipe_name, argv, cwd, cols, rows, env, allow_spawn=True,
+                 scrollback_bytes=2 * 1024 * 1024):
         self.pipe_name = pipe_name
         self.argv = list(argv)
         self.pid = 0
@@ -502,6 +503,7 @@ class _BrokerPty:
         self._cols = cols
         self._rows = rows
         self._allow_spawn = allow_spawn
+        self._scrollback_bytes = scrollback_bytes
         self._h_out = None
         self._h_in = None
         self._h_ctl = None
@@ -592,6 +594,7 @@ class _BrokerPty:
             python_exe, _broker_script_path(),
             "--pipe-name", self.pipe_name,
             "--cols", str(self._cols), "--rows", str(self._rows),
+            "--scrollback-bytes", str(self._scrollback_bytes),
         ]
         if self._cwd:
             cmd += ["--cwd", self._cwd]
@@ -1804,6 +1807,15 @@ def _scrollback_size(profile_name=None):
             "scrollback_history_size", _DEFAULT_SCROLLBACK, profile_name=profile_name
         ),
     )
+
+
+def _broker_scrollback_bytes(profile_name=None):
+    """Bounded raw-output budget used to reconstruct detachable terminals."""
+    value = _setting_number(
+        "broker_scrollback_bytes", 2 * 1024 * 1024,
+        cast=int, profile_name=profile_name,
+    )
+    return max(1024 * 1024, min(value, 256 * 1024 * 1024))
 
 
 def _force_main_screen(profile_name=None):
@@ -3832,7 +3844,10 @@ def _log_painted_tab(term, text):
     if log is None or log.file is None:
         return
     try:
-        log.observe((text or "").splitlines())
+        painted = text or ""
+        log.observe(
+            painted.splitlines(), trailing_newline=painted.endswith("\n")
+        )
     except Exception as e:
         print("[ai_terminal] text log write failed:\n%s" % traceback.format_exc())
         term._notify("text log disabled after write failure: %s" % e)
@@ -5260,24 +5275,119 @@ def _resolve_here_path(window, paths):
 
 # Sticky per-window cwd override, set explicitly via the sidebar's "Set Ai
 # Terminal Working Directory" command (TermMate/GeminiCLI convention: pick
-# once, reuse silently after that — never re-ask). In-memory only, keyed by
-# window id; resets on restart rather than persisting like the old launch
-# history did, since this is one explicit choice, not a passive log.
+# once, reuse silently after that — never re-ask). The fast path is keyed by
+# window id; a User-only settings file preserves the explicit choice across
+# Sublime restarts without writing configuration into the project.
 _working_dirs = {}
+_WORKING_DIR_SETTINGS_NAME = "ai_terminal_working_directories.sublime-settings"
 
+
+def _working_dir_identity(window):
+    """Primary/legacy User-settings key without modifying the project."""
+    if window is None:
+        return None
+    project_file_name = getattr(window, "project_file_name", None)
+    project_file = project_file_name() if callable(project_file_name) else None
+    if project_file:
+        return "project:" + os.path.normcase(os.path.abspath(project_file))
+    folders = [
+        os.path.normcase(os.path.abspath(path))
+        for path in (window.folders() or [])
+    ]
+    return "folders:" + "|".join(sorted(folders)) if folders else None
+
+
+def _working_dir_identities(window, selected_path=None):
+    """Lookup/storage aliases stable across common window-shape changes."""
+    if window is None:
+        return []
+    keys = []
+    project_file_name = getattr(window, "project_file_name", None)
+    project_file = project_file_name() if callable(project_file_name) else None
+    if project_file:
+        keys.append("project:" + os.path.normcase(os.path.abspath(project_file)))
+
+    folders = list(window.folders() or [])
+    context_path = selected_path
+    if context_path is None:
+        view = window.active_view()
+        context_path = view.file_name() if view and view.file_name() else None
+    containing = _containing_window_folder(window, context_path) if context_path else None
+    if containing:
+        keys.append("folder:" + os.path.normcase(os.path.abspath(containing)))
+    elif len(folders) == 1:
+        keys.append("folder:" + os.path.normcase(os.path.abspath(folders[0])))
+
+    legacy = _working_dir_identity(window)
+    if legacy:
+        keys.append(legacy)
+    return list(dict.fromkeys(keys))
 
 def _get_working_dir(window):
     path = _working_dirs.get(window.id()) if window else None
-    return path if path and os.path.isdir(path) else None
-
+    if path and os.path.isdir(path):
+        return path
+    if window:
+        _working_dirs.pop(window.id(), None)
+    identities = _working_dir_identities(window)
+    if identities:
+        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        raw = saved.get("directories", {})
+        directories = dict(raw) if isinstance(raw, dict) else {}
+        stale = False
+        for identity in identities:
+            path = directories.get(identity)
+            if path and os.path.isdir(path):
+                migrated = False
+                for alias in _working_dir_identities(window, selected_path=path):
+                    if directories.get(alias) != path:
+                        directories[alias] = path
+                        migrated = True
+                if migrated:
+                    saved.set("directories", directories)
+                    sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+                _working_dirs[window.id()] = path
+                return path
+            if path:
+                directories.pop(identity, None)
+                stale = True
+        if stale:
+            saved.set("directories", directories)
+            sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+            sublime.status_message(
+                "Ai terminal: removed a saved working directory that no longer exists"
+            )
+    return None
 
 def _set_working_dir(window, path):
     _working_dirs[window.id()] = path
+    identities = _working_dir_identities(window, selected_path=path)
+    if identities:
+        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        directories = saved.get("directories", {})
+        directories = dict(directories) if isinstance(directories, dict) else {}
+        for identity in identities:
+            directories[identity] = path
+        saved.set("directories", directories)
+        sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
     sublime.status_message("Ai terminal: working directory set to %s" % path)
 
-
 def _clear_working_dir(window):
-    if _working_dirs.pop(window.id(), None):
+    removed = _working_dirs.pop(window.id(), None)
+    identities = _working_dir_identities(window, selected_path=removed)
+    if identities:
+        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        directories = saved.get("directories", {})
+        directories = dict(directories) if isinstance(directories, dict) else {}
+        changed = False
+        for identity in identities:
+            if directories.pop(identity, None) is not None:
+                changed = True
+        if changed:
+            saved.set("directories", directories)
+            sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+            removed = True
+    if removed:
         sublime.status_message("Ai terminal: working directory cleared")
 
 
@@ -5293,6 +5403,7 @@ def _pick_cwd_then(window, on_path):
     """
     sticky = _get_working_dir(window)
     if sticky:
+        sublime.status_message("Ai terminal: using saved working directory %s" % sticky)
         on_path(sticky)
         return
 
@@ -5325,8 +5436,9 @@ class AiTerminalSetWorkingDirectoryCommand(sublime_plugin.WindowCommand):
     """Sidebar: pin one folder as this window's Ai Terminal cwd.
 
     Command palette / sidebar right-click: "Set Ai Terminal Working
-    Directory". Every subsequent launch that would otherwise need to guess or
-    ask uses this folder silently, until cleared or reset to a different one.
+    Directory". Every subsequent launch uses this folder silently, including
+    after a Sublime restart, until cleared or reset to a different one. The
+    mapping lives in Packages/User, never inside the selected project.
     """
 
     def run(self, paths=None):
@@ -5454,7 +5566,10 @@ def _spawn(window, path, profile=None):
         # processes competing for one named pipe). Settings are written only
         # after pty.start() + registry insertion succeed, below.
         pipe_name = "ghostshell_" + uuid.uuid4().hex[:20]
-        pty = _BrokerPty(pipe_name, argv, path, cols, rows, env)
+        pty = _BrokerPty(
+            pipe_name, argv, path, cols, rows, env,
+            scrollback_bytes=_broker_scrollback_bytes(profile_name),
+        )
         print(f"[ai_terminal] Spawning PTY process using 'broker' backend (detachable, pipe={pipe_name!r}).")
     else:
         pty = _Pty(argv, path, cols, rows, env)
@@ -5888,6 +6003,14 @@ class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
     def _pick_dir(self, s, profile, preset_dir):
         if preset_dir:
             self._launch(profile, preset_dir)
+            return
+
+        sticky = _get_working_dir(self.window)
+        if sticky:
+            sublime.status_message(
+                "Ai terminal: using saved working directory %s" % sticky
+            )
+            self._launch(profile, sticky)
             return
 
         ranked, rows = _dir_items(self.window, context_profile=profile)

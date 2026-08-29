@@ -28,6 +28,7 @@ BOOLEAN_KEYS = frozenset({
 })
 
 NUMBER_KEYS = frozenset({
+    "broker_scrollback_bytes",
     "follow_ignore_trailing_lines",
     "max_columns",
     "min_columns",

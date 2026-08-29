@@ -615,7 +615,7 @@ def main():
     p.add_argument("--cwd", default=None, help="Working directory for the child.")
     p.add_argument("--cols", type=int, default=120)
     p.add_argument("--rows", type=int, default=40)
-    p.add_argument("--scrollback-bytes", type=int, default=262144,
+    p.add_argument("--scrollback-bytes", type=int, default=2 * 1024 * 1024,
                     help="Replayed to each newly (re)connected client.")
     p.add_argument("--env", action="append", default=[],
                     help="KEY=VALUE, repeatable, merged onto the broker's own environment.")
