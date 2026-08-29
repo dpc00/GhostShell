@@ -16,6 +16,16 @@ changes: **482 passed, 2 skipped**.
 
 ## OPEN, UNSOLVED — no reliable keyboard-or-click way to reposition the edit cursor for cut/paste; mouse-drag selection is the only precise mechanism (2026-08-27, later still)
 
+**Current live status (2026-08-29):** the previously described confusing
+PageUp/caret behavior was not occurring because PageUp itself did nothing in
+the normal Codex terminal. Root cause: the Codex profiles sent page keys to
+the PTY for Codex's Ctrl+T detail viewer. Live testing confirmed PageUp works
+there, but the viewer is mostly dense file/tool detail and of little use for
+ordinary conversation review. Removed those profile overrides; **live
+verified:** PageUp now pages Sublime's normal terminal scrollback. Do not
+pursue the old `terminal.offset` hypothesis without a new reproduction. The
+separate cut/paste limitation below remains a design limitation.
+
 **User's live report, same session as the caret-staleness confirmation
 above.** Two compounding gaps, not one:
 
