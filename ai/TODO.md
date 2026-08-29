@@ -14,7 +14,13 @@ without showing the directory picker, as intended. Automated verification for
 the accompanying launcher, bounded broker replay, and exact painted-tab log
 changes: **482 passed, 2 skipped**.
 
-## OPEN, UNSOLVED — no reliable keyboard-or-click way to reposition the edit cursor for cut/paste; mouse-drag selection is the only precise mechanism (2026-08-27, later still)
+## ACCEPTED LIMITATION — cursor keys stay on the command line; mouse selects and minimap scrolls (live accepted 2026-08-29)
+
+**Current decision:** in this profile, cursor-movement keys remain owned by
+the live command line. Mouse selection works, and the minimap provides
+scrollback navigation. The user confirmed this division is acceptable. Do
+not pursue a click-to-reposition or scrollback-cursor redesign unless a new
+requirement is raised.
 
 **Current live status (2026-08-29):** the previously described confusing
 PageUp/caret behavior was not occurring because PageUp itself did nothing in
