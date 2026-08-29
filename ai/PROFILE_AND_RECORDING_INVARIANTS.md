@@ -39,6 +39,14 @@ Failed, canceled, or duplicate connection attempts must create no recording
 files. A successful reattach creates a new correlated `*_reattach.cast` and
 `*_reattach.log` segment. It does not append to the pre-restart segment.
 
+The text log is a snapshot, not an append-only transcript. Each update is the
+complete text most recently painted into the Sublime tab. Snapshot publication
+uses atomic replacement when the platform permits it. On Windows, a reader may
+hold the destination without delete-sharing and make replacement impossible;
+that case falls back to an in-place rewrite so live tailing does not disable
+logging. Closing a terminal preserves the last paint; it must not replace it
+with `Screen.live_lines_text()`, which omits painted scrollback.
+
 ## Cast validity
 
 Cast names include microseconds so simultaneous sessions cannot truncate one
