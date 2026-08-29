@@ -570,7 +570,10 @@
             "launch_command": [
                 "powershell.exe"
             ],
-            "spawn_env": {}
+            "spawn_env": {},
+            // Keep the PowerShell process outside Sublime's lifetime so the
+            // terminal can reconnect to it after an ST restart.
+            "detachable": true
         },
         "Pybackup Go TUI": {
             "force_main_screen": false,

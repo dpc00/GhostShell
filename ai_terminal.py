@@ -4388,6 +4388,17 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
 
     def on_activated(self):
         self._preclamp_vp()
+        # Sublime can restore a terminal view with a stale viewport/frame
+        # even though the PTY screen and backing buffer are current.  A
+        # layout change (moving the tab to another column) happens to force a
+        # repaint, which otherwise leaves prompts/output invisible until the
+        # user jiggles the layout.  Mark the screen dirty and request one
+        # activation paint so focus changes are visually self-healing.
+        term = _Terminal.from_id(self.view.id())
+        if term is not None and term.pty.is_alive():
+            with term._lock:
+                term.screen.dirty = True
+            _schedule_render(term, delay_ms=0)
         _maybe_reattach_broker(self.view)
 
     def on_deactivated(self):
@@ -5574,15 +5585,25 @@ def _reattach_broker_view(view, pipe_name):
             if existing is not None:
                 pty.kill()
                 return
+            view.settings().set(_VIEW_SETTING, True)
+            view.settings().erase("ai_terminal_orphaned")
             _term_registry()[vid] = term
         term.start_reader()
         print(f"[ai_terminal] reattached view {vid} to pipe {pipe_name!r}")
 
     def _finish_failed(message, trace):
         _BROKER_CONNECTING.discard(vid)
-        # Leave the view inert. In particular, do not clear its persisted pipe
-        # identity or auto-resume Codex; a later explicit recovery may still
-        # succeed without replaying or spending tokens.
+        # Leave the restored buffer readable, but stop advertising it as a
+        # live terminal.  Keeping ai_terminal_view=true with no registered
+        # _Terminal makes the global keymap capture arrows/PageUp/etc. and
+        # then drop them, producing an apparently frozen tab after a failed
+        # reattach.  Preserve the pipe identity for explicit recovery.
+        try:
+            view.settings().set(_VIEW_SETTING, False)
+            view.settings().set("ai_terminal_orphaned", True)
+            view.set_read_only(False)
+        except Exception:
+            pass
         print("[ai_terminal] reattach: broker connect failed:\n%s" % trace)
         sublime.status_message(f"Ai terminal: could not reattach ({message})")
 
@@ -6271,6 +6292,28 @@ def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         if term is not None:
             term._last_vp_y = view.viewport_position()[1]
             term._live_anchor_y = term._last_vp_y
+
+
+def _post_render_follow(term):
+    """Re-apply live-tail following after ST has recomputed layout metrics.
+
+    A full terminal-buffer replace can return before Sublime updates
+    ``layout_extent``.  The first follow calculation then targets the old
+    height, leaving the newest prompt below the visible viewport until a
+    column/layout change forces a repaint.  This deferred correction only
+    runs while the terminal still owns follow mode, so it cannot override a
+    user's intentional scrollback position.
+    """
+    try:
+        view = term.view
+        if (view is None or not view.is_valid() or not term.pty.is_alive()
+                or not term._auto_follow):
+            return
+        _scroll_to_bottom(view)
+        term._last_vp_y = view.viewport_position()[1]
+        term._live_anchor_y = term._last_vp_y
+    except Exception:
+        pass
 
 
 class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
@@ -6962,6 +7005,10 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         if content_fits or tui_owns_scroll:
             _pin_viewport_rest(view, rest, term)
+        elif do_follow:
+            # Allow Sublime one turn to recompute layout_extent after the
+            # full-buffer replace, then correct the live-tail viewport.
+            sublime.set_timeout(lambda t=term: _post_render_follow(t), 35)
 
 
 class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
