@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 from pathlib import Path
 
 from terminal import color_scheme_log as csl
@@ -100,6 +101,91 @@ def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["top  ", "", "bottom"])
     assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
+
+
+def test_text_log_close_waits_for_an_in_progress_paint(tmp_path, monkeypatch):
+    log, _path = _open_text_log(tmp_path, monkeypatch)
+    entered_replace = threading.Event()
+    release_replace = threading.Event()
+    original_replace = stl.os.replace
+
+    def blocking_replace(source, destination):
+        entered_replace.set()
+        assert release_replace.wait(2)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(stl.os, "replace", blocking_replace)
+    paint = threading.Thread(target=lambda: log.observe(["complete paint"]))
+    paint.start()
+    assert entered_replace.wait(2)
+    closing = threading.Thread(target=log.close)
+    closing.start()
+    assert closing.is_alive()
+    release_replace.set()
+    paint.join(2)
+    closing.join(2)
+    assert not paint.is_alive()
+    assert not closing.is_alive()
+    assert log.file is None
+
+
+def test_observe_atomically_replaces_the_previous_snapshot(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    replacements = []
+    original_replace = stl.os.replace
+
+    def recording_replace(source, destination):
+        assert Path(source).read_text(encoding="utf-8") == "new\nsnapshot\n"
+        assert path.read_text(encoding="utf-8") == "old\nsnapshot\n"
+        replacements.append((source, destination))
+        return original_replace(source, destination)
+
+    log.observe(["old", "snapshot"])
+    monkeypatch.setattr(stl.os, "replace", recording_replace)
+    log.observe(["new", "snapshot"])
+    log.close()
+
+    assert len(replacements) == 1
+    assert path.read_text(encoding="utf-8") == "new\nsnapshot\n"
+    assert not (tmp_path / "ai_observe.log.tmp").exists()
+
+
+def test_observe_can_replace_snapshot_while_an_external_reader_is_open(
+    tmp_path, monkeypatch
+):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["first"])
+    with path.open("r", encoding="utf-8") as reader:
+        assert reader.read() == "first\n"
+        log.observe(["second"])
+    log.close()
+    assert path.read_text(encoding="utf-8") == "second\n"
+
+
+def test_failed_atomic_replace_keeps_old_snapshot_and_can_retry(
+    tmp_path, monkeypatch
+):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["old"])
+    original_replace = stl.os.replace
+
+    def fail_replace(_source, _destination):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(stl.os, "replace", fail_replace)
+    try:
+        log.observe(["new"])
+        assert False, "observe should report a failed replacement"
+    except OSError as error:
+        assert "simulated replace failure" in str(error)
+
+    assert path.read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "ai_observe.log.tmp").exists()
+
+    monkeypatch.setattr(stl.os, "replace", original_replace)
+    log.observe(["new"])
+    log.close()
+    assert path.read_text(encoding="utf-8") == "new\n"
 
 
 def test_terminal_close_does_not_replace_painted_snapshot_with_live_screen():
