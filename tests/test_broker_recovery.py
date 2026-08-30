@@ -57,6 +57,7 @@ def test_reattach_command_is_exposed_and_detaches_without_killing_broker():
     )
     assert any(
         item.get("command") == "ai_terminal_reattach_session"
+        and item.get("caption") == "Ai Terminal: Recover Orphaned Session..."
         for item in commands
     )
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
