@@ -1297,7 +1297,7 @@ def test_reattach_choices_hide_dead_gc_terms_after_successful_process_scan(monke
     command._show_choices([dead], [], error=None)
 
     assert shown == []
-    assert messages == ["Ai terminal: no detachable sessions found"]
+    assert messages == ["Ai terminal: no orphaned sessions found"]
 
 
 def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch):
@@ -1321,4 +1321,4 @@ def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch)
     )
 
     assert shown == []
-    assert messages == ["Ai terminal: no detachable sessions found"]
+    assert messages == ["Ai terminal: no orphaned sessions found"]

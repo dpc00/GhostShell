@@ -7555,7 +7555,7 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
         if not sessions:
             detail = f" ({error})" if error else ""
             sublime.status_message(
-                "Ai terminal: no detachable sessions found" + detail
+                "Ai terminal: no orphaned sessions found" + detail
             )
             return
 
