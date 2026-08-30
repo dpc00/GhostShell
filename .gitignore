@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .pytest*/
+pytest-cache-files-*/
+.test-tmp/
 .codex-test-tmp-*/
 .tmp/
 
