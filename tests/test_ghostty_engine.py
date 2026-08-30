@@ -36,6 +36,67 @@ def _detached_parser():
     return GhosttyParser.__new__(GhosttyParser)
 
 
+class SynchronizedScrollbackTests(unittest.TestCase):
+    class _Native:
+        def terminal_vt_write(self, _term, _data, _length):
+            pass
+
+    def _parser(self):
+        parser = _detached_parser()
+        parser.force_main_screen = False
+        parser._sync_open = False
+        parser._replace_scroll = False
+        parser._replace_origin = None
+        parser._g = self._Native()
+        parser._term = None
+        parser.s = type("ScreenStub", (), {"sync_output": False})()
+        return parser
+
+    def test_open_frame_defers_all_python_synchronization(self):
+        parser = self._parser()
+        parser._sync = lambda: self.fail("open synchronized frame must not sync")
+        parser.feed("\x1b[?2026hpartial frame")
+        self.assertTrue(parser.s.sync_output)
+
+    def test_closing_frame_synchronizes_once(self):
+        parser = self._parser()
+        parser._sync_open = True
+        parser._resize_replay_pending = True
+        calls = []
+        parser._sync = lambda: calls.append("sync")
+        parser.feed("rest of frame\x1b[?2026l")
+        self.assertEqual(calls, ["sync"])
+        self.assertFalse(parser._resize_replay_pending)
+
+    def test_open_home_dump_defers_native_scrollback_walk(self):
+        parser = _detached_parser()
+        parser._sync_open = True
+        parser._replace_scroll = True
+
+        def unexpected_native_read(_kind):
+            self.fail("open synchronized replay must not read scrollback")
+
+        parser._get_size = unexpected_native_read
+        parser._sync_scrollback()
+
+    def test_resize_replay_keeps_locally_reflowed_history(self):
+        parser = _detached_parser()
+        parser._sync_open = False
+        parser._replace_scroll = True
+        parser._replace_origin = 12
+        parser._resize_replay_pending = True
+        parser._last_scrollback_rows = 100
+        parser._get_size = lambda _kind: 6250
+        parser.s = type("ScreenStub", (), {"dirty": False})()
+
+        parser._sync_scrollback()
+
+        self.assertEqual(parser._last_scrollback_rows, 6250)
+        self.assertFalse(parser._resize_replay_pending)
+        self.assertIsNone(parser._replace_origin)
+        self.assertTrue(parser.s.dirty)
+
+
 def _style(**kwargs):
     style = gvt.GhosttyStyle().init()
     for name, value in kwargs.items():

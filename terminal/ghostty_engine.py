@@ -453,6 +453,7 @@ class GhosttyParser:
         self._sync_open = False
         self._replace_scroll = False
         self._replace_origin = None
+        self._resize_replay_pending = False
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
@@ -486,6 +487,7 @@ class GhosttyParser:
     def feed(self, text):
         if self.force_main_screen:
             text = self._alt_screen_filter.feed(text)
+        sync_was_open = self._sync_open
         self._sync_open, self._replace_scroll = update_replace_scroll(
             self._sync_open, self._replace_scroll, text
         )
@@ -493,7 +495,23 @@ class GhosttyParser:
         # ghostty_terminal_vt_write returns void (see its restype in
         # ghostty_vt.py) -- nothing to check here.
         self._g.terminal_vt_write(self._term, data, len(data))
-        self._sync()
+        if self._sync_open:
+            # Mode 2026 makes the native update atomic.  A resize repaint can
+            # span dozens of PTY reads; syncing each intermediate read walks
+            # the active grid through per-cell ctypes calls even though the
+            # renderer must not display it.  Keep only the native terminal
+            # current and materialize its final grid/history once, when the
+            # closing chunk arrives.
+            self.s.sync_output = True
+        else:
+            self._sync()
+            # Some Codex versions wrap their resize repaint in mode 2026 but
+            # do not emit the CUP-home form recognized by _replace_scroll.
+            # Once that atomic cycle closes there is no resize replay left to
+            # match; do not let the optimization flag leak into a later,
+            # unrelated home redraw.
+            if sync_was_open:
+                self._resize_replay_pending = False
         # Next chunk starts clean unless 2026 is still open (split dump).
         if not self._sync_open:
             self._replace_scroll = False
@@ -507,10 +525,12 @@ class GhosttyParser:
             "ghostty_terminal_resize",
         )
         self.s.resize(cols, rows)
-        # A resize can reflow scrollback content without changing its row
-        # count, which the row-count-delta check in _sync_scrollback can't
-        # detect -- force a full rebuild on the next sync.
-        self._last_scrollback_rows = -1
+        # Screen.resize has already reflowed the authoritative Python history.
+        # The child generally follows with a synchronized home+full-transcript
+        # repaint.  Remember that this replacement belongs to the resize so
+        # _sync_scrollback can retain the local reflow instead of extracting
+        # the same conversation cell-by-cell through the grid-ref API.
+        self._resize_replay_pending = True
 
     def reset(self):
         self._alt_screen_filter.reset()
@@ -519,6 +539,7 @@ class GhosttyParser:
         self._sync_open = False
         self._replace_scroll = False
         self._replace_origin = None
+        self._resize_replay_pending = False
         self._sync()
 
     def bind_write_pty(self, sink):
@@ -860,8 +881,27 @@ class GhosttyParser:
                 s.private_modes.add(mode)
 
     def _sync_scrollback(self):
+        # feed() normally defers the entire sync while mode 2026 is open. Keep
+        # this guard as a safety net for direct/internal sync callers too.
+        if self._sync_open and self._replace_scroll:
+            return
+
         scrollback_rows = self._get_size(gvt.TERMINAL_DATA_SCROLLBACK_ROWS)
         last = self._last_scrollback_rows
+
+        if self._resize_replay_pending and self._replace_scroll:
+            # resize() already reflowed s.history.  A home+2026 repaint is the
+            # child reproducing that same transcript at the new width; bulk
+            # importing it here costs several ctypes calls per cell and is the
+            # dominant cost for long sessions.  The active grid is synchronized
+            # separately by _sync_grid, so commit the native row-count baseline
+            # and let later genuinely new overflow use the incremental path.
+            self._last_scrollback_rows = scrollback_rows
+            self._resize_replay_pending = False
+            self._replace_origin = None
+            self.s.dirty = True
+            return
+
         if scrollback_rows == last:
             return
 
