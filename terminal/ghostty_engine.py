@@ -491,6 +491,17 @@ class GhosttyParser:
         self._sync_open, self._replace_scroll = update_replace_scroll(
             self._sync_open, self._replace_scroll, text
         )
+        if self.force_main_screen and self._replace_scroll:
+            # Main-screen transcript TUIs repaint from home without always
+            # erasing shorter old rows first.  After Windows ConPTY has
+            # normalized the stream, those stale active-grid tails can be
+            # scrolled into native history as splice/rolling-digit garbage.
+            # This path is already classified as a synchronized replacement;
+            # clear only the active grid at its first home.  Python history is
+            # retained/reconciled by _sync_scrollback below.
+            text = _CUP_HOME_RE.sub(
+                lambda match: match.group(0) + "\x1b[2J", text, count=1
+            )
         data = text.encode("utf-8", "surrogateescape")
         # ghostty_terminal_vt_write returns void (see its restype in
         # ghostty_vt.py) -- nothing to check here.
@@ -529,6 +540,10 @@ class GhosttyParser:
         self._sync_open, self._replace_scroll = update_replace_scroll(
             self._sync_open, self._replace_scroll, text
         )
+        if self.force_main_screen and self._replace_scroll:
+            text = _CUP_HOME_RE.sub(
+                lambda match: match.group(0) + "\x1b[2J", text, count=1
+            )
         data = text.encode("utf-8", "surrogateescape")
         self._g.terminal_vt_write(self._term, data, len(data))
 
