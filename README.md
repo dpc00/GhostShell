@@ -57,6 +57,14 @@ tests/                  -- unit tests for terminal/*, no Sublime required
 See [COMMANDS.md](COMMANDS.md) for every registered command: ST command name,
 command palette entry, menu location(s), and keybinding.
 
+`Ai Terminal: Sync Detected Agent Profiles` is an optional bootstrap command.
+It checks the current PATH for CLIs known to `terminal/agent_catalog.py` and
+rewrites only the machine-generated `ai_terminal_agents.sublime-settings`.
+It never edits `ai_terminal.sublime-settings`; a hand-written profile with the
+same display name always overrides the generated one. Syncing is useful after
+installing a new agent, but is unnecessary for profiles already maintained in
+the main settings file.
+
 See [docs/DETACHABLE_SESSIONS.md](docs/DETACHABLE_SESSIONS.md) for the
 windowless broker architecture, recovery commands, guarantees, limitations,
 and live detach/reconnect soak tests.
