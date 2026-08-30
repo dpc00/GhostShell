@@ -80,6 +80,40 @@ class SynchronizedScrollbackTests(unittest.TestCase):
         self.assertEqual(calls, ["sync"])
         self.assertFalse(parser._resize_replay_pending)
 
+    def test_main_screen_home_replay_clears_stale_active_grid(self):
+        parser = self._parser()
+        parser.force_main_screen = True
+        parser._alt_screen_filter = type(
+            "PassThrough", (), {"feed": staticmethod(lambda text: text)}
+        )()
+        writes = []
+        parser._g.terminal_vt_write = (
+            lambda _term, data, length: writes.append(bytes(data[:length]))
+        )
+        parser._sync = lambda: None
+
+        parser.feed("\x1b[?2026h\x1b[Hshort repaint\x1b[?2026l")
+
+        self.assertEqual(
+            writes,
+            [b"\x1b[?2026h\x1b[H\x1b[2Jshort repaint\x1b[?2026l"],
+        )
+
+    def test_alt_screen_home_replay_is_not_modified(self):
+        parser = self._parser()
+        writes = []
+        parser._g.terminal_vt_write = (
+            lambda _term, data, length: writes.append(bytes(data[:length]))
+        )
+        parser._sync = lambda: None
+
+        parser.feed("\x1b[?2026h\x1b[Hpartial TUI repaint\x1b[?2026l")
+
+        self.assertEqual(
+            writes,
+            [b"\x1b[?2026h\x1b[Hpartial TUI repaint\x1b[?2026l"],
+        )
+
     def test_open_home_dump_defers_native_scrollback_walk(self):
         parser = _detached_parser()
         parser._sync_open = True

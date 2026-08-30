@@ -203,6 +203,30 @@ restart and was closed. Full suite: 448 passed, same one pre-existing failure
 
 ## Splatter/splice corruption: one real bug found+fixed, root cause narrowed to the ctypes/native boundary (2026-08-27, ~2:30am–3:45am)
 
+**RESOLVED 2026-08-30 - production-shaped ConPTY repro and bounded fix.**
+The earlier pure-C harness remains valid: the byte-identical Ghostty library
+does not invent corrupt cells when fed the mock repaint directly. What it did
+not include was the real Windows ConPTY stage and GhostShell's production
+8192-byte read cadence. `tools/repro_splatter_conpty.py` now supplies that
+missing layer: it launches the real `Testing Agent` inside the same `_Pty`
+implementation as `agent_broker.py`, feeds the resulting chunks through the
+real parser at the live repro's 93x47 geometry, and validates every prompt and
+numbered reply row. Baseline reproduced the splice/rolling-digit corruption
+deterministically (3/3 initial trials), including the documented
+`user prompt TURN-00ent reply line ...` signature.
+
+The failure is stale active-grid content entering scrollback during a
+main-screen TUI's synchronized `CUP home` transcript replacement. Those
+repaints do not necessarily erase shorter old rows before overwriting them;
+history comparison can repair a stale tail only while a clean prior copy still
+survives. GhostShell already recognizes this exact frame as a replacement.
+At that boundary it now inserts `ED 2` immediately after the first home,
+clearing only the active grid before the replay; `_sync_scrollback` continues
+to retain/reconcile real Python history. The behavior is restricted to
+`force_main_screen` plus synchronized home replacements. Alternate-screen and
+ordinary output are unchanged. Verification: 30/30 real-ConPTY trials clean,
+targeted parser/splatter tests clean, full suite 502 passed / 2 skipped.
+
 **Correction to this entry's own earlier claim** (caught in review): the
 control-profile test below varied only `caret_footer_pinning_enabled`; the
 other four bisection gates (`host_cursor_paint_enabled`,
