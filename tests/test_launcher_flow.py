@@ -1322,3 +1322,47 @@ def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch)
 
     assert shown == []
     assert messages == ["Ai terminal: no orphaned sessions found"]
+
+
+def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
+    monkeypatch,
+):
+    view = FakeView(vid=907)
+    window = FakeWindow(active_view=view)
+    view.window = lambda: window
+    detached = []
+    pty = types.SimpleNamespace(
+        pipe_name="frozen-pipe",
+        _cwd=BETA,
+        kill=lambda: detached.append(True),
+    )
+    term = types.SimpleNamespace(view=view, pty=pty, profile_name="Codex")
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    monkeypatch.setattr(ai_terminal, "_is_broker_pty", lambda candidate: candidate is pty)
+    scheduled = []
+    monkeypatch.setattr(
+        sys.modules["sublime"],
+        "set_timeout",
+        lambda callback, delay=0: scheduled.append((callback, delay)),
+    )
+    reattached = []
+    monkeypatch.setattr(
+        ai_terminal,
+        "_reattach_broker_view",
+        lambda target, pipe: reattached.append((target, pipe)),
+    )
+    try:
+        command = ai_terminal.AiTerminalReviveFrozenTabCommand(view)
+        assert command.is_enabled()
+        command.run(None)
+
+        assert detached == [True]
+        assert ai_terminal._Terminal.from_id(view.id()) is None
+        assert view.settings().get(ai_terminal._BROKER_PIPE_SETTING) == "frozen-pipe"
+        assert scheduled[0][1] == 500
+        scheduled[0][0]()
+        assert reattached == [(view, "frozen-pipe")]
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)

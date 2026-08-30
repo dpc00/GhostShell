@@ -9,6 +9,7 @@
 	{"caption": "Ai Terminal: Set Working Directory", "command": "ai_terminal_set_working_directory"},
 	{"caption": "Ai Terminal: Clear Working Directory", "command": "ai_terminal_clear_working_directory"},
 	{"caption": "Ai Terminal: Recover Orphaned Session...", "command": "ai_terminal_reattach_session"},
+	{"caption": "Ai Terminal: Revive Frozen Tab", "command": "ai_terminal_revive_frozen_tab"},
 	{"caption": "Ai Terminal: Nuke", "command": "ai_terminal_nuke"},
 	{"caption": "Ai Terminal: Switch Panel...", "command": "ai_terminal_switch_panel"}
 ]

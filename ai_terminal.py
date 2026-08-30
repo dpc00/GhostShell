@@ -7434,6 +7434,77 @@ class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
         return term is not None and _is_broker_pty(term.pty)
 
 
+def _revive_terminal_client(term, window):
+    """Reconnect one tab to its broker without ending the agent process."""
+    old_view = term.view
+    pty = term.pty
+    pipe_name = pty.pipe_name
+    profile_name = getattr(term, "profile_name", None)
+    cwd = getattr(pty, "_cwd", None)
+    view_name = None
+    view_is_usable = False
+    try:
+        view_is_usable = bool(old_view and old_view.is_valid() and old_view.window())
+        if view_is_usable:
+            view_name = old_view.name()
+    except Exception:
+        view_is_usable = False
+
+    with _term_lock():
+        for vid, candidate in list(_term_registry().items()):
+            if candidate is term:
+                _term_registry().pop(vid, None)
+
+    # BrokerPty.kill is detach-only. It closes this plugin's pipe handles but
+    # leaves the broker and its child process untouched.
+    pty.kill()
+
+    if view_is_usable:
+        target = old_view
+    else:
+        target = window.new_file()
+        target.set_scratch(True)
+        if view_name:
+            target.set_name(view_name)
+        elif profile_name:
+            target.set_name(profile_name)
+        else:
+            target.set_name("Recovered Ai Terminal")
+
+    target.settings().set(_VIEW_SETTING, True)
+    target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
+    if profile_name:
+        target.settings().set(_BROKER_PROFILE_SETTING, profile_name)
+    if cwd:
+        target.settings().set(_BROKER_CWD_SETTING, cwd)
+
+    sublime.status_message(f"Ai terminal: reviving {pipe_name}")
+    # Give the broker's input/output server loops time to observe both closed
+    # client handles and create fresh pipe instances.
+    sublime.set_timeout(
+        lambda v=target, p=pipe_name: _reattach_broker_view(v, p), 500
+    )
+
+
+class AiTerminalReviveFrozenTabCommand(sublime_plugin.TextCommand):
+    """Rebuild this tab's broker connection without terminating its agent."""
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        window = self.view.window()
+        if term is None or window is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab cannot be revived")
+            return
+        _revive_terminal_client(term, window)
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
 class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
     """Reconnect a detachable broker already held by this GhostShell process.
 
@@ -7602,54 +7673,7 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
         _reattach_broker_view(target, pipe_name)
 
     def _reattach(self, term):
-        old_view = term.view
-        pty = term.pty
-        pipe_name = pty.pipe_name
-        profile_name = getattr(term, "profile_name", None)
-        cwd = getattr(pty, "_cwd", None)
-        view_name = None
-        view_is_usable = False
-        try:
-            view_is_usable = bool(old_view and old_view.is_valid() and old_view.window())
-            if view_is_usable:
-                view_name = old_view.name()
-        except Exception:
-            view_is_usable = False
-
-        with _term_lock():
-            for vid, candidate in list(_term_registry().items()):
-                if candidate is term:
-                    _term_registry().pop(vid, None)
-
-        # BrokerPty.kill is detach-only. It closes this plugin's pipe handles
-        # but leaves the broker and its child process untouched.
-        pty.kill()
-
-        if view_is_usable:
-            target = old_view
-        else:
-            target = self.window.new_file()
-            target.set_scratch(True)
-            if view_name:
-                target.set_name(view_name)
-            elif profile_name:
-                target.set_name(profile_name)
-            else:
-                target.set_name("Recovered Ai Terminal")
-
-        target.settings().set(_VIEW_SETTING, True)
-        target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
-        if profile_name:
-            target.settings().set(_BROKER_PROFILE_SETTING, profile_name)
-        if cwd:
-            target.settings().set(_BROKER_CWD_SETTING, cwd)
-
-        sublime.status_message(f"Ai terminal: reconnecting {pipe_name}")
-        # Give the broker's input/output server loops time to observe both
-        # closed client handles and create fresh pipe instances.
-        sublime.set_timeout(
-            lambda v=target, p=pipe_name: _reattach_broker_view(v, p), 500
-        )
+        _revive_terminal_client(term, self.window)
 
 
 class AiTerminalNukeCommand(sublime_plugin.TextCommand):

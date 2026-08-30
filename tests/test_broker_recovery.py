@@ -64,8 +64,28 @@ def test_reattach_command_is_exposed_and_detaches_without_killing_broker():
     start = source.index("class AiTerminalReattachSessionCommand")
     end = source.index("class AiTerminalNukeCommand", start)
     command_source = source[start:end]
-    assert "pty.kill()" in command_source
+    assert "_revive_terminal_client(term, self.window)" in command_source
     assert "explicit_kill" not in command_source
+
+
+def test_revive_frozen_tab_command_is_exposed_and_never_kills_agent():
+    import json
+
+    commands = json.loads(
+        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
+    )
+    assert any(
+        item.get("command") == "ai_terminal_revive_frozen_tab"
+        and item.get("caption") == "Ai Terminal: Revive Frozen Tab"
+        for item in commands
+    )
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    helper_start = source.index("def _revive_terminal_client(")
+    helper_end = source.index("class AiTerminalReviveFrozenTabCommand", helper_start)
+    helper_source = source[helper_start:helper_end]
+    assert "pty.kill()" in helper_source
+    assert "explicit_kill" not in helper_source
+    assert "_reattach_broker_view" in helper_source
 
 
 def test_reattach_command_discovers_orphaned_broker_processes():
