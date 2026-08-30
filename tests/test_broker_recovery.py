@@ -49,14 +49,16 @@ def test_broker_publishes_and_removes_external_session_registry():
     assert "_remove_registry(args.registry_file)" in source
 
 
-def test_broker_lifecycle_log_captures_job_membership_and_normal_exit():
+def test_broker_lifecycle_log_captures_job_membership_and_child_exit_code():
     source = (ROOT / "tools" / "agent_broker.py").read_text(encoding="utf-8")
     launcher = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
 
     assert '"--log-file"' in launcher
     assert "_configure_lifecycle_log(args.log_file)" in source
     assert "_current_process_is_in_job()" in source
-    assert "broker stopping normally; child_alive=" in source
+    assert "child process exited pid=%d exit_code=%d (0x%08X)" in source
+    assert "def exit_code(self):" in source
+    assert "broker stopping normally; child_alive=%r child_exit_code=%r" in source
 
 
 def test_outside_job_launcher_uses_short_lived_interactive_scheduled_task():

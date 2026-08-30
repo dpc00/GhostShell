@@ -175,6 +175,7 @@ class _Pty:
         self._attr_list = None
         self._heap_buf = None
         self._alive = True
+        self._exit_code = None
         self._pc_lock = threading.Lock()
         self._exit_watcher = None
         self._cmdline = subprocess.list2cmdline(self.argv)
@@ -276,9 +277,45 @@ class _Pty:
             return
         try:
             _k32.WaitForSingleObject(h, _INFINITE)
+            code = DWORD(0)
+            if _k32.GetExitCodeProcess(h, byref(code)):
+                self._exit_code = code.value
+                print(
+                    "[%s] child process exited pid=%d exit_code=%d (0x%08X)"
+                    % (
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                        self.pid,
+                        self._exit_code,
+                        self._exit_code,
+                    )
+                )
+            else:
+                print(
+                    "[%s] child process exited pid=%d exit_code=unknown "
+                    "(GetLastError %d)"
+                    % (
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                        self.pid,
+                        ctypes.get_last_error(),
+                    )
+                )
         except Exception:
             print("[agent_broker] exit watcher failed:\n%s" % traceback.format_exc())
         self._close_pc()
+
+    def exit_code(self):
+        """Return the child's cached/current Windows process exit code, if known."""
+        if self._exit_code is not None:
+            return self._exit_code
+        if self._hProcess is None:
+            return None
+        code = DWORD(0)
+        if not _k32.GetExitCodeProcess(self._hProcess, byref(code)):
+            return None
+        if code.value == _STILL_ACTIVE:
+            return None
+        self._exit_code = code.value
+        return self._exit_code
 
     def _close_pc(self):
         with self._pc_lock:
@@ -757,8 +794,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        print("[%s] broker stopping normally; child_alive=%r" % (
-            time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(),
+        print("[%s] broker stopping normally; child_alive=%r child_exit_code=%r" % (
+            time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(), pty.exit_code(),
         ))
         pty.kill()
         _remove_registry(args.registry_file)
