@@ -142,6 +142,8 @@ if os.name == "nt":
         _k32.WriteFile.restype = BOOL
         _k32.GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
         _k32.GetExitCodeProcess.restype = BOOL
+        _k32.OpenProcess.argtypes = [DWORD, BOOL, DWORD]
+        _k32.OpenProcess.restype = HANDLE
         _k32.TerminateProcess.argtypes = [HANDLE, DWORD]
         _k32.TerminateProcess.restype = BOOL
         _k32.WaitForSingleObject.argtypes = [HANDLE, DWORD]
@@ -165,6 +167,7 @@ if os.name == "nt":
         _INVALID_HANDLE_VALUE = HANDLE(-1).value
 
         _STILL_ACTIVE = 259
+        _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         _INFINITE = 0xFFFFFFFF
         _PTY_OK = True
     except Exception as _e:  # pragma: no cover
@@ -437,11 +440,12 @@ class _Pty:
 # Same interface as _Pty (start/read/write/resize/is_alive/kill, .pid) so it's
 # a drop-in replacement wherever _Pty is constructed. Instead of owning a
 # ConPTY directly, it connects to a named pipe served by a separate
-# agent_broker.py process. That process is spawned with
-# DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB so it survives Sublime Text
-# closing (verified live on this machine: a process spawned this way from
-# inside ST's own process tree stayed running, and its pipe stayed answering,
-# across a real ST restart). kill() here only disconnects this client -- the
+# agent_broker.py process. Sublime itself runs in a non-breakaway Windows job,
+# so a direct CreateProcess child remains in that job even when passed
+# CREATE_BREAKAWAY_FROM_JOB. The broker is therefore created by the Windows
+# Task Scheduler service via a short-lived, immediately unregistered task in
+# tools/spawn_outside_job.ps1. kill()
+# here only disconnects this client -- the
 # whole point of a detachable session is that closing the tab must NOT kill
 # the agent; ending it for real goes through explicit_kill().
 
@@ -474,6 +478,22 @@ def _broker_registry_file(pipe_name):
 
 
 def _pid_is_alive(pid):
+    if os.name == "nt" and _k32 is not None:
+        try:
+            handle = _k32.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid),
+            )
+        except (TypeError, ValueError):
+            return False
+        if not handle:
+            return False
+        try:
+            code = DWORD(0)
+            return bool(_k32.GetExitCodeProcess(handle, byref(code))) and (
+                code.value == _STILL_ACTIVE
+            )
+        finally:
+            _k32.CloseHandle(handle)
     try:
         os.kill(int(pid), 0)
         return True
@@ -648,33 +668,94 @@ class _BrokerPty:
                 "install Python and ensure it's on PATH, or set the "
                 "`broker_python` setting to its full path"
             )
-        cmd = [
-            python_exe, _broker_script_path(),
+        # The broker has no interactive stdio (it redirects diagnostics to
+        # its lifecycle log before printing) and owns a ConPTY for the child.
+        # python.exe would create a visible console when Task Scheduler starts
+        # it; use the windowless sibling when available.
+        broker_exe = python_exe
+        if os.path.basename(python_exe).lower() == "python.exe":
+            candidate = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+            if os.path.isfile(candidate):
+                broker_exe = candidate
+        broker_argv = [
             "--pipe-name", self.pipe_name,
             "--cols", str(self._cols), "--rows", str(self._rows),
             "--scrollback-bytes", str(self._scrollback_bytes),
             "--registry-file", _broker_registry_file(self.pipe_name),
+            "--log-file", os.path.join(
+                os.path.expanduser("~"), "data", "logs", "ai_terminal",
+                "agent_broker.log",
+            ),
         ]
         if self._profile_name:
-            cmd += ["--profile-name", self._profile_name]
+            broker_argv += ["--profile-name", self._profile_name]
         if self._cwd:
-            cmd += ["--cwd", self._cwd]
-        cmd += ["--"] + self.argv
-        # The child's full environment (including any resolved API keys) is
-        # passed via Popen's env= -- NOT as --env KEY=VALUE command-line
-        # arguments. A process's command line is readable by any other
-        # process on the machine (tasklist, wmic, Task Manager's "Command
-        # line" column) -- passing secrets that way leaks them locally.
-        # agent_broker.py's own --env flag still exists for its own small,
-        # explicit manual overrides; it's just unused here.
-        subprocess.Popen(
-            cmd,
-            env=self._env,
-            creationflags=(_DETACHED_PROCESS | _CREATE_BREAKAWAY_FROM_JOB
-                           | _CREATE_NEW_PROCESS_GROUP),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-            close_fds=True,
+            broker_argv += ["--cwd", self._cwd]
+        launch_file = _broker_registry_file(self.pipe_name) + ".launch"
+        os.makedirs(os.path.dirname(launch_file), exist_ok=True)
+        fd = os.open(launch_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "broker_argv": broker_argv,
+                    "child_argv": self.argv,
+                    "environment": self._env,
+                }, handle)
+        except Exception:
+            try:
+                os.unlink(launch_file)
+            except OSError:
+                pass
+            raise
+        # Keep every broker option, child argument, and environment value in
+        # the one-use launch file; only its randomized path appears in process
+        # listings or the temporary scheduled-task action.
+        cmd = [broker_exe, _broker_script_path(), "--launch-file", launch_file]
+        launcher = os.path.join(os.path.dirname(__file__), "tools", "spawn_outside_job.ps1")
+        powershell = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
         )
+        payload = json.dumps({
+            "executable": cmd[0],
+            "arguments": subprocess.list2cmdline(cmd[1:]),
+            "cwd": self._cwd or os.getcwd(),
+            "task_name": "GhostShell Broker " + self.pipe_name,
+            "launch_file": launch_file,
+        })
+        helper = subprocess.Popen(
+            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-File", launcher],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", creationflags=0x08000000,
+        )
+        try:
+            output, error = helper.communicate(payload, timeout=15.0)
+        except Exception:
+            try:
+                os.unlink(launch_file)
+            except OSError:
+                pass
+            raise
+        if helper.returncode != 0:
+            try:
+                os.unlink(launch_file)
+            except OSError:
+                pass
+            raise OSError(
+                "could not launch detachable broker through Task Scheduler: %s"
+                % ((error or output or "unknown WMI launcher error").strip(),)
+            )
+        try:
+            result = json.loads(output)
+            if int(result.get("return_value", -1)) != 0:
+                raise ValueError("WMI return value %r" % result.get("return_value"))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            try:
+                os.unlink(launch_file)
+            except OSError:
+                pass
+            raise OSError("invalid scheduled broker-launch response: %r (%s)" % (output, exc))
 
     def read(self, on_data, on_replay_complete=None):
         buf = (c_char * 8192)()
@@ -3850,9 +3931,11 @@ def _rearm_if_dirty(term):
     Clearing the coalesce flag even when nothing is dirty is what keeps a
     stalled frame (Grok often goes silent for seconds) from staying armed.
     """
-    if term.screen.dirty or getattr(term, "_render_coalesce", False):
+    with term._lock:
+        dirty = term.screen.dirty
+    if dirty or getattr(term, "_render_coalesce", False):
         term._render_coalesce = False
-        if term.screen.dirty:
+        if dirty:
             _schedule_render(term)
 
 
@@ -4112,8 +4195,6 @@ def _do_render(term):
         term._sync_defer_forced = True  # safety valve: stop waiting, paint
     term._render_pending = False
     _maybe_apply_osc_title(term)
-    if not term.screen.dirty:
-        return
     # Host cursor: ST caret stays invisible when the app paints reverse-video
     # (Claude). When it does not (Grok / shells), paint_host_cursor puts a
     # white █ on the blank insertion cell (display-only). Caret row must come
@@ -4143,6 +4224,8 @@ def _do_render(term):
     # false) may exercise the unpinned path until this is live-verified in
     # a genuinely separate process.
     with term._lock:
+        if not term.screen.dirty:
+            return
         rows, cy, cx = term.screen.render_cells()
         if _setting_bool("caret_footer_pinning_enabled", False, profile_name=_term_profile_name(term)):
             cy, cx = _adjust_display_caret(term.screen, cy, cx)
@@ -7183,6 +7266,15 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 # nothing" from the user's perspective.
                 _set_auto_follow(term, False)
             elif kl not in _NO_SCROLL_KEYS:
+                # A printable key only needs a physical viewport write when it
+                # is returning from scrollback.  Re-writing the bottom target
+                # while already following races Sublime's layout update with
+                # the TUI's echo frame: the pre-echo calculation can be one
+                # line stale, then the render settles to the new height.  The
+                # command line visibly hops up and back on every key even
+                # though the PTY never moved it (confirmed in a Codex cast:
+                # input stays on row 42, hardware cursor parks on row 45).
+                was_following = bool(getattr(term, "_auto_follow", False))
                 _set_auto_follow(term, True)
                 if tui:
                     # Only re-pin when drifted; set_viewport every key on Windows
@@ -7196,7 +7288,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         term._live_anchor_y = rest
                     except Exception:
                         pass
-                else:
+                elif not was_following:
                     _scroll_to_bottom(self.view)
                     term._last_vp_y = self.view.viewport_position()[1]
                     term._live_anchor_y = term._last_vp_y

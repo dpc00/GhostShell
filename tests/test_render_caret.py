@@ -67,6 +67,12 @@ class HostCursorGuardTests(unittest.TestCase):
         rows = [[("a", 0), ("b", 0)], [("c", 0)]]
         self.assertEqual(cursor_text_offset(rows, 1, 0), 3)
 
+    def test_offset_accounts_for_multicodepoint_cells(self):
+        rows = [[("e\u0301", 0), ("x", 0)], [("\U0001f468\u200d\U0001f4bb", 0), ("z", 0)]]
+        self.assertEqual(cursor_text_offset(rows, 0, 1), 2)
+        self.assertEqual(cursor_text_offset(rows, 1, 0), 4)
+        self.assertEqual(cursor_text_offset(rows, 1, 1), 7)
+
 
 class HostCursorShapeTests(unittest.TestCase):
     def _glyph(self, shape):
@@ -129,6 +135,15 @@ class BuildTextTests(unittest.TestCase):
         red = pack_attr(fg=2)
         _text, regs = build_text_and_regions([[("a", red)], [("b", red)]])
         self.assertEqual([r[:2] for r in regs], [[0, 1], [2, 3]])
+
+    def test_regions_use_text_offsets_for_multicodepoint_cells(self):
+        red = pack_attr(fg=2)
+        text, regs = build_text_and_regions(
+            [[("e\u0301", red), ("x", red), ("!", 0)],
+             [("\U0001f468\u200d\U0001f4bb", red), ("z", 0)]]
+        )
+        self.assertEqual(text, "e\u0301x!\n\U0001f468\u200d\U0001f4bbz")
+        self.assertEqual([r[:2] for r in regs], [[0, 3], [5, 8]])
 
 
 class ColorHelperTests(unittest.TestCase):

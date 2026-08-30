@@ -49,28 +49,26 @@ terminal state so there's nothing left to diverge.
 - Any exploration of Ghostty/cmux beyond this plan must produce a
   concrete file/function mapping into GhostShell, not a citation.
 
-## Stage 0 — Safety net (no behavior change)
+## Stage 0 — Safety net (DONE, 2026-08-30)
 
 Before touching ownership or protocol handling, make regressions visible
 immediately instead of days later.
 
-1. Record the `ghostty-vt.dll` build/version/hash actually in use
-   (currently untracked — README doesn't document provenance). Store it
-   next to the binary or in a settings key read at startup.
-2. Fix the documented test command. README says
-   `python -m unittest discover -s tests -v`; the real, fuller command is
-   `python -m pytest tests/ -q` (426 collected vs. the 48 pytest-only
-   tests the unittest runner misses). Update README and
-   `tools/check_import.py`'s stale/partial expected-class list.
+1. The audited `ghostty-vt.dll` source commit, SHA-256, and size are recorded
+   in `terminal/GHOSTTY_VT_PROVENANCE.md`; startup also logs the loaded
+   artifact's fingerprint.
+2. README documents `python -m pytest tests/ -q` as the complete test command
+   and explicitly warns that unittest discovery misses pytest-only coverage.
 3. No CI currently runs the suite. Even a local pre-push hook running
    `pytest tests/ -q` would have caught some of the reverted regressions
    sooner. Out of scope to build full CI here, but note it as a gap this
    plan doesn't fix.
 
-Exit criteria: `pytest tests/ -q` is the documented, accurate command;
-DLL provenance is recorded.
+Exit criteria met: `pytest tests/ -q` is the documented, accurate command;
+DLL provenance is recorded. The verified suite currently reports 510 passed,
+3 skipped.
 
-## Stage 1 — Close the native-state race (correctness fix, no architecture change)
+## Stage 1 — Close the native-state race (DONE, 2026-08-30)
 
 Evidence: `ai_terminal.py`'s `AiTerminalKeypressCommand.run` calls
 `GhosttyParser.encode_key` on Sublime's main thread without holding
@@ -90,6 +88,10 @@ Exit criteria: existing concurrent feed/render tests
 (`tests/test_ghostty_engine.py`, `tests/test_splatter_stress.py`) pass;
 add a test that exercises keypress-during-feed if one doesn't already
 exist.
+
+Completed: key encoding, render snapshots, cursor visibility/shape, and
+dirty-state checks now run under `_Terminal._lock`. The full suite passes:
+510 passed, 3 skipped.
 
 ## Stage 2 — Fix the alt-screen strip regex; keep `force_main_screen`'s intent (REVISED, landed 2026-08-25)
 
@@ -174,13 +176,13 @@ shipped and tested investigation into exactly this mechanism:
   `ReplaceScrollMergeTests` and `HomeReplaceScrollTests`
   (`tests/test_ghostty_engine.py`), independently re-verified at the
   time against an 8-turn live repro (`missing=0 dupes=0 total_lines=233`).
-- A separate, still-open native-level character-splice bug was chased
-  through a pure-C repro linked directly against the exact
-  `ghostty-vt.dll` GhostShell ships (SHA256-matched) and **cleared
-  Ghostty/libghostty-vt entirely** — it reproduces only under the live
-  plugin's real threading, not in any single-threaded repro. This bug is
-  orthogonal to Stage 3 either way: keeping or removing the Python
-  history copy does not touch it.
+- A separate native-level character-splice symptom was chased through a
+  pure-C repro linked directly against the exact `ghostty-vt.dll` GhostShell
+  ships (SHA256-matched) and **cleared Ghostty/libghostty-vt entirely**. The
+  GhostShell synchronization defect was subsequently fixed by commit
+  `2b4320f` (`Fix synchronized replay splatter`) with a ConPTY regression
+  harness. It remains orthogonal to Stage 3: keeping or removing the Python
+  history copy does not address that synchronization boundary.
 
 Both explore-4 and explore-5 (the Ghostty/cmux source comparisons this
 plan was built from) had no way to know this history — they compared
@@ -376,7 +378,7 @@ resize, close, close again -- no crash. Full suite: 431 passed, same 3
 pre-existing unrelated `test_launcher_flow.py` failures as the running
 baseline.
 
-## Stage 7 — Grapheme-aware text offsets (small, isolated)
+## Stage 7 — Grapheme-aware text offsets (DONE, 2026-08-30)
 
 Evidence: `render.py`'s `build_text_and_regions` advances the
 Sublime-buffer offset by one per terminal cell even when the underlying
@@ -390,6 +392,11 @@ native grapheme snapshot rather than assuming one code point per cell.
 Exit criteria: a regression test with a combining-mark or multi-codepoint
 emoji sequence round-trips correctly (cursor lands in the right column
 after such input).
+
+Completed: `cursor_text_offset` and `build_text_and_regions` now advance by
+the actual character length of each terminal cell. Regression tests cover
+both combining characters and emoji ZWJ sequences. The full suite passes:
+510 passed, 3 skipped.
 
 ## What this plan deliberately does not do
 

@@ -1,10 +1,25 @@
 """Regression checks for detachable broker recovery."""
 
 import ast
+import os
 from pathlib import Path
+
+from tests.sublime_stub import install as _install_stubs
+
+_install_stubs()
+
+import ai_terminal
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_pid_liveness_recognizes_current_process():
+    assert ai_terminal._pid_is_alive(os.getpid())
+
+
+def test_pid_liveness_rejects_invalid_pid():
+    assert not ai_terminal._pid_is_alive(0x7FFFFFFF)
 
 
 def _class_methods(path, class_name):
@@ -32,6 +47,25 @@ def test_broker_publishes_and_removes_external_session_registry():
     assert "os.replace(temporary, path)" in source
     assert "_publish_registry(" in source[source.index("def main():"):]
     assert "_remove_registry(args.registry_file)" in source
+
+
+def test_broker_lifecycle_log_captures_job_membership_and_normal_exit():
+    source = (ROOT / "tools" / "agent_broker.py").read_text(encoding="utf-8")
+    launcher = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+
+    assert '"--log-file"' in launcher
+    assert "_configure_lifecycle_log(args.log_file)" in source
+    assert "_current_process_is_in_job()" in source
+    assert "broker stopping normally; child_alive=" in source
+
+
+def test_outside_job_launcher_uses_short_lived_interactive_scheduled_task():
+    source = (ROOT / "tools" / "spawn_outside_job.ps1").read_text(encoding="utf-8")
+
+    assert "New-ScheduledTaskPrincipal" in source
+    assert "-LogonType Interactive" in source
+    assert "Start-ScheduledTask" in source
+    assert "Unregister-ScheduledTask" in source
 
 
 def test_recovery_tool_has_guarded_stale_output_path():

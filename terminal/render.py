@@ -84,7 +84,7 @@ def paint_host_cursor(rows, cy, cx, shape="block"):
 
 
 def cursor_text_offset(rows, cy, cx):
-    """Byte/char offset of (cy, cx) in build_text_and_regions output, or None."""
+    """Character offset of terminal cell (cy, cx) in flattened view text."""
     if rows is None or cy is None or cx is None:
         return None
     if cy < 0 or cx < 0 or cy >= len(rows):
@@ -93,8 +93,8 @@ def cursor_text_offset(rows, cy, cx):
         return None
     off = 0
     for i in range(cy):
-        off += len(rows[i]) + 1  # +1 newline
-    return off + cx
+        off += sum(len(ch) for ch, _attr in rows[i]) + 1  # +1 newline
+    return off + sum(len(ch) for ch, _attr in rows[cy][:cx])
 
 
 def punch_host_cursor_region(regions, off, end=None):
@@ -169,7 +169,10 @@ def build_text_and_regions(rows, scope_for=None):
                     regs.append([run_start, offset, run_scope])
                 run_scope = scope
                 run_start = offset
-            offset += 1
+            # One terminal cell can contain a multi-codepoint grapheme (for
+            # example ``e`` + COMBINING ACUTE or an emoji ZWJ sequence).
+            # Sublime regions index the flattened text, not terminal cells.
+            offset += len(ch)
         if run_scope is not None:
             regs.append([run_start, offset, run_scope])
         parts.append("\n")

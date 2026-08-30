@@ -18,6 +18,7 @@ order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 """
 
 import ctypes
+import json
 import os
 import sys
 import types
@@ -1157,20 +1158,73 @@ def test_broker_replay_budget_defaults_to_2_mib_and_is_bounded(monkeypatch):
     assert ai_terminal._broker_scrollback_bytes() == 256 * 1024 * 1024
 
 
-def test_broker_spawn_passes_replay_budget(monkeypatch):
+def test_broker_spawn_passes_replay_budget(monkeypatch, tmp_path):
     launched = []
+    payloads = []
+
+    class Helper:
+        returncode = 0
+
+        def communicate(self, payload, timeout):
+            payloads.append((json.loads(payload), timeout))
+            return ('{"return_value":0,"process_id":42}', "")
+
     monkeypatch.setattr(ai_terminal, "_broker_python_exe", lambda: "python.exe")
     monkeypatch.setattr(
+        ai_terminal, "_settings",
+        Settings({"broker_registry_dir": str(tmp_path)}), raising=False,
+    )
+    monkeypatch.setattr(
         ai_terminal.subprocess, "Popen",
-        lambda command, **kwargs: launched.append((command, kwargs)),
+        lambda command, **kwargs: launched.append((command, kwargs)) or Helper(),
     )
     pty = ai_terminal._BrokerPty(
         "pipe", ["codex"], BETA, 80, 24, {}, scrollback_bytes=1234567
     )
     pty._spawn_broker()
-    command, _kwargs = launched[0]
-    index = command.index("--scrollback-bytes")
-    assert command[index + 1] == "1234567"
+    helper_command, _kwargs = launched[0]
+    assert helper_command[-2].lower() == "-file"
+    assert helper_command[-1].endswith("spawn_outside_job.ps1")
+    launch_payload = payloads[0][0]
+    assert launch_payload["executable"] == "python.exe"
+    assert "--launch-file" in launch_payload["arguments"]
+    assert launch_payload["task_name"].startswith("GhostShell Broker ")
+    launch_files = list(tmp_path.glob("*.launch"))
+    assert len(launch_files) == 1
+    launch = json.loads(launch_files[0].read_text(encoding="utf-8"))
+    index = launch["broker_argv"].index("--scrollback-bytes")
+    assert launch["broker_argv"][index + 1] == "1234567"
+    assert launch["environment"] == {}
+    assert launch["child_argv"] == ["codex"]
+    assert "environment" not in launch_payload
+    assert payloads[0][1] == 15.0
+
+
+def test_broker_uses_windowless_python_for_scheduled_launch(monkeypatch, tmp_path):
+    payloads = []
+
+    class Helper:
+        returncode = 0
+
+        def communicate(self, payload, timeout):
+            payloads.append(json.loads(payload))
+            return ('{"return_value":0,"process_id":0}', "")
+
+    python = tmp_path / "python.exe"
+    pythonw = tmp_path / "pythonw.exe"
+    python.write_bytes(b"")
+    pythonw.write_bytes(b"")
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(ai_terminal, "_broker_python_exe", lambda: str(python))
+    monkeypatch.setattr(
+        ai_terminal, "_settings",
+        Settings({"broker_registry_dir": str(registry)}), raising=False,
+    )
+    monkeypatch.setattr(ai_terminal.subprocess, "Popen", lambda *a, **k: Helper())
+
+    ai_terminal._BrokerPty("pipew", ["codex"], BETA, 80, 24, {})._spawn_broker()
+
+    assert payloads[0]["executable"] == str(pythonw)
 
 
 def test_testing_agent_tab_close_requests_exit_and_swallows_close(
