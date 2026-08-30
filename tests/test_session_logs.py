@@ -260,6 +260,34 @@ def test_cast_close_is_terminal_and_later_writes_are_ignored(tmp_path, monkeypat
     assert [event[1:] for event in events] == [["o", "before"], ["x", "0"]]
 
 
+def test_cast_serialization_does_not_block_the_pty_writer(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
+    rec = CastRecorder()
+    rec.open(80, 24, ["codex"], filename_stamp="async")
+    entered = threading.Event()
+    release = threading.Event()
+    original_dumps = cr.json.dumps
+
+    def blocking_event_dumps(value, *args, **kwargs):
+        if isinstance(value, list) and value[1] == "o":
+            entered.set()
+            assert release.wait(2)
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(cr.json, "dumps", blocking_event_dumps)
+    producer = threading.Thread(target=lambda: rec.write("o", "large replay"))
+    producer.start()
+    producer.join(0.5)
+    assert not producer.is_alive()
+    assert entered.wait(2)
+    release.set()
+    rec.close()
+
+    lines = (tmp_path / "ai_async.cast").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines[1:]]
+    assert [event[1:] for event in events] == [["o", "large replay"], ["x", "0"]]
+
+
 def test_cast_header_is_fsynced_before_open_returns(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "CAST_DIR", str(tmp_path))
     calls = []
