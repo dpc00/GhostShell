@@ -354,6 +354,12 @@ def _dll_available():
         return False
 
 
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class BuildInfoTests(unittest.TestCase):
+    def test_loaded_library_reports_recorded_version(self):
+        self.assertEqual(gvt.libghostty_version(gvt.load_library()), "0.1.0-dev")
+
+
 # The gitignored DLL (terminal/bin/ghostty-vt.dll, built from the ~/tools
 # ghostty checkout) isn't in the repo, so these tests skip cleanly wherever
 # it's absent rather than failing the suite.

@@ -83,7 +83,8 @@ To build it yourself instead: clone https://github.com/ghostty-org/ghostty,
 run `zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
 
 The fingerprint and source revision of the currently audited binary are in
-[terminal/GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md).
+[terminal/GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md); its
+reported libghostty-vt version is `0.1.0-dev`.
 
 ## Testing
 

@@ -21,13 +21,37 @@ DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dl
 
 _fingerprint_logged = False
 
+_BUILD_INFO_VERSION_STRING = 5
+
+
+class _BuildInfoString(ctypes.Structure):
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+    ]
+
+
+def libghostty_version(lib):
+    """Return libghostty-vt's compile-time version string, if available."""
+    try:
+        build_info = lib.ghostty_build_info
+    except AttributeError:
+        return None
+    build_info.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    build_info.restype = ctypes.c_int
+    value = _BuildInfoString()
+    if build_info(_BUILD_INFO_VERSION_STRING, ctypes.byref(value)) != 0:
+        return None
+    if not value.ptr or not value.len:
+        return None
+    return ctypes.string_at(value.ptr, value.len).decode("utf-8", errors="replace")
+
 
 def dll_fingerprint(path):
     """sha256/size/mtime of the DLL file at path, or None if unreadable.
 
-    The DLL is gitignored (built binary artifact) and exposes no version
-    query of its own, so this is the only way to record which exact build
-    produced a given test run or bug report.
+    The DLL is gitignored, so the fingerprint identifies the exact artifact
+    beyond the semantic version returned by ``ghostty_build_info``.
     """
     try:
         st = os.stat(path)
@@ -62,9 +86,10 @@ def load_library(path=None):
         _fingerprint_logged = True
         fp = dll_fingerprint(path)
         if fp is not None:
+            version = libghostty_version(lib) or "unknown"
             print(
-                "[ghostty_vt] loaded %s (sha256=%s, size=%d)"
-                % (fp["path"], fp["sha256"][:12], fp["size"])
+                "[ghostty_vt] loaded %s (version=%s, sha256=%s, size=%d)"
+                % (fp["path"], version, fp["sha256"][:12], fp["size"])
             )
     return lib
 
