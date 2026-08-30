@@ -18,6 +18,7 @@ CATALOG = {
     "claude": {
         "display_name": "Claude",
         "launch_command": ["claude"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
             "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
@@ -34,6 +35,7 @@ CATALOG = {
     "codex": {
         "display_name": "Codex",
         "launch_command": ["codex"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -42,6 +44,8 @@ CATALOG = {
     "opencode": {
         "display_name": "OpenCode",
         "launch_command": ["opencode"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -50,6 +54,7 @@ CATALOG = {
     "gemini": {
         "display_name": "Gemini",
         "launch_command": ["gemini.cmd"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
             "GEMINI_PROMPT_QUEUE": "false",
@@ -59,6 +64,8 @@ CATALOG = {
     "grok": {
         "display_name": "Grok Build",
         "launch_command": ["grok"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
         "notes": (
             "Keeps the hardware cursor on its input row (`│ > … │` "
@@ -71,6 +78,7 @@ CATALOG = {
     "ollama-dsh": {
         "display_name": "dsh",
         "launch_command": ["ollama", "launch", "dsh"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -82,6 +90,8 @@ CATALOG = {
     "qwen": {
         "display_name": "Qwen",
         "launch_command": ["qwen"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -96,6 +106,7 @@ CATALOG = {
     "vibe": {
         "display_name": "Vibe",
         "launch_command": ["vibe"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
             "LOG_LEVEL": "DEBUG",
@@ -113,6 +124,7 @@ CATALOG = {
     "kimi": {
         "display_name": "Kimi",
         "launch_command": ["kimi"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -121,6 +133,7 @@ CATALOG = {
     "kiro-cli": {
         "display_name": "Kiro",
         "launch_command": ["kiro-cli"],
+        "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -129,6 +142,8 @@ CATALOG = {
     "mimo": {
         "display_name": "Mimo",
         "launch_command": ["mimo"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -137,6 +152,8 @@ CATALOG = {
     "jcode": {
         "display_name": "jcode",
         "launch_command": ["jcode"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -145,6 +162,7 @@ CATALOG = {
     "junie": {
         "display_name": "Junie",
         "launch_command": ["junie"],
+        "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
         "notes": (
             "JetBrains Junie CLI. The interactive TUI in the project cwd, "
@@ -159,6 +177,8 @@ CATALOG = {
     "agy": {
         "display_name": "Antigravity",
         "launch_command": ["agy"],
+        "detachable": True,
+        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -190,6 +210,18 @@ def profile_from_entry(entry):
             if key != "AI_TERMINAL_LOG_LINES"
         },
     }
-    if "mouse_handling" in entry:
-        profile["mouse_handling"] = entry["mouse_handling"]
+    # Carry only settings-schema fields. Catalog metadata (display_name and
+    # notes) must never leak into generated settings, while known behavioral
+    # quirks must survive Sync just like launch_command and spawn_env do.
+    for key in (
+        "detachable",
+        "force_main_screen",
+        "home_end_native",
+        "mouse_handling",
+        "page_keys_to_pty",
+        "pin_viewport",
+        "wheel_to_pty",
+    ):
+        if key in entry:
+            profile[key] = entry[key]
     return profile
