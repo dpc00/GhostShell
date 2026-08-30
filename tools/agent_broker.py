@@ -139,6 +139,26 @@ _k32.DisconnectNamedPipe.argtypes = [HANDLE]
 _k32.DisconnectNamedPipe.restype = BOOL
 _k32.FlushFileBuffers.argtypes = [HANDLE]
 _k32.FlushFileBuffers.restype = BOOL
+_k32.GetCurrentProcess.restype = HANDLE
+_k32.IsProcessInJob.argtypes = [HANDLE, HANDLE, POINTER(BOOL)]
+_k32.IsProcessInJob.restype = BOOL
+
+
+def _configure_lifecycle_log(path):
+    """Persist broker stdout/stderr so an abrupt parent-exit kill is visible."""
+    if not path:
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    stream = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = stream
+    sys.stderr = stream
+
+
+def _current_process_is_in_job():
+    result = BOOL(False)
+    ok = _k32.IsProcessInJob(_k32.GetCurrentProcess(), None, byref(result))
+    return bool(result.value) if ok else "unknown(error=%d)" % ctypes.get_last_error()
 
 
 class _Pty:
@@ -605,6 +625,34 @@ def _parse_env_overrides(pairs):
     return env
 
 
+def _load_launch_file(argv):
+    """Expand a one-use launch file before normal argument parsing."""
+    if len(argv) != 2 or argv[0] != "--launch-file":
+        own_argv, child_argv = _split_argv(argv)
+        return own_argv, child_argv, None
+    path = argv[1]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            launch = json.load(handle)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    env = launch.get("environment") if isinstance(launch, dict) else None
+    own_argv = launch.get("broker_argv") if isinstance(launch, dict) else None
+    child_argv = launch.get("child_argv") if isinstance(launch, dict) else None
+    if not isinstance(own_argv, list) or not all(isinstance(v, str) for v in own_argv):
+        raise ValueError("invalid broker argv in launch file")
+    if not isinstance(child_argv, list) or not all(isinstance(v, str) for v in child_argv):
+        raise ValueError("invalid child argv in launch file")
+    if not isinstance(env, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in env.items()):
+        raise ValueError("invalid environment in launch file")
+    return own_argv, child_argv, env
+
+
 def _split_argv(argv):
     if "--" not in argv:
         return argv, []
@@ -643,7 +691,7 @@ def _remove_registry(path):
 
 
 def main():
-    own_argv, child_argv = _split_argv(sys.argv[1:])
+    own_argv, child_argv, launch_env = _load_launch_file(sys.argv[1:])
 
     p = argparse.ArgumentParser(
         description="Run any CLI in a ConPTY, reachable over a named pipe."
@@ -657,15 +705,27 @@ def main():
                     help="Replayed to each newly (re)connected client.")
     p.add_argument("--registry-file", default=None,
                     help="Atomic live-session record removed when the broker exits.")
+    p.add_argument("--log-file", default=None,
+                    help="Append-only broker lifecycle diagnostic log.")
     p.add_argument("--profile-name", default=None)
     p.add_argument("--env", action="append", default=[],
                     help="KEY=VALUE, repeatable, merged onto the broker's own environment.")
     args = p.parse_args(own_argv)
 
+    _configure_lifecycle_log(args.log_file)
+    print("[%s] broker starting pid=%d parent_pid=%d in_job=%r pipe=%s" % (
+        time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid(), os.getppid(),
+        _current_process_is_in_job(), args.pipe_name,
+    ))
+
     if not child_argv:
         p.error("no child command given -- pass it after `--`, e.g. ... -- cmd.exe")
 
-    env = _parse_env_overrides(args.env)
+    env = launch_env if launch_env is not None else os.environ.copy()
+    for pair in args.env or []:
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            env[key] = value
     cwd = os.path.realpath(args.cwd) if args.cwd else os.getcwd()
 
     pty = _Pty(child_argv, cwd, args.cols, args.rows, env)
@@ -697,6 +757,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        print("[%s] broker stopping normally; child_alive=%r" % (
+            time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(),
+        ))
         pty.kill()
         _remove_registry(args.registry_file)
     print("[agent_broker] child exited, broker stopping")

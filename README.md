@@ -57,6 +57,10 @@ tests/                  -- unit tests for terminal/*, no Sublime required
 See [COMMANDS.md](COMMANDS.md) for every registered command: ST command name,
 command palette entry, menu location(s), and keybinding.
 
+See [docs/DETACHABLE_SESSIONS.md](docs/DETACHABLE_SESSIONS.md) for the
+windowless broker architecture, recovery commands, guarantees, limitations,
+and live detach/reconnect soak tests.
+
 ## Installing
 
 Symlink this repo into your Sublime Text `Packages/` directory:
@@ -77,6 +81,9 @@ https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h
 
 To build it yourself instead: clone https://github.com/ghostty-org/ghostty,
 run `zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
+
+The fingerprint and source revision of the currently audited binary are in
+[terminal/GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md).
 
 ## Testing
 
