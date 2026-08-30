@@ -17,6 +17,7 @@ anything to disk: the picker rows are unranked (alphabetical / sidebar-folder
 order), and history is a live filesystem sweep via ``history_scan.scan_all``.
 """
 
+import ctypes
 import os
 import sys
 import types
@@ -847,6 +848,7 @@ def test_broker_reattach_does_not_pin_inactive_restored_view_to_one_row(monkeypa
         lambda fn, ms=0: scheduled.append((fn, ms)),
     )
     monkeypatch.setattr(ai_terminal._Terminal, "from_id", classmethod(lambda cls, vid: None))
+    monkeypatch.setattr(ai_terminal, "_registered_brokers", lambda profile, cwd: [])
     monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (94, 1))
     monkeypatch.setattr(
         ai_terminal, "_reattach_broker_view",
@@ -871,6 +873,42 @@ def test_broker_reattach_does_not_pin_inactive_restored_view_to_one_row(monkeypa
     callback, _delay = scheduled.pop(0)
     callback()
     assert attached == [(view.id(), "test-pipe")]
+
+
+def test_broker_reattach_recovers_stale_sublime_pipe_from_external_registry(monkeypatch):
+    view = FakeView(vid=715)
+    window = FakeWindow(active_view=view)
+    view.window = lambda: window
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    view.settings().set(ai_terminal._BROKER_PIPE_SETTING, "stale-pipe")
+    view.settings().set(ai_terminal._BROKER_PROFILE_SETTING, "Claude")
+    view.settings().set(ai_terminal._BROKER_CWD_SETTING, r"C:\work")
+
+    scheduled = []
+    attached = []
+    monkeypatch.setattr(
+        sys.modules["sublime"], "set_timeout",
+        lambda fn, ms=0: scheduled.append((fn, ms)),
+    )
+    monkeypatch.setattr(ai_terminal._Terminal, "from_id", classmethod(lambda cls, vid: None))
+    monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (94, 30))
+    monkeypatch.setattr(
+        ai_terminal, "_registered_brokers",
+        lambda profile, cwd: [{"pipe_name": "live-pipe"}],
+    )
+    monkeypatch.setattr(
+        ai_terminal, "_reattach_broker_view",
+        lambda view, pipe: attached.append((view.id(), pipe)),
+    )
+    ai_terminal._BROKER_REATTACH_PENDING.clear()
+    ai_terminal._BROKER_REATTACH_CANDIDATE.clear()
+
+    ai_terminal._maybe_reattach_broker(view)
+    callback, _delay = scheduled.pop(0)
+    callback()
+
+    assert view.settings().get(ai_terminal._BROKER_PIPE_SETTING) == "live-pipe"
+    assert attached == [(view.id(), "live-pipe")]
 
 
 def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
@@ -985,6 +1023,121 @@ def test_broker_kill_closes_pipe_handles_after_natural_exit(monkeypatch):
         ("cancel", 13), ("close", 13),
     ]
     assert (pty._h_out, pty._h_in, pty._h_ctl) == (None, None, None)
+
+
+def test_broker_explicit_kill_reconnects_after_stale_control_handle(monkeypatch):
+    writes = []
+    closed = []
+
+    class FakeKernel32:
+        def WriteFile(self, handle, data, size, out_n, _overlapped):
+            writes.append((handle, bytes(data[:size])))
+            if handle == 30:
+                out_n._obj.value = 0
+                return False
+            out_n._obj.value = size
+            return True
+
+        def CancelIoEx(self, _handle, _overlapped):
+            return True
+
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            return True
+
+    monkeypatch.setattr(ai_terminal, "_k32", FakeKernel32())
+    pty = ai_terminal._BrokerPty("pipe", [], None, 80, 24, {})
+    pty._h_out = 10
+    pty._h_in = 20
+    pty._h_ctl = 30
+    pty._alive = True
+    monkeypatch.setattr(pty, "_try_connect", lambda *_args: 40)
+
+    pty.explicit_kill()
+
+    assert writes == [(30, b"KILL\n"), (40, b"KILL\n")]
+    assert set(closed) == {10, 20, 30, 40}
+    assert (pty._h_out, pty._h_in, pty._h_ctl) == (None, None, None)
+
+
+def test_broker_detection_survives_plugin_class_reload():
+    OldBrokerPty = type("_BrokerPty", (), {})
+    old = OldBrokerPty()
+    old.pipe_name = "old-generation-pipe"
+    old.explicit_kill = lambda: None
+
+    assert ai_terminal._is_broker_pty(old)
+    assert not ai_terminal._is_broker_pty(types.SimpleNamespace(pipe_name="plain"))
+
+
+def test_broker_replay_marker_is_stripped_and_orders_live_output(monkeypatch):
+    marker = ai_terminal._BROKER_REPLAY_END
+    chunks = [b"old text" + marker[:7], marker[7:] + b"live text"]
+
+    class FakeKernel32:
+        def ReadFile(self, _handle, buf, _size, out_n, _overlapped):
+            if not chunks:
+                out_n._obj.value = 0
+                return True
+            data = chunks.pop(0)
+            ctypes.memmove(buf, data, len(data))
+            out_n._obj.value = len(data)
+            return True
+
+    monkeypatch.setattr(ai_terminal, "_k32", FakeKernel32())
+    pty = ai_terminal._BrokerPty("pipe", [], None, 80, 24, {})
+    pty._h_out = 11
+    pty._alive = True
+    events = []
+
+    pty.read(
+        lambda data: events.append(("data", data)),
+        lambda: events.append(("boundary", None)),
+    )
+
+    assert events == [
+        ("data", b"old text"),
+        ("boundary", None),
+        ("data", b"live text"),
+    ]
+
+
+def test_restored_history_temporarily_keeps_grid_tail_for_boundary_replacement():
+    screen = ai_terminal._Screen(80, 2, history_cap=3)
+    count = ai_terminal._seed_restored_history(
+        screen, "old-zero\none\ntwo\nthree\nlive-a\nlive-b"
+    )
+
+    assert ["".join(ch for ch, _attr in row) for row in screen.history] == [
+        "one", "two", "three", "live-a", "live-b"
+    ]
+    assert count == 5
+
+
+def test_replay_boundary_replaces_only_restored_active_grid_tail(monkeypatch):
+    screen = ai_terminal._Screen(8, 2, history_cap=3)
+    seeded = ai_terminal._seed_restored_history(
+        screen, "older\nold-grid"
+    )
+    screen.grid[0][:3] = list("new")
+    screen.y = 0
+
+    term = ai_terminal._Terminal.__new__(ai_terminal._Terminal)
+    term._lock = threading.RLock()
+    term._reattach_bootstrap = True
+    term._restored_rows_seeded = seeded
+    term.screen = screen
+    term.parser = types.SimpleNamespace(finish_bootstrap=lambda: None)
+    scheduled = []
+    monkeypatch.setattr(ai_terminal, "_schedule_render", scheduled.append)
+
+    term._on_broker_replay_complete()
+
+    assert ["".join(ch for ch, _attr in row) for row in screen.history] == [
+        "older"
+    ]
+    assert term._reattach_bootstrap is False
+    assert scheduled == [term]
 
 
 def test_broker_replay_budget_defaults_to_2_mib_and_is_bounded(monkeypatch):
@@ -1108,3 +1261,64 @@ def test_window_close_is_not_converted_to_agent_exit(clean_state):
         ai_terminal._WINDOW_CLOSING_TERM_IDS.discard(view.id())
         with ai_terminal._term_lock():
             ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_native_codex_tab_close_is_recorded_without_graceful_exit_input(clean_state):
+    view = FakeView(vid=906)
+    view.settings().set(ai_terminal._VIEW_SETTING, True)
+    window = FakeWindow(active_view=view)
+    term = types.SimpleNamespace(profile_name="Codex")
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    try:
+        result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+            window, "close_file", None
+        )
+        assert result is None
+        assert view.id() in ai_terminal._USER_CLOSING_TERM_IDS
+    finally:
+        ai_terminal._USER_CLOSING_TERM_IDS.discard(view.id())
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_reattach_choices_hide_dead_gc_terms_after_successful_process_scan(monkeypatch):
+    window = FakeWindow()
+    command = ai_terminal.AiTerminalReattachSessionCommand(window)
+    dead = types.SimpleNamespace(
+        pty=types.SimpleNamespace(pipe_name="dead-pipe"),
+        view=FakeView(vid=904),
+    )
+    shown = []
+    monkeypatch.setattr(window, "show_quick_panel", lambda rows, picked: shown.append(rows))
+    messages = []
+    monkeypatch.setattr(sys.modules["sublime"], "status_message", messages.append)
+
+    command._show_choices([dead], [], error=None)
+
+    assert shown == []
+    assert messages == ["Ai terminal: no detachable sessions found"]
+
+
+def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch):
+    attached_view = FakeView(vid=905)
+    window = FakeWindow(active_view=attached_view)
+    attached_view.window = lambda: window
+    command = ai_terminal.AiTerminalReattachSessionCommand(window)
+    attached = types.SimpleNamespace(
+        pty=types.SimpleNamespace(pipe_name="live-pipe"),
+        view=attached_view,
+    )
+    shown = []
+    monkeypatch.setattr(window, "show_quick_panel", lambda rows, picked: shown.append(rows))
+    messages = []
+    monkeypatch.setattr(sys.modules["sublime"], "status_message", messages.append)
+
+    command._show_choices(
+        [attached],
+        [{"pipe_name": "live-pipe", "cwd": BETA, "child": "codex"}],
+        error=None,
+    )
+
+    assert shown == []
+    assert messages == ["Ai terminal: no detachable sessions found"]

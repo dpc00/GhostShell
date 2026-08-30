@@ -26,6 +26,14 @@ def test_input_disconnect_is_wired_to_output_cleanup():
     assert "on_disconnect=out_server.disconnect_client" in source
 
 
+def test_broker_publishes_and_removes_external_session_registry():
+    source = (ROOT / "tools" / "agent_broker.py").read_text(encoding="utf-8")
+    assert "def _publish_registry(" in source
+    assert "os.replace(temporary, path)" in source
+    assert "_publish_registry(" in source[source.index("def main():"):]
+    assert "_remove_registry(args.registry_file)" in source
+
+
 def test_recovery_tool_has_guarded_stale_output_path():
     source = (ROOT / "tools" / "recover_console.py").read_text(encoding="utf-8")
     assert "def connect_output(pipe_name):" in source

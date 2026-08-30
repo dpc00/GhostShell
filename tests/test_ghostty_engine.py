@@ -58,6 +58,18 @@ class SynchronizedScrollbackTests(unittest.TestCase):
         parser.feed("\x1b[?2026hpartial frame")
         self.assertTrue(parser.s.sync_output)
 
+    def test_broker_bootstrap_advances_native_terminal_without_sync(self):
+        parser = self._parser()
+        writes = []
+        parser._g.terminal_vt_write = (
+            lambda _term, data, length: writes.append(bytes(data[:length]))
+        )
+        parser._sync = lambda: self.fail("broker bootstrap must not sync")
+
+        parser.feed_bootstrap("restored replay")
+
+        self.assertEqual(writes, [b"restored replay"])
+
     def test_closing_frame_synchronizes_once(self):
         parser = self._parser()
         parser._sync_open = True
