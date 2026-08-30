@@ -12,6 +12,7 @@ you're back in the same live process -- not a fresh one.
 """
 import argparse
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -54,6 +55,10 @@ _PIPE_READMODE_BYTE = 0x00000000
 _PIPE_WAIT = 0x00000000
 _PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
 _INVALID_HANDLE_VALUE = HANDLE(-1).value
+# Private OSC marker between the broker's buffered snapshot and live output.
+# Older GhostShell clients safely pass this unknown OSC to their VT parser;
+# current clients strip it and use it as an exact bootstrap boundary.
+_REPLAY_END = b"\x1b]777;GhostShellReplayEnd\x07"
 
 
 class _COORD(Structure):
@@ -388,15 +393,14 @@ class _OutputServer:
         self._client_lock = threading.Lock()
 
     def feed(self, data):
-        self._scrollback.append(data)
         with self._client_lock:
+            self._scrollback.append(data)
             h = self._client_handle
-        if h is None:
-            return
-        try:
-            self._write(h, data)
-        except OSError:
-            with self._client_lock:
+            if h is None:
+                return
+            try:
+                self._write(h, data)
+            except OSError:
                 if self._client_handle is h:
                     self._client_handle = None
 
@@ -445,13 +449,17 @@ class _OutputServer:
 
             print("[agent_broker] client attached to pipe %r" % self._name)
             try:
-                self._write(handle, self._scrollback.snapshot())
+                # Serialize snapshot + marker + live publication against
+                # feed(). This closes the old gap where output appended after
+                # snapshot() but before _client_handle was published was sent
+                # neither in the snapshot nor as live data.
+                with self._client_lock:
+                    self._write(handle, self._scrollback.snapshot())
+                    self._write(handle, _REPLAY_END)
+                    self._client_handle = handle
             except OSError:
                 _k32.CloseHandle(handle)
                 continue
-
-            with self._client_lock:
-                self._client_handle = handle
             # No read side to block on here -- just wait until feed() (on the
             # reader thread) notices a write failure and clears the handle,
             # i.e. the client disconnected. Bounded poll, not a busy spin.
@@ -604,6 +612,36 @@ def _split_argv(argv):
     return argv[:i], argv[i + 1:]
 
 
+def _publish_registry(path, pipe_name, profile_name, cwd, child_argv):
+    if not path:
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    temporary = path + ".tmp-%d" % os.getpid()
+    record = {
+        "pipe_name": pipe_name,
+        "profile_name": profile_name,
+        "cwd": cwd,
+        "child_argv": child_argv,
+        "broker_pid": os.getpid(),
+        "created_at": time.time(),
+    }
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def _remove_registry(path):
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def main():
     own_argv, child_argv = _split_argv(sys.argv[1:])
 
@@ -617,6 +655,9 @@ def main():
     p.add_argument("--rows", type=int, default=40)
     p.add_argument("--scrollback-bytes", type=int, default=2 * 1024 * 1024,
                     help="Replayed to each newly (re)connected client.")
+    p.add_argument("--registry-file", default=None,
+                    help="Atomic live-session record removed when the broker exits.")
+    p.add_argument("--profile-name", default=None)
     p.add_argument("--env", action="append", default=[],
                     help="KEY=VALUE, repeatable, merged onto the broker's own environment.")
     args = p.parse_args(own_argv)
@@ -645,6 +686,10 @@ def main():
     ctl = _ControlServer(args.pipe_name, pty)
     threading.Thread(target=ctl.run_forever, daemon=True).start()
 
+    _publish_registry(
+        args.registry_file, args.pipe_name, args.profile_name, cwd, child_argv
+    )
+
     print("[agent_broker] serving \\\\.\\pipe\\%s (+ -in, -ctl) -- Ctrl+C to stop and kill the child"
           % args.pipe_name)
     try:
@@ -653,6 +698,7 @@ def main():
         pass
     finally:
         pty.kill()
+        _remove_registry(args.registry_file)
     print("[agent_broker] child exited, broker stopping")
 
 

@@ -456,6 +456,63 @@ _ERROR_OPERATION_ABORTED = 995
 _DETACHED_PROCESS = 0x00000008
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
+_BROKER_REPLAY_END = b"\x1b]777;GhostShellReplayEnd\x07"
+_BROKER_REPLAY_IDLE_S = 0.15
+
+
+def _broker_registry_dir():
+    """Durable discovery data owned by brokers, not Sublime's save cycle."""
+    override = _settings_obj().get("broker_registry_dir")
+    if override:
+        return os.path.abspath(os.path.expandvars(os.path.expanduser(override)))
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "GhostShell", "broker_sessions")
+
+
+def _broker_registry_file(pipe_name):
+    return os.path.join(_broker_registry_dir(), pipe_name + ".json")
+
+
+def _pid_is_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _registered_brokers(profile_name=None, cwd=None):
+    """Return newest-first broker records matching a restored terminal."""
+    folder = _broker_registry_dir()
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    wanted_cwd = os.path.normcase(os.path.realpath(cwd)) if cwd else None
+    found = []
+    for name in names:
+        if not name.startswith("ghostshell_") or not name.endswith(".json"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                record = json.load(handle)
+            pipe_name = record.get("pipe_name")
+            if not pipe_name or pipe_name != name[:-5]:
+                continue
+            if not _pid_is_alive(record.get("broker_pid")):
+                continue
+            if profile_name and record.get("profile_name") != profile_name:
+                continue
+            record_cwd = record.get("cwd")
+            if wanted_cwd and (not record_cwd or
+                    os.path.normcase(os.path.realpath(record_cwd)) != wanted_cwd):
+                continue
+            found.append((os.path.getmtime(path), record))
+        except (OSError, TypeError, ValueError):
+            continue
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [record for _mtime, record in found]
 
 
 def _broker_pipe_path(name):
@@ -494,7 +551,7 @@ class _BrokerPty:
     """
 
     def __init__(self, pipe_name, argv, cwd, cols, rows, env, allow_spawn=True,
-                 scrollback_bytes=2 * 1024 * 1024):
+                 scrollback_bytes=2 * 1024 * 1024, profile_name=None):
         self.pipe_name = pipe_name
         self.argv = list(argv)
         self.pid = 0
@@ -504,6 +561,7 @@ class _BrokerPty:
         self._rows = rows
         self._allow_spawn = allow_spawn
         self._scrollback_bytes = scrollback_bytes
+        self._profile_name = profile_name
         self._h_out = None
         self._h_in = None
         self._h_ctl = None
@@ -595,7 +653,10 @@ class _BrokerPty:
             "--pipe-name", self.pipe_name,
             "--cols", str(self._cols), "--rows", str(self._rows),
             "--scrollback-bytes", str(self._scrollback_bytes),
+            "--registry-file", _broker_registry_file(self.pipe_name),
         ]
+        if self._profile_name:
+            cmd += ["--profile-name", self._profile_name]
         if self._cwd:
             cmd += ["--cwd", self._cwd]
         cmd += ["--"] + self.argv
@@ -615,9 +676,43 @@ class _BrokerPty:
             close_fds=True,
         )
 
-    def read(self, on_data):
+    def read(self, on_data, on_replay_complete=None):
         buf = (c_char * 8192)()
         n = DWORD(0)
+        if on_replay_complete is None:
+            on_replay_complete = lambda: None
+        marker_tail = bytearray()
+        replay_done = False
+        stream_lock = threading.RLock()
+        idle_timer = [None]
+
+        def finish_replay(flush_tail=True):
+            nonlocal replay_done
+            with stream_lock:
+                if replay_done:
+                    return
+                if flush_tail and marker_tail:
+                    on_data(bytes(marker_tail))
+                    marker_tail.clear()
+                replay_done = True
+                timer = idle_timer[0]
+                idle_timer[0] = None
+                if timer is not None and timer is not threading.current_thread():
+                    timer.cancel()
+                on_replay_complete()
+
+        def arm_legacy_idle_boundary():
+            if replay_done:
+                return
+            timer = threading.Timer(_BROKER_REPLAY_IDLE_S, finish_replay)
+            timer.daemon = True
+            with stream_lock:
+                old = idle_timer[0]
+                idle_timer[0] = timer
+            if old is not None:
+                old.cancel()
+            timer.start()
+
         while self._alive:
             ok = _k32.ReadFile(self._h_out, buf, 8192, byref(n), None)
             if not ok:
@@ -625,11 +720,33 @@ class _BrokerPty:
                 self._alive = False
                 if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
                            _ERROR_PIPE_NOT_CONNECTED, _ERROR_OPERATION_ABORTED):
-                    return
+                    break
                 raise OSError("ReadFile on broker output pipe failed (GetLastError %d)" % err)
             if n.value == 0:
                 break
-            on_data(bytes(buf[: n.value]))
+            data = bytes(buf[: n.value])
+            if replay_done:
+                on_data(data)
+                continue
+            with stream_lock:
+                marker_tail.extend(data)
+                marker_at = marker_tail.find(_BROKER_REPLAY_END)
+                if marker_at >= 0:
+                    before = bytes(marker_tail[:marker_at])
+                    after = bytes(marker_tail[marker_at + len(_BROKER_REPLAY_END):])
+                    marker_tail.clear()
+                    if before:
+                        on_data(before)
+                    finish_replay(flush_tail=False)
+                    if after:
+                        on_data(after)
+                    continue
+                safe = len(marker_tail) - len(_BROKER_REPLAY_END) + 1
+                if safe > 0:
+                    on_data(bytes(marker_tail[:safe]))
+                    del marker_tail[:safe]
+            arm_legacy_idle_boundary()
+        finish_replay()
         self._alive = False
 
     def write(self, data):
@@ -682,13 +799,52 @@ class _BrokerPty:
 
     def explicit_kill(self):
         """End the underlying agent/shell for real (not just disconnect)."""
-        h = self._h_ctl or self._try_connect(
-            _broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 1.0)
-        if h is not None:
-            line = b"KILL\n"
-            written = DWORD(0)
-            _k32.WriteFile(h, line, len(line), byref(written), None)
+        line = b"KILL\n"
+        with self._io_lock:
+            h = self._h_ctl
+            sent = False
+            if h is not None:
+                written = DWORD(0)
+                sent = bool(
+                    _k32.WriteFile(h, line, len(line), byref(written), None)
+                    and written.value == len(line)
+                )
+                if not sent:
+                    # A broker can replace its control-pipe instance after a
+                    # disconnect.  Do not silently turn a requested session
+                    # end into a detach merely because our cached handle went
+                    # stale; reconnect once and deliver KILL to the live pipe.
+                    _k32.CloseHandle(h)
+                    self._h_ctl = None
+            if not sent:
+                h = self._try_connect(
+                    _broker_pipe_path(self.pipe_name + "-ctl"),
+                    _GENERIC_WRITE,
+                    1.0,
+                )
+                if h is not None:
+                    written = DWORD(0)
+                    sent = bool(
+                        _k32.WriteFile(h, line, len(line), byref(written), None)
+                        and written.value == len(line)
+                    )
+                    _k32.CloseHandle(h)
         self.kill()
+
+
+def _is_broker_pty(pty):
+    """Recognize detachable PTYs across Sublime plugin hot reloads.
+
+    Live _Terminal objects are upgraded to the newly loaded class generation,
+    but their existing _BrokerPty instance keeps its old class identity.
+    An isinstance-only check therefore silently skips tab-close KILL for every
+    broker tab that was open while this module reloaded.
+    """
+    return isinstance(pty, _BrokerPty) or (
+        getattr(getattr(pty, "__class__", None), "__name__", None) == "_BrokerPty"
+        and bool(getattr(pty, "pipe_name", None))
+        and callable(getattr(pty, "explicit_kill", None))
+    )
 
 
 # ─── _PosixPty: forkpty child process (Linux/WSL/macOS) ──────────────────────
@@ -2629,6 +2785,7 @@ class _Terminal:
         self._text_log = SessionTextLog()  # see _log_tab_text() / _on_retire_line
         # Parser failures are reported once per terminal; see _on_data.
         self._feed_failed = False
+        self._reattach_bootstrap = False
         # Geometry watcher for standard terminal resize behavior.
         self._watcher = _LayoutWatcher(self)
 
@@ -2834,7 +2991,10 @@ class _Terminal:
     def _read_loop(self):
         error = None
         try:
-            self.pty.read(self._on_data)
+            if _is_broker_pty(self.pty) and self._reattach_bootstrap:
+                self.pty.read(self._on_data, self._on_broker_replay_complete)
+            else:
+                self.pty.read(self._on_data)
         except Exception as e:
             error = e
             print(f"[ai_terminal] reader error: {e}\n{traceback.format_exc()}")
@@ -2880,7 +3040,10 @@ class _Terminal:
             return
         with self._lock:
             try:
-                self.parser.feed(text)
+                if self._reattach_bootstrap:
+                    self.parser.feed_bootstrap(text)
+                else:
+                    self.parser.feed(text)
             except Exception as e:
                 # Losing the reader thread over one bad chunk would strand a
                 # live child behind a dead-looking tab, so keep reading; the
@@ -2897,6 +3060,8 @@ class _Terminal:
                 self.screen.retire_line_error = None
                 print(f"[ai_terminal] scrollback callback failed: {retire_error}")
                 self._notify("scrollback logging stopped: %s" % retire_error)
+        if self._reattach_bootstrap:
+            return
         # Recording patch: emit an asciicast v3 "o" (output) event for the
         # raw chunk. Logged once, here, at the stream layer -- not at
         # scroll-off -- so it is faithful to what Claude emitted and does NOT
@@ -2910,6 +3075,28 @@ class _Terminal:
         # prevent .cast files from ballooning into hundreds of megabytes.
         if "executing hook" not in text.lower():
             self._cast("o", text)
+        _schedule_render(self)
+
+    def _on_broker_replay_complete(self):
+        """Commit one final grid after native-only broker bootstrap."""
+        with self._lock:
+            if not self._reattach_bootstrap:
+                return
+            self.parser.finish_bootstrap()
+            # The restored view ended with the previously rendered active
+            # grid. Replace that tail with the newly recovered native grid,
+            # while retaining every older plain-text row untouched.
+            grid_rows = [
+                [(self.screen.grid[y][x], self.screen.attrs[y][x])
+                 for x in range(self.screen.cols)]
+                for y in range(self.screen.rows)
+            ]
+            displayed = _trim_display_rows(grid_rows, self.screen.y)
+            seeded = getattr(self, "_restored_rows_seeded", 0)
+            for _ in range(min(len(displayed), seeded, len(self.screen.history))):
+                self.screen.history.pop()
+            self.screen._enforce_history_cap()
+            self._reattach_bootstrap = False
         _schedule_render(self)
 
     def send_string(self, s, record=True):
@@ -3081,6 +3268,11 @@ _BROKER_CONNECTING = set()
 # deliberately closed this one tab" and only explicit_kill() in the latter
 # case.
 _WINDOW_CLOSING_TERM_IDS = set()
+# Native close_file/close_by_index commands positively identify a deliberate
+# tab close before Sublime destroys the view.  Keep this separate from the
+# window-close marker: relying only on "window is not closing" can misclassify
+# a tab close during busy terminal output and detach the broker instead.
+_USER_CLOSING_TERM_IDS = set()
 
 
 class AiTerminalWindowCloseListener(sublime_plugin.EventListener):
@@ -3091,7 +3283,7 @@ class AiTerminalWindowCloseListener(sublime_plugin.EventListener):
     def on_pre_close_window(self, window):
         for view in window.views():
             term = _Terminal.from_id(view.id())
-            if term is not None and isinstance(term.pty, _BrokerPty):
+            if term is not None and _is_broker_pty(term.pty):
                 _WINDOW_CLOSING_TERM_IDS.add(view.id())
 
 
@@ -3139,6 +3331,10 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
         term = _Terminal.from_id(view.id())
         if term is None or view.id() in _WINDOW_CLOSING_TERM_IDS:
             return None
+
+        # Record every deliberate terminal-tab close, including profiles such
+        # as Codex that do not use a graceful tab_close_input sequence.
+        _USER_CLOSING_TERM_IDS.add(view.id())
 
         profile = _profile_settings(getattr(term, "profile_name", None))
         exit_input = profile.get("tab_close_input") if profile else None
@@ -4398,10 +4594,12 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         # this one tab".
         vid = self.view.id()
         window_closing = vid in _WINDOW_CLOSING_TERM_IDS
+        user_closing = vid in _USER_CLOSING_TERM_IDS
         _WINDOW_CLOSING_TERM_IDS.discard(vid)
+        _USER_CLOSING_TERM_IDS.discard(vid)
 
         def _do_close():
-            if isinstance(term.pty, _BrokerPty) and not window_closing:
+            if _is_broker_pty(term.pty) and (user_closing or not window_closing):
                 # A deliberate single-tab close ends the session for real.
                 # (Window closes, and ST-restart reattach failures, must not
                 # -- see term.kill()'s own docstring.)
@@ -5569,6 +5767,7 @@ def _spawn(window, path, profile=None):
         pty = _BrokerPty(
             pipe_name, argv, path, cols, rows, env,
             scrollback_bytes=_broker_scrollback_bytes(profile_name),
+            profile_name=profile_name,
         )
         print(f"[ai_terminal] Spawning PTY process using 'broker' backend (detachable, pipe={pipe_name!r}).")
     else:
@@ -5595,7 +5794,7 @@ def _spawn(window, path, profile=None):
         sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
         view.close()
         return
-    if detachable and isinstance(pty, _BrokerPty):
+    if detachable and _is_broker_pty(pty):
         view.settings().set(_BROKER_PIPE_SETTING, pty.pipe_name)
         view.settings().set(_BROKER_PROFILE_SETTING, profile_name)
         view.settings().set(_BROKER_CWD_SETTING, path)
@@ -5617,6 +5816,20 @@ def _maybe_reattach_broker(view, _confirm=False):
         pipe_name = view.settings().get(_BROKER_PIPE_SETTING)
         if not pipe_name:
             return
+
+        # A forced process kill can leave Session.sublime_session one save
+        # behind even though the broker and its child survived. The broker's
+        # own registry is written outside Sublime's workspace save cycle, so
+        # prefer a newer matching live-session record when the restored pipe
+        # has no record of its own.
+        profile_name = view.settings().get(_BROKER_PROFILE_SETTING)
+        cwd = view.settings().get(_BROKER_CWD_SETTING)
+        registered = _registered_brokers(profile_name, cwd)
+        registered_names = {item.get("pipe_name") for item in registered}
+        if pipe_name not in registered_names and registered:
+            pipe_name = registered[0]["pipe_name"]
+            view.settings().set(_BROKER_PIPE_SETTING, pipe_name)
+            print(f"[ai_terminal] recovered stale restored broker identity as {pipe_name!r}")
 
         vid = view.id()
         if vid in _BROKER_CONNECTING:
@@ -5670,6 +5883,17 @@ def _maybe_reattach_broker(view, _confirm=False):
         print("[ai_terminal] reattach check failed:\n%s" % traceback.format_exc())
 
 
+def _seed_restored_history(screen, restored_text):
+    """Seed restored plain rows, including the active-grid tail temporarily."""
+    restored_lines = restored_text.splitlines()
+    keep = screen.history_cap + screen.rows
+    if keep:
+        restored_lines = restored_lines[-keep:]
+    for line in restored_lines:
+        screen.history.append([(ch, 0) for ch in line])
+    return len(restored_lines)
+
+
 def _reattach_broker_view(view, pipe_name):
     if not _PTY_OK or os.name != "nt":
         return
@@ -5710,16 +5934,25 @@ def _reattach_broker_view(view, pipe_name):
         return
 
     cols, rows = _measure(view, profile_name=profile_name)
+    restored_text = view.substr(sublime.Region(0, view.size()))
     try:
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
+        # Keep restored plain text as host scrollback. The broker bootstrap
+        # supplies the active grid; historical colours need not be rebuilt.
+        restored_rows_seeded = _seed_restored_history(screen, restored_text)
         parser = _make_parser(screen, _force_main_screen(profile_name))
     except Exception:
         _BROKER_CONNECTING.discard(vid)
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
 
-    pty = _BrokerPty(pipe_name, argv, path, cols, rows, env, allow_spawn=False)
+    pty = _BrokerPty(
+        pipe_name, argv, path, cols, rows, env, allow_spawn=False,
+        profile_name=profile_name,
+    )
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
+    term._reattach_bootstrap = True
+    term._restored_rows_seeded = restored_rows_seeded
 
     def _finish_connected():
         _BROKER_CONNECTING.discard(vid)
@@ -7188,7 +7421,7 @@ class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
         term = _Terminal.from_id(self.view.id())
-        if term is None or not isinstance(term.pty, _BrokerPty):
+        if term is None or not _is_broker_pty(term.pty):
             return
         try:
             term.pty.explicit_kill()
@@ -7198,7 +7431,7 @@ class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
 
     def is_visible(self):
         term = _Terminal.from_id(self.view.id())
-        return term is not None and isinstance(term.pty, _BrokerPty)
+        return term is not None and _is_broker_pty(term.pty)
 
 
 class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
@@ -7281,6 +7514,15 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
         )
 
     def _show_choices(self, terms, brokers, error=None):
+        def _has_usable_view(term):
+            if term is None:
+                return False
+            view = getattr(term, "view", None)
+            try:
+                return bool(view and view.is_valid() and view.window())
+            except Exception:
+                return False
+
         terms_by_pipe = {
             getattr(getattr(term, "pty", None), "pipe_name", None): term
             for term in terms
@@ -7293,12 +7535,22 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
             if pipe_name in seen_pipes:
                 continue
             seen_pipes.add(pipe_name)
-            sessions.append((pipe_name, terms_by_pipe.get(pipe_name), broker))
-        # Still show a locally attached terminal if process discovery failed
-        # or its broker exited between the two snapshots.
-        for pipe_name, term in terms_by_pipe.items():
-            if pipe_name not in seen_pipes:
-                sessions.append((pipe_name, term, None))
+            term = terms_by_pipe.get(pipe_name)
+            # This command repairs sessions whose tab/client was lost.  A
+            # broker already attached to any valid tab needs no recovery;
+            # offering it here would disconnect and rebuild a healthy view.
+            if not _has_usable_view(term):
+                sessions.append((pipe_name, term, broker))
+        # GC can retain old _Terminal objects after their brokers have exited
+        # (reader/writer daemon references are enough).  When process
+        # discovery succeeded, its broker list is authoritative: surfacing
+        # those dead local objects as "stale/attached client" gives the user
+        # sessions that cannot actually be reattached.  Fall back to local
+        # terms only when Windows process discovery itself failed.
+        if error is not None:
+            for pipe_name, term in terms_by_pipe.items():
+                if pipe_name not in seen_pipes and not _has_usable_view(term):
+                    sessions.append((pipe_name, term, None))
 
         if not sessions:
             detail = f" ({error})" if error else ""
