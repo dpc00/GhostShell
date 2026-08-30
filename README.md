@@ -74,10 +74,10 @@ package-name import, so nothing needs updating to match.
 
 ### Getting libghostty-vt.dll
 
-The DLL isn't tracked in git (it's a built binary artifact). Download it and
-place it at `terminal/bin/ghostty-vt.dll`:
-
-https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h
+The DLL isn't tracked in Git (it's a built binary artifact). The distributed
+binary is hosted on Google Drive; download it from the
+[shared Google Drive link](https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h)
+and place it at `terminal/bin/ghostty-vt.dll`.
 
 To build it yourself instead: clone https://github.com/ghostty-org/ghostty,
 run `zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
