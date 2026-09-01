@@ -650,6 +650,24 @@
                 "AI_TERMINAL_LOG_LINES": "1"
             }
         },
+        // Patched clone at ~/src/qwen-code-ctrlc-pr (Ctrl-C exit-warning
+        // overflow: keep the status-line row budget so Ink does not
+        // full-clear at PTY rows and scroll the banner off the tab).
+        // Leave the plain "Qwen" profile on the installed 0.21.12
+        // standalone until this build is confirmed. Requires a local
+        // `npm run build` in that clone before the dist path exists.
+        "Qwen (repo)": {
+            "detachable": true,
+            "launch_command": [
+                "C:\\Program Files\\nodejs\\node.exe",
+                "--expose-gc",
+                "C:\\Users\\donal\\src\\qwen-code-ctrlc-pr\\packages\\cli\\dist\\index.js"
+            ],
+            "page_keys_to_pty": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
         "Testing Agent": {
             // 2026-08-21: per-profile bisection-gate override, isolated to
             // this profile only (ai_terminal.py's five _setting_bool call
