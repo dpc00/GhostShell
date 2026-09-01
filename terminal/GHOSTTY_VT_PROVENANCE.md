@@ -6,7 +6,7 @@ Git. The binary audited on 2026-08-30 has:
 - libghostty-vt version: `0.1.0-dev`
 - SHA-256: `BAB4D9ACA5C96B0BDB97FDC30A7C04630166D4F9585FBA4501A4E5DAE1243C20`
 - Size: `1,693,184` bytes
-- Distribution: [shared Google Drive link](https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h)
+- Distribution: [GitHub Release `ghostty-vt-634957c8`](https://github.com/dpc00/GhostShell/releases/tag/ghostty-vt-634957c8)
 - Source repository: `https://github.com/ghostty-org/ghostty`
 - Source commit: `634957c8e67cad5040f54cef57de5502450d1f5f`
 
