@@ -199,8 +199,18 @@ CATALOG = {
     # same conservative defaults every profile gets. Expect some of these to
     # need a real entry (quirks, page_keys_to_pty, etc.) once actually used.
     # Deliberately excludes ambiguous/collision-prone bare names from that
-    # tool's list (pi, sg, src, continue, kilo, roo, gh-copilot) -- too easy
-    # to PATH-collide with an unrelated program of the same short name.
+    # tool's list (sg, src, continue, kilo, roo, gh-copilot) -- too easy to
+    # PATH-collide with an unrelated program of the same short name.
+    "pi": {
+        "display_name": "Pi",
+        "launch_command": ["pi"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": (
+            "@earendil-works/pi-coding-agent (npm). Unverified: not yet run "
+            "through ai_terminal."
+        ),
+    },
     "openclaw": {
         "display_name": "OpenClaw",
         "launch_command": ["openclaw"],
