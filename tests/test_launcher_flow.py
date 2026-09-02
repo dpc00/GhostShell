@@ -544,7 +544,23 @@ def test_pick_cwd_then_reports_ambiguity_instead_of_a_picker():
     ai_terminal._pick_cwd_then(win, picked.append)
     assert not picked, "must not silently guess between two ambiguous folders"
     assert not win.panels, "the picker must be gone entirely"
-    assert any(kind == "status" for kind, _ in _messages)
+    # A status message is too easy to miss for a hard stop with no fallback
+    # (small, bottom-left, transient) -- this must be a modal the user
+    # cannot miss, not a silent-feeling no-op.
+    assert any(kind == "error" for kind, _ in _messages)
+
+
+def test_pick_cwd_then_reports_no_folder_loudly_instead_of_silently():
+    """A brand-new window (no folders, no working directory, no active file)
+    clicking Tools -> Ai Terminal -> Shells -> <profile> must not look like
+    nothing happened -- this is a hard stop with no fallback, so it has to
+    be a modal, not a status-bar message nobody notices."""
+    win = FakeWindow()
+    picked = []
+    ai_terminal._pick_cwd_then(win, picked.append)
+    assert not picked, "must not silently guess a directory"
+    assert not win.panels, "still not a picker -- this is a shortcut, not a wizard"
+    assert any(kind == "error" for kind, _ in _messages)
 
 
 def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch):
