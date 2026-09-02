@@ -133,6 +133,11 @@ _install_stubs(message_sink=_messages)
 
 import ai_terminal  # noqa: E402
 
+# Captured before clean_state's autouse fixture stubs the module attribute
+# for every other test in this file -- lets one test restore the real
+# implementation without needing to know what the stub does.
+_REAL_RESYNC_CATALOG_PROFILES = ai_terminal._resync_catalog_profiles
+
 
 PROFILES = {
     "Claude": {"argv": ["claude"]},
@@ -1474,3 +1479,71 @@ def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().pop(view.id(), None)
+
+
+# ─── the exhaustive agent menu ────────────────────────────────────────────────
+
+
+def test_build_agent_menu_json_lists_every_profile_alphabetically():
+    data = ai_terminal.build_agent_menu_json(["Codex", "aider", "Bash"])
+    all_agents = data[0]["children"][0]["children"][1]
+    assert all_agents["caption"] == "All Agents"
+    assert [c["caption"] for c in all_agents["children"]] == [
+        "aider",
+        "Bash",
+        "Codex",
+    ]
+    for child in all_agents["children"]:
+        assert child["command"] == "ai_terminal_open_here"
+        assert child["args"] == {"profile": child["caption"]}
+
+
+def test_build_agent_menu_json_dedupes():
+    data = ai_terminal.build_agent_menu_json(["Codex", "Codex", "Bash"])
+    all_agents = data[0]["children"][0]["children"][1]
+    assert [c["caption"] for c in all_agents["children"]] == ["Bash", "Codex"]
+
+
+def test_write_agent_menu_writes_valid_json(monkeypatch, tmp_path):
+    menu_path = tmp_path / "ai_terminal_agents.sublime-menu"
+    monkeypatch.setattr(ai_terminal, "_agent_menu_path", lambda: str(menu_path))
+    ai_terminal._write_agent_menu(["Bash", "Claude"])
+    assert menu_path.exists()
+    data = json.loads(menu_path.read_text(encoding="utf-8"))
+    assert data == ai_terminal.build_agent_menu_json(["Bash", "Claude"])
+
+
+def test_resync_catalog_profiles_writes_menu_from_full_merged_set(monkeypatch, tmp_path):
+    """The regenerated menu must include hand-authored profiles (Bash, from
+    the fixture's PROFILES) alongside anything newly catalog-detected, not
+    just whatever agent_catalog.CATALOG happens to know about."""
+    menu_path = tmp_path / "ai_terminal_agents.sublime-menu"
+    # clean_state stubs _resync_catalog_profiles to a no-op for every other
+    # test in this file -- restore the real one just for this test.
+    monkeypatch.setattr(
+        ai_terminal, "_resync_catalog_profiles", _REAL_RESYNC_CATALOG_PROFILES
+    )
+    # clean_state's sublime.load_settings stub returns one shared object for
+    # every settings name -- fine for tests that only touch one file, but
+    # _resync_catalog_profiles writes the *generated* file and reads the
+    # *explicit* one, and aliasing them here would make the write clobber
+    # the read. Give _generated_settings its own separate object, matching
+    # how the two are genuinely distinct files in real Sublime. Must be
+    # non-empty: `_generated_settings or sublime.load_settings(...)` falls
+    # through to the (aliased) loader if this dict is falsy/empty.
+    monkeypatch.setattr(
+        ai_terminal, "_generated_settings", Settings({"profiles": {}})
+    )
+    monkeypatch.setattr(ai_terminal, "_agent_menu_path", lambda: str(menu_path))
+    monkeypatch.setattr(
+        ai_terminal,
+        "_detect_catalog_profiles",
+        lambda: {"NewAgent": {"launch_command": ["newagent"]}},
+    )
+    monkeypatch.setattr(sys.modules["sublime"], "save_settings", lambda name: None)
+    ai_terminal._resync_catalog_profiles()
+    data = json.loads(menu_path.read_text(encoding="utf-8"))
+    all_agents = data[0]["children"][0]["children"][1]
+    captions = {c["caption"] for c in all_agents["children"]}
+    assert "NewAgent" in captions, "newly-detected agent must be in the menu"
+    assert "Bash" in captions, "hand-authored profile must survive the regen"
