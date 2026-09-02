@@ -435,6 +435,21 @@ def test_pick_cwd_then_uses_sticky_dir_without_prompting():
     assert not win.panels, "a sticky directory must never open a picker"
 
 
+def test_pick_cwd_then_announces_sole_folder_after_clearing_working_dir():
+    """A cleared working directory falling through to the sole open folder
+    must say so -- otherwise 'Clear Working Directory' looks like it did
+    nothing when the next launch silently reuses the same folder anyway."""
+    win = FakeWindow(folders=[ALPHA])
+    ai_terminal.AiTerminalSetWorkingDirectoryCommand(win).run(paths=[ALPHA])
+    ai_terminal.AiTerminalClearWorkingDirectoryCommand(win).run()
+    del _messages[:]
+    picked = []
+    ai_terminal._pick_cwd_then(win, picked.append)
+    assert picked == [ALPHA]
+    assert not win.panels
+    assert any(kind == "status" and ALPHA in text for kind, text in _messages)
+
+
 def test_working_directory_survives_window_restart(monkeypatch):
     settings = Settings()
     saved = []

@@ -5691,6 +5691,11 @@ def _pick_cwd_then(window, on_path):
     folders = list(window.folders() or []) if window else []
     sole = _sole_auto_cwd(folders)
     if sole:
+        # No saved override (e.g. just cleared) but exactly one folder is
+        # open, so this is unambiguous -- still say so. Silence here reads
+        # as "did Clear Working Directory even do anything?" right after
+        # the one action that should have changed something.
+        sublime.status_message("Ai terminal: using window folder %s" % sole)
         on_path(sole)
         return
 
@@ -5699,6 +5704,9 @@ def _pick_cwd_then(window, on_path):
         # No sidebar projects: last resort is active-file / sole resolve.
         path = _resolve_here_path(window, [])
         if path:
+            sublime.status_message(
+                "Ai terminal: using active file's project root %s" % path
+            )
             on_path(path)
             return
         # A status message alone is easy to miss entirely (small, bottom-left,
@@ -5711,6 +5719,7 @@ def _pick_cwd_then(window, on_path):
         )
         return
     if len(candidates) == 1:
+        sublime.status_message("Ai terminal: using project folder %s" % candidates[0])
         on_path(candidates[0])
         return
 
