@@ -6222,6 +6222,39 @@ class AiTerminalRefreshUsageCommand(sublime_plugin.WindowCommand):
         sublime.status_message("Ai terminal: refreshing usage…")
 
 
+def _detect_catalog_profiles():
+    """Live PATH detection against agent_catalog.CATALOG.
+
+    Shared by AiTerminalSyncAgentProfilesCommand and
+    AiTerminalLauncherCommand so there is exactly one definition of "what
+    counts as detected" -- returns {display_name: profile_dict}.
+    """
+    # Same reasoning as _spawn: a long-lived ST process inherited PATH at
+    # launch, so a CLI installed since then (setx / installer PATH edit) is
+    # invisible to os.environ until refreshed from the registry -- otherwise
+    # detection right after installing an agent still misses it.
+    refreshed = _refresh_path_env(dict(os.environ))
+    path = refreshed.get("Path") or refreshed.get("PATH")
+    detected = {}
+    for entry in _AGENT_CATALOG.values():
+        if not _command_exists(entry["launch_command"], path=path):
+            continue
+        detected[entry["display_name"]] = _agent_profile_from_entry(entry)
+    return detected
+
+
+def _resync_catalog_profiles():
+    """Persist a fresh _detect_catalog_profiles() into the generated
+    settings file, return the count found. Side-effecting; callers that
+    just want the dict without writing should call _detect_catalog_profiles
+    directly."""
+    detected = _detect_catalog_profiles()
+    gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
+    gs.set("profiles", detected)
+    sublime.save_settings(_GENERATED_SETTINGS_NAME)
+    return len(detected)
+
+
 class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
     """Clear and rebuild the auto-detected agent profiles from scratch.
 
@@ -6233,26 +6266,17 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
     _all_profiles), so hand customization (a full shim path, extra
     spawn_env, mouse_handling) survives a re-sync even if the bare command
     momentarily fails detection (e.g. a shim not yet on PATH).
+
+    Manual entry point for the same detection AiTerminalLauncherCommand now
+    also runs automatically on open -- kept as its own command for a
+    deliberate re-check (e.g. right after installing something) without
+    opening the picker.
     """
 
     def run(self):
-        # Same reasoning as _spawn: a long-lived ST process inherited PATH at
-        # launch, so a CLI installed since then (setx / installer PATH edit)
-        # is invisible to os.environ until refreshed from the registry --
-        # otherwise a sync run right after installing an agent still misses it.
-        refreshed = _refresh_path_env(dict(os.environ))
-        path = refreshed.get("Path") or refreshed.get("PATH")
-        detected = {}
-        for entry in _AGENT_CATALOG.values():
-            if not _command_exists(entry["launch_command"], path=path):
-                continue
-            detected[entry["display_name"]] = _agent_profile_from_entry(entry)
-
-        gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
-        gs.set("profiles", detected)
-        sublime.save_settings(_GENERATED_SETTINGS_NAME)
+        count = _resync_catalog_profiles()
         sublime.status_message(
-            "Ai terminal: synced %d detected agent profile(s)" % len(detected)
+            "Ai terminal: synced %d detected agent profile(s)" % count
         )
 
 
@@ -6303,9 +6327,15 @@ class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
     cross-conditioned (the directory list is re-ranked for the agent you just
     chose), so the pair you use most is Enter-Enter. Going back from step two
     reopens step one rather than dropping the whole flow.
+
+    Detects live on every open (same PATH scan as "Ai: Sync Detected Agent
+    Profiles", ~30 cheap command_exists() checks) rather than depending on
+    that command having been run first -- a new user, or anyone who just
+    installed a new CLI, gets it offered here with nothing to remember.
     """
 
     def run(self, paths=None, profile=None):
+        _resync_catalog_profiles()
         s = sublime.load_settings(_SETTINGS_NAME)
         names = _profile_names(s)
         if not names:

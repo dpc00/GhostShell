@@ -158,6 +158,12 @@ def clean_state(monkeypatch, tmp_path):
         session_text_log_module, "TEXT_LOG_DIR", str(tmp_path / "text_logs")
     )
     monkeypatch.setattr(sys.modules["sublime"], "load_settings", lambda n: settings)
+    # AiTerminalLauncherCommand.run() calls this on every open (live PATH
+    # scan against agent_catalog.CATALOG) -- without this, ~30 real
+    # command_exists() checks against the actual test machine would run on
+    # every launcher test, breaking "never touch real state" and making
+    # results depend on what happens to be installed on whoever runs pytest.
+    monkeypatch.setattr(ai_terminal, "_resync_catalog_profiles", lambda: 0)
     # Treat every profile as installed unless a test says otherwise.
     monkeypatch.setattr(ai_terminal, "_profile_is_available", lambda n, s=None: True)
     monkeypatch.setattr(
@@ -183,6 +189,23 @@ def test_launcher_shows_all_profiles_first():
     _launcher_cmd(win).run()
     assert len(win.panels) == 1
     assert sorted(_triggers(win.panels[0][0])) == ["Bash", "Claude", "Codex"]
+
+
+def test_launcher_resyncs_catalog_detection_on_every_open(monkeypatch):
+    """A newly-installed CLI (or the very first open, before anyone has ever
+    run 'Ai: Sync Detected Agent Profiles') must be offered here without a
+    separate command to remember -- widening agent_catalog.CATALOG alone
+    does nothing until detection actually runs somewhere."""
+    calls = []
+
+    def fake_resync():
+        calls.append(1)
+        return 1
+
+    monkeypatch.setattr(ai_terminal, "_resync_catalog_profiles", fake_resync)
+    win = FakeWindow(folders=[ALPHA])
+    _launcher_cmd(win).run()
+    assert calls == [1], "AiTerminalLauncherCommand.run() must resync on every open"
 
 
 def test_profiles_are_listed_alphabetically():
