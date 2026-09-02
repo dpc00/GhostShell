@@ -6243,15 +6243,76 @@ def _detect_catalog_profiles():
     return detected
 
 
+_AGENT_MENU_FILENAME = "ai_terminal_agents.sublime-menu"
+
+
+def _agent_menu_path():
+    return os.path.join(sublime.packages_path(), "GhostShell", _AGENT_MENU_FILENAME)
+
+
+def build_agent_menu_json(profile_names):
+    """The exhaustive 'All Agents' submenu contents for the given profile
+    names -- pure, no I/O, so it's directly unit-testable.
+
+    Every known profile (hand-authored + catalog-detected) gets a direct
+    Tools -> Ai Terminal -> All Agents -> <name> entry with zero setup:
+    unlike the hand-curated Shells/etc. entries in Main.sublime-menu, this
+    submenu is regenerated whenever detection runs, so nothing needs anyone
+    to know a command exists or hand-edit a menu file.
+    """
+    ordered = sorted(set(profile_names), key=lambda n: n.lower())
+    children = [
+        {
+            "caption": name,
+            "command": "ai_terminal_open_here",
+            "args": {"profile": name},
+        }
+        for name in ordered
+    ]
+    return [
+        {
+            "id": "tools",
+            "children": [
+                {
+                    "id": "ai-terminal",
+                    "children": [
+                        {"caption": "-"},
+                        {"caption": "All Agents", "children": children},
+                    ],
+                },
+            ],
+        },
+    ]
+
+
+def _write_agent_menu(profile_names):
+    """Regenerate the exhaustive agent submenu on disk. Best-effort: a
+    write failure (read-only install, permissions) degrades to 'Launch
+    Agent...' still working, not a hard failure."""
+    try:
+        path = _agent_menu_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = build_agent_menu_json(profile_names)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp, path)
+    except OSError as e:
+        print("[ai_terminal] could not write agent menu: %s" % e)
+
+
 def _resync_catalog_profiles():
     """Persist a fresh _detect_catalog_profiles() into the generated
-    settings file, return the count found. Side-effecting; callers that
-    just want the dict without writing should call _detect_catalog_profiles
-    directly."""
+    settings file and regenerate the exhaustive agent menu from the full
+    merged profile set (hand-authored + catalog-detected). Returns the
+    detected count. Side-effecting; callers that just want the dict
+    without writing should call _detect_catalog_profiles directly."""
     detected = _detect_catalog_profiles()
     gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
     gs.set("profiles", detected)
     sublime.save_settings(_GENERATED_SETTINGS_NAME)
+    s = _settings or sublime.load_settings(_SETTINGS_NAME)
+    _write_agent_menu(_all_profiles(s).keys())
     return len(detected)
 
 
@@ -8247,6 +8308,12 @@ def plugin_loaded():
             if view.settings().get(_VIEW_SETTING):
                 _apply_terminal_view_settings(view)
             _maybe_reattach_broker(view)
+    # Regenerate the exhaustive agent menu on every load, deferred off the
+    # startup critical path -- a new user (or anyone who just installed a
+    # new CLI) sees every known/detected agent under Tools -> Ai Terminal ->
+    # All Agents immediately, with no "Sync" command or menu edit to know
+    # about first.
+    sublime.set_timeout(_resync_catalog_profiles, 50)
     print("[ai_terminal] loaded (trackpad pan→TUI scroll armed)")
 
 
