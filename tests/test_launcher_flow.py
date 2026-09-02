@@ -1497,79 +1497,48 @@ def test_build_agent_menu_json_dedupes():
     assert [c["caption"] for c in children] == ["Bash", "Codex"]
 
 
-def _write_fixture_main_menu(path):
-    """A minimal Main.sublime-menu shape with the real file's 'all-agents'
-    placeholder node, standing in for the shipped file _write_agent_menu
-    reads and rewrites in place."""
-    path.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "tools",
-                    "children": [
-                        {
-                            "id": "ai-terminal",
-                            "children": [
-                                {"caption": "Launch Agent…", "command": "ai_terminal_launcher"},
-                                {"id": "all-agents", "caption": "All Agents", "children": []},
-                                {"caption": "Nuke Ai Terminal", "command": "ai_terminal_nuke"},
-                            ],
-                        },
-                    ],
-                },
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def test_write_agent_menu_writes_valid_json(monkeypatch, tmp_path):
-    menu_path = tmp_path / "Main.sublime-menu"
-    _write_fixture_main_menu(menu_path)
-    monkeypatch.setattr(ai_terminal, "_main_menu_path", lambda: str(menu_path))
-    ai_terminal._write_agent_menu(["Bash", "Claude"])
-    data = json.loads(menu_path.read_text(encoding="utf-8"))
-    all_agents = ai_terminal._find_menu_node(data, "all-agents")
-    assert all_agents["children"] == ai_terminal.build_agent_menu_json(["Bash", "Claude"])
-    # hand-authored siblings must survive the regen untouched
-    ai_terminal_node = ai_terminal._find_menu_node(data, "ai-terminal")
-    captions = [c.get("caption") for c in ai_terminal_node["children"]]
-    assert "Launch Agent…" in captions
-    assert "Nuke Ai Terminal" in captions
-
-
-def test_resync_catalog_profiles_writes_menu_from_full_merged_set(monkeypatch, tmp_path):
-    """The regenerated menu must include hand-authored profiles (Bash, from
-    the fixture's PROFILES) alongside anything newly catalog-detected, not
-    just whatever agent_catalog.CATALOG happens to know about."""
-    menu_path = tmp_path / "Main.sublime-menu"
-    _write_fixture_main_menu(menu_path)
-    # clean_state stubs _resync_catalog_profiles to a no-op for every other
-    # test in this file -- restore the real one just for this test.
+def test_resync_catalog_profiles_only_touches_settings(monkeypatch):
+    """The 'All Agents' menu is static/checked-in (tools/regen_agent_menu.py),
+    not regenerated per machine -- _resync_catalog_profiles must persist
+    detection into the generated settings file and stop there."""
     monkeypatch.setattr(
         ai_terminal, "_resync_catalog_profiles", _REAL_RESYNC_CATALOG_PROFILES
     )
-    # clean_state's sublime.load_settings stub returns one shared object for
-    # every settings name -- fine for tests that only touch one file, but
-    # _resync_catalog_profiles writes the *generated* file and reads the
-    # *explicit* one, and aliasing them here would make the write clobber
-    # the read. Give _generated_settings its own separate object, matching
-    # how the two are genuinely distinct files in real Sublime. Must be
-    # non-empty: `_generated_settings or sublime.load_settings(...)` falls
-    # through to the (aliased) loader if this dict is falsy/empty.
-    monkeypatch.setattr(
-        ai_terminal, "_generated_settings", Settings({"profiles": {}})
-    )
-    monkeypatch.setattr(ai_terminal, "_main_menu_path", lambda: str(menu_path))
+    monkeypatch.setattr(ai_terminal, "_generated_settings", Settings({"profiles": {}}))
     monkeypatch.setattr(
         ai_terminal,
         "_detect_catalog_profiles",
         lambda: {"NewAgent": {"launch_command": ["newagent"]}},
     )
-    monkeypatch.setattr(sys.modules["sublime"], "save_settings", lambda name: None)
-    ai_terminal._resync_catalog_profiles()
-    data = json.loads(menu_path.read_text(encoding="utf-8"))
-    all_agents = ai_terminal._find_menu_node(data, "all-agents")
-    captions = {c["caption"] for c in all_agents["children"]}
-    assert "NewAgent" in captions, "newly-detected agent must be in the menu"
-    assert "Bash" in captions, "hand-authored profile must survive the regen"
+    saved = []
+    monkeypatch.setattr(
+        sys.modules["sublime"], "save_settings", lambda name: saved.append(name)
+    )
+    count = ai_terminal._resync_catalog_profiles()
+    assert count == 1
+    assert ai_terminal._generated_settings.get("profiles") == {
+        "NewAgent": {"launch_command": ["newagent"]}
+    }
+    assert saved == [ai_terminal._GENERATED_SETTINGS_NAME]
+
+
+def test_main_sublime_menu_all_agents_matches_regen_script():
+    """Drift check: tools/regen_agent_menu.py's output for the current
+    CATALOG + shipped profiles must match what's actually committed in
+    Main.sublime-menu. A failure here means someone added/removed a CATALOG
+    entry or a hand-authored profile without re-running that script."""
+    import importlib
+
+    regen = importlib.import_module("tools.regen_agent_menu")
+    menu_path = os.path.join(REPO, "Main.sublime-menu")
+    with open(menu_path, encoding="utf-8") as f:
+        committed = json.load(f)
+    committed_children = regen._find_menu_node(committed, "all-agents")["children"]
+
+    expected_names = regen.known_agent_profile_names(ai_terminal)
+    expected_children = ai_terminal.build_agent_menu_json(expected_names)
+
+    assert committed_children == expected_children, (
+        "Main.sublime-menu's 'All Agents' list is stale -- "
+        "run: python tools/regen_agent_menu.py"
+    )

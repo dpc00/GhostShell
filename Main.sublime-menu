@@ -8,18 +8,18 @@
                 "id": "ai-terminal",
                 "children": [
                     {
-                        "caption": "Launch Agent\u2026",
+                        "caption": "Launch Agent…",
                         "command": "ai_terminal_launcher"
                     },
                     {
-                        "caption": "All Agent History\u2026",
+                        "caption": "All Agent History…",
                         "command": "ai_terminal_history"
                     },
                     {
                         "caption": "-"
                     },
                     {
-                        "caption": "Open Profile\u2026",
+                        "caption": "Open Profile…",
                         "command": "ai_terminal_select_profile"
                     },
                     {
@@ -45,207 +45,23 @@
                         "caption": "-"
                     },
                     {
-                        "caption": "Shells",
-                        "children": [
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Bash"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "PowerShell"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Dos Console"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "WSL Bash"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "caption": "Claude",
-                        "children": [
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Claude"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Claude --chrome"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama --chrome"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "caption": "OpenCode",
-                        "children": [
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "OpenCode"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "OpenCode --mini"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama --mini"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "caption": "Codex",
-                        "children": [
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Codex"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Codex \u2192\u21e2\u21e8 Ollama"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Antigravity"
-                        }
-                    },
-                    {
-                        "caption": "Grok Build",
-                        "children": [
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Grok Build"
-                                }
-                            },
-                            {
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Grok Build --minimal"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "dsh"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "jcode"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Junie"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Kimi"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Kiro"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Mimo"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Pybackup Go TUI"
-                        }
-                    },
-                    {
-                        "caption": "Qwen",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Qwen"
-                        }
-                    },
-                    {
-                        "caption": "Qwen \u2192\u21e2\u21e8 Ollama",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Qwen \u2192\u21e2\u21e8 Ollama"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Vibe"
-                        }
-                    },
-                    {
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Testing Agent"
-                        }
-                    },
-                    {
-                        "caption": "-"
-                    },
-                    {
                         "id": "all-agents",
                         "caption": "All Agents",
                         "children": [
+                            {
+                                "caption": "Aider",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Aider"
+                                }
+                            },
+                            {
+                                "caption": "Amp",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Amp"
+                                }
+                            },
                             {
                                 "caption": "Antigravity",
                                 "command": "ai_terminal_open_here",
@@ -254,10 +70,17 @@
                                 }
                             },
                             {
-                                "caption": "Bash",
+                                "caption": "Auggie",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Bash"
+                                    "profile": "Auggie"
+                                }
+                            },
+                            {
+                                "caption": "Blackbox",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Blackbox"
                                 }
                             },
                             {
@@ -275,24 +98,31 @@
                                 }
                             },
                             {
-                                "caption": "Claude \u2192 Cloud",
+                                "caption": "Claude → Cloud",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Claude \u2192 Cloud"
+                                    "profile": "Claude → Cloud"
                                 }
                             },
                             {
-                                "caption": "Claude \u2192\u21e2\u21e8 Ollama",
+                                "caption": "Claude →⇢⇨ Ollama",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama"
+                                    "profile": "Claude →⇢⇨ Ollama"
                                 }
                             },
                             {
-                                "caption": "Claude \u2192\u21e2\u21e8 Ollama --chrome",
+                                "caption": "Claude →⇢⇨ Ollama --chrome",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama --chrome"
+                                    "profile": "Claude →⇢⇨ Ollama --chrome"
+                                }
+                            },
+                            {
+                                "caption": "Cline",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Cline"
                                 }
                             },
                             {
@@ -303,17 +133,45 @@
                                 }
                             },
                             {
-                                "caption": "Codex \u2192\u21e2\u21e8 Ollama",
+                                "caption": "Codex →⇢⇨ Ollama",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Codex \u2192\u21e2\u21e8 Ollama"
+                                    "profile": "Codex →⇢⇨ Ollama"
                                 }
                             },
                             {
-                                "caption": "Dos Console",
+                                "caption": "Cody",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Dos Console"
+                                    "profile": "Cody"
+                                }
+                            },
+                            {
+                                "caption": "Continue",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Continue"
+                                }
+                            },
+                            {
+                                "caption": "Crush",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Crush"
+                                }
+                            },
+                            {
+                                "caption": "Cursor Agent",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Cursor Agent"
+                                }
+                            },
+                            {
+                                "caption": "Droid",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Droid"
                                 }
                             },
                             {
@@ -324,10 +182,31 @@
                                 }
                             },
                             {
+                                "caption": "Factory",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Factory"
+                                }
+                            },
+                            {
                                 "caption": "Gemini",
                                 "command": "ai_terminal_open_here",
                                 "args": {
                                     "profile": "Gemini"
+                                }
+                            },
+                            {
+                                "caption": "GitHub Copilot",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "GitHub Copilot"
+                                }
+                            },
+                            {
+                                "caption": "Goose",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Goose"
                                 }
                             },
                             {
@@ -359,6 +238,13 @@
                                 }
                             },
                             {
+                                "caption": "Kilo Code",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Kilo Code"
+                                }
+                            },
+                            {
                                 "caption": "Kimi",
                                 "command": "ai_terminal_open_here",
                                 "args": {
@@ -380,6 +266,13 @@
                                 }
                             },
                             {
+                                "caption": "OpenClaw",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "OpenClaw"
+                                }
+                            },
+                            {
                                 "caption": "OpenCode",
                                 "command": "ai_terminal_open_here",
                                 "args": {
@@ -394,17 +287,17 @@
                                 }
                             },
                             {
-                                "caption": "OpenCode \u2192\u21e2\u21e8 Ollama",
+                                "caption": "OpenCode →⇢⇨ Ollama",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama"
+                                    "profile": "OpenCode →⇢⇨ Ollama"
                                 }
                             },
                             {
-                                "caption": "OpenCode \u2192\u21e2\u21e8 Ollama --mini",
+                                "caption": "OpenCode →⇢⇨ Ollama --mini",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama --mini"
+                                    "profile": "OpenCode →⇢⇨ Ollama --mini"
                                 }
                             },
                             {
@@ -415,20 +308,6 @@
                                 }
                             },
                             {
-                                "caption": "PowerShell",
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "PowerShell"
-                                }
-                            },
-                            {
-                                "caption": "Pybackup Go TUI",
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Pybackup Go TUI"
-                                }
-                            },
-                            {
                                 "caption": "Qwen",
                                 "command": "ai_terminal_open_here",
                                 "args": {
@@ -436,24 +315,17 @@
                                 }
                             },
                             {
-                                "caption": "Qwen (repo)",
+                                "caption": "Qwen →⇢⇨ Ollama",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Qwen (repo)"
+                                    "profile": "Qwen →⇢⇨ Ollama"
                                 }
                             },
                             {
-                                "caption": "Qwen \u2192\u21e2\u21e8 Ollama",
+                                "caption": "Roo Code",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "Qwen \u2192\u21e2\u21e8 Ollama"
-                                }
-                            },
-                            {
-                                "caption": "Testing Agent",
-                                "command": "ai_terminal_open_here",
-                                "args": {
-                                    "profile": "Testing Agent"
+                                    "profile": "Roo Code"
                                 }
                             },
                             {
@@ -464,10 +336,10 @@
                                 }
                             },
                             {
-                                "caption": "WSL Bash",
+                                "caption": "Windsurf",
                                 "command": "ai_terminal_open_here",
                                 "args": {
-                                    "profile": "WSL Bash"
+                                    "profile": "Windsurf"
                                 }
                             }
                         ]
@@ -478,6 +350,36 @@
                     {
                         "caption": "Nuke Ai Terminal",
                         "command": "ai_terminal_nuke"
+                    }
+                ]
+            },
+            {
+                "caption": "Shells",
+                "id": "shells",
+                "children": [
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Bash"
+                        }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "PowerShell"
+                        }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Dos Console"
+                        }
+                    },
+                    {
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "WSL Bash"
+                        }
                     }
                 ]
             }
