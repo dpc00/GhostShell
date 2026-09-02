@@ -189,6 +189,137 @@ CATALOG = {
             "Junie: prefer a full path."
         ),
     },
+    # ---- Broad discovery entries below -------------------------------------
+    # Widen PATH-based auto-detection to match the known-CLI breadth of
+    # ~/tools/list-coding-agents (a separate, Windows-only PowerShell
+    # detector using npm/winget/PE-metadata heuristics this project doesn't
+    # depend on). These are *not* run through ai_terminal yet -- no one has
+    # observed their mouse/scroll/alt-screen behavior, so unlike the entries
+    # above they carry no quirk overrides, just a bare command name and the
+    # same conservative defaults every profile gets. Expect some of these to
+    # need a real entry (quirks, page_keys_to_pty, etc.) once actually used.
+    # Deliberately excludes ambiguous/collision-prone bare names from that
+    # tool's list (pi, sg, src, continue, kilo, roo, gh-copilot) -- too easy
+    # to PATH-collide with an unrelated program of the same short name.
+    "openclaw": {
+        "display_name": "OpenClaw",
+        "launch_command": ["openclaw"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "aider": {
+        "display_name": "Aider",
+        "launch_command": ["aider"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "cody": {
+        "display_name": "Cody",
+        "launch_command": ["cody"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "crush": {
+        "display_name": "Crush",
+        "launch_command": ["crush"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "droid": {
+        "display_name": "Droid",
+        "launch_command": ["droid"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "amp": {
+        "display_name": "Amp",
+        "launch_command": ["amp"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "goose": {
+        "display_name": "Goose",
+        "launch_command": ["goose"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "cline": {
+        "display_name": "Cline",
+        "launch_command": ["cline"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "kilocode": {
+        "display_name": "Kilo Code",
+        "launch_command": ["kilocode"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "factory": {
+        "display_name": "Factory",
+        "launch_command": ["factory"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "blackbox": {
+        "display_name": "Blackbox",
+        "launch_command": ["blackbox"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "auggie": {
+        "display_name": "Auggie",
+        "launch_command": ["auggie"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "cursor-agent": {
+        "display_name": "Cursor Agent",
+        "launch_command": ["cursor-agent"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "windsurf": {
+        "display_name": "Windsurf",
+        "launch_command": ["windsurf"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "continue-cli": {
+        "display_name": "Continue",
+        "launch_command": ["continue-cli"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "roo-code": {
+        "display_name": "Roo Code",
+        "launch_command": ["roo-code"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "copilot": {
+        "display_name": "GitHub Copilot",
+        "launch_command": ["copilot"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
 }
 
 
