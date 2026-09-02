@@ -6243,33 +6243,14 @@ def _detect_catalog_profiles():
     return detected
 
 
-def _main_menu_path():
-    return os.path.join(sublime.packages_path(), "GhostShell", "Main.sublime-menu")
-
-
-def _find_menu_node(tree, node_id):
-    """Depth-first search for a {"id": node_id, ...} dict anywhere under a
-    parsed .sublime-menu tree (a list of dicts, each possibly holding a
-    "children" list of more such dicts). Returns None if not found."""
-    stack = list(tree) if isinstance(tree, list) else [tree]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            if node.get("id") == node_id:
-                return node
-            stack.extend(node.get("children") or [])
-    return None
-
-
 def build_agent_menu_json(profile_names):
-    """The exhaustive 'All Agents' submenu *children* for the given profile
-    names -- pure, no I/O, so it's directly unit-testable.
+    """The 'All Agents' submenu *children* for the given profile names --
+    pure, no I/O, so it's directly unit-testable.
 
-    Every known profile (hand-authored + catalog-detected) gets a direct
-    Tools -> Ai Terminal -> All Agents -> <name> entry with zero setup:
-    unlike the hand-curated Shells/etc. entries in Main.sublime-menu, this
-    list is regenerated whenever detection runs, so nothing needs anyone to
-    know a command exists or hand-edit a menu file.
+    Used by tools/regen_agent_menu.py to (re)generate the checked-in
+    "all-agents" node in Main.sublime-menu -- see that script's docstring
+    for why this list is static/committed rather than written at runtime.
+    Not called by the plugin itself.
     """
     ordered = sorted(set(profile_names), key=lambda n: n.lower())
     return [
@@ -6282,52 +6263,22 @@ def build_agent_menu_json(profile_names):
     ]
 
 
-def _write_agent_menu(profile_names):
-    """Regenerate the exhaustive agent submenu in place inside the shipped
-    Main.sublime-menu. Best-effort: a write failure (read-only install,
-    permissions, unexpected file shape) degrades to 'Launch Agent...' still
-    working, not a hard failure.
-
-    Sublime Text has no API for dynamic menu items (confirmed by Sublime's
-    creator: https://forum.sublimetext.com/t/dynamic-menu-items/5352) --
-    the only real mechanism is a plugin rewriting its own .sublime-menu file
-    on disk. Critically, that file must be named exactly "Main.sublime-menu"
-    -- Sublime only scans that fixed filename (and Context/Side Bar/etc.)
-    for menu contributions, so a differently-named generated file (the
-    previous approach here) is silently invisible no matter its contents.
-    The hand-authored "all-agents" placeholder node in Main.sublime-menu
-    (empty "children": []) is what this function's output replaces, leaving
-    every hand-curated entry in the same file untouched.
-    """
-    try:
-        path = _main_menu_path()
-        with open(path, "r", encoding="utf-8") as f:
-            tree = json.load(f)
-        node = _find_menu_node(tree, "all-agents")
-        if node is None:
-            print("[ai_terminal] Main.sublime-menu missing 'all-agents' node, skipping menu regen")
-            return
-        node["children"] = build_agent_menu_json(profile_names)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(tree, f, indent=4)
-        os.replace(tmp, path)
-    except (OSError, ValueError) as e:
-        print("[ai_terminal] could not write agent menu: %s" % e)
-
-
 def _resync_catalog_profiles():
     """Persist a fresh _detect_catalog_profiles() into the generated
-    settings file and regenerate the exhaustive agent menu from the full
-    merged profile set (hand-authored + catalog-detected). Returns the
-    detected count. Side-effecting; callers that just want the dict
-    without writing should call _detect_catalog_profiles directly."""
+    settings file. Returns the detected count. Side-effecting; callers that
+    just want the dict without writing should call _detect_catalog_profiles
+    directly.
+
+    Only settings are touched here -- the "All Agents" menu (Main.sublime-menu)
+    is static/checked-in (see tools/regen_agent_menu.py), not regenerated per
+    machine. A profile absent from this machine's detection simply greys out
+    via AiTerminalOpenHereCommand.is_enabled, so an undetected catalog entry
+    still shows correctly, just disabled.
+    """
     detected = _detect_catalog_profiles()
     gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
     gs.set("profiles", detected)
     sublime.save_settings(_GENERATED_SETTINGS_NAME)
-    s = _settings or sublime.load_settings(_SETTINGS_NAME)
-    _write_agent_menu(_all_profiles(s).keys())
     return len(detected)
 
 
