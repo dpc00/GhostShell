@@ -5701,15 +5701,23 @@ def _pick_cwd_then(window, on_path):
         if path:
             on_path(path)
             return
-        sublime.status_message("Ai terminal: no folder resolved")
+        # A status message alone is easy to miss entirely (small, bottom-left,
+        # transient) -- this is a hard stop with no fallback, so make it a
+        # modal the user cannot miss instead of a silent-feeling no-op.
+        sublime.error_message(
+            "Ai Terminal: no folder open and no working directory set.\n\n"
+            "Open a folder, or use Tools → Ai Terminal → "
+            "Set Working Directory, then try again."
+        )
         return
     if len(candidates) == 1:
         on_path(candidates[0])
         return
 
-    sublime.status_message(
-        "Ai terminal: multiple project folders open — right-click one in the "
-        "sidebar and choose 'Set Ai Terminal Working Directory'"
+    sublime.error_message(
+        "Ai Terminal: multiple project folders open.\n\n"
+        "Right-click one in the sidebar and choose 'Set Ai Terminal Working "
+        "Directory'."
     )
 
 
