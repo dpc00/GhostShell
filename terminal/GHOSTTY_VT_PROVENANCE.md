@@ -16,6 +16,10 @@ checkout also contained an untracked `zig-pkg/` directory; it did not change
 the recorded Git commit.
 
 `terminal.ghostty_vt.load_library()` queries `ghostty_build_info` and logs the
-libghostty-vt version alongside the loaded path, SHA-256, and size. When
-replacing the DLL, update this record after comparing the installed artifact
-to the intended build output.
+libghostty-vt version alongside the loaded path, SHA-256, and size. On first
+use it downloads the DLL from the Release above via `ensure_dll()`, verifying
+it against `EXPECTED_SHA256` before use -- a file already at
+`terminal/bin/ghostty-vt.dll` that already matches is reused, no network
+touched. When replacing the DLL: publish the new build as a new GitHub
+Release, then update `RELEASE_DLL_URL` and `EXPECTED_SHA256` in
+`terminal/ghostty_vt.py` together with this record.
