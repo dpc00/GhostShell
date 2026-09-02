@@ -1485,39 +1485,65 @@ def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
 
 
 def test_build_agent_menu_json_lists_every_profile_alphabetically():
-    data = ai_terminal.build_agent_menu_json(["Codex", "aider", "Bash"])
-    all_agents = data[0]["children"][0]["children"][1]
-    assert all_agents["caption"] == "All Agents"
-    assert [c["caption"] for c in all_agents["children"]] == [
-        "aider",
-        "Bash",
-        "Codex",
-    ]
-    for child in all_agents["children"]:
+    children = ai_terminal.build_agent_menu_json(["Codex", "aider", "Bash"])
+    assert [c["caption"] for c in children] == ["aider", "Bash", "Codex"]
+    for child in children:
         assert child["command"] == "ai_terminal_open_here"
         assert child["args"] == {"profile": child["caption"]}
 
 
 def test_build_agent_menu_json_dedupes():
-    data = ai_terminal.build_agent_menu_json(["Codex", "Codex", "Bash"])
-    all_agents = data[0]["children"][0]["children"][1]
-    assert [c["caption"] for c in all_agents["children"]] == ["Bash", "Codex"]
+    children = ai_terminal.build_agent_menu_json(["Codex", "Codex", "Bash"])
+    assert [c["caption"] for c in children] == ["Bash", "Codex"]
+
+
+def _write_fixture_main_menu(path):
+    """A minimal Main.sublime-menu shape with the real file's 'all-agents'
+    placeholder node, standing in for the shipped file _write_agent_menu
+    reads and rewrites in place."""
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "tools",
+                    "children": [
+                        {
+                            "id": "ai-terminal",
+                            "children": [
+                                {"caption": "Launch Agent…", "command": "ai_terminal_launcher"},
+                                {"id": "all-agents", "caption": "All Agents", "children": []},
+                                {"caption": "Nuke Ai Terminal", "command": "ai_terminal_nuke"},
+                            ],
+                        },
+                    ],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_write_agent_menu_writes_valid_json(monkeypatch, tmp_path):
-    menu_path = tmp_path / "ai_terminal_agents.sublime-menu"
-    monkeypatch.setattr(ai_terminal, "_agent_menu_path", lambda: str(menu_path))
+    menu_path = tmp_path / "Main.sublime-menu"
+    _write_fixture_main_menu(menu_path)
+    monkeypatch.setattr(ai_terminal, "_main_menu_path", lambda: str(menu_path))
     ai_terminal._write_agent_menu(["Bash", "Claude"])
-    assert menu_path.exists()
     data = json.loads(menu_path.read_text(encoding="utf-8"))
-    assert data == ai_terminal.build_agent_menu_json(["Bash", "Claude"])
+    all_agents = ai_terminal._find_menu_node(data, "all-agents")
+    assert all_agents["children"] == ai_terminal.build_agent_menu_json(["Bash", "Claude"])
+    # hand-authored siblings must survive the regen untouched
+    ai_terminal_node = ai_terminal._find_menu_node(data, "ai-terminal")
+    captions = [c.get("caption") for c in ai_terminal_node["children"]]
+    assert "Launch Agent…" in captions
+    assert "Nuke Ai Terminal" in captions
 
 
 def test_resync_catalog_profiles_writes_menu_from_full_merged_set(monkeypatch, tmp_path):
     """The regenerated menu must include hand-authored profiles (Bash, from
     the fixture's PROFILES) alongside anything newly catalog-detected, not
     just whatever agent_catalog.CATALOG happens to know about."""
-    menu_path = tmp_path / "ai_terminal_agents.sublime-menu"
+    menu_path = tmp_path / "Main.sublime-menu"
+    _write_fixture_main_menu(menu_path)
     # clean_state stubs _resync_catalog_profiles to a no-op for every other
     # test in this file -- restore the real one just for this test.
     monkeypatch.setattr(
@@ -1534,7 +1560,7 @@ def test_resync_catalog_profiles_writes_menu_from_full_merged_set(monkeypatch, t
     monkeypatch.setattr(
         ai_terminal, "_generated_settings", Settings({"profiles": {}})
     )
-    monkeypatch.setattr(ai_terminal, "_agent_menu_path", lambda: str(menu_path))
+    monkeypatch.setattr(ai_terminal, "_main_menu_path", lambda: str(menu_path))
     monkeypatch.setattr(
         ai_terminal,
         "_detect_catalog_profiles",
@@ -1543,7 +1569,7 @@ def test_resync_catalog_profiles_writes_menu_from_full_merged_set(monkeypatch, t
     monkeypatch.setattr(sys.modules["sublime"], "save_settings", lambda name: None)
     ai_terminal._resync_catalog_profiles()
     data = json.loads(menu_path.read_text(encoding="utf-8"))
-    all_agents = data[0]["children"][0]["children"][1]
+    all_agents = ai_terminal._find_menu_node(data, "all-agents")
     captions = {c["caption"] for c in all_agents["children"]}
     assert "NewAgent" in captions, "newly-detected agent must be in the menu"
     assert "Bash" in captions, "hand-authored profile must survive the regen"

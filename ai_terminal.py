@@ -6243,25 +6243,36 @@ def _detect_catalog_profiles():
     return detected
 
 
-_AGENT_MENU_FILENAME = "ai_terminal_agents.sublime-menu"
+def _main_menu_path():
+    return os.path.join(sublime.packages_path(), "GhostShell", "Main.sublime-menu")
 
 
-def _agent_menu_path():
-    return os.path.join(sublime.packages_path(), "GhostShell", _AGENT_MENU_FILENAME)
+def _find_menu_node(tree, node_id):
+    """Depth-first search for a {"id": node_id, ...} dict anywhere under a
+    parsed .sublime-menu tree (a list of dicts, each possibly holding a
+    "children" list of more such dicts). Returns None if not found."""
+    stack = list(tree) if isinstance(tree, list) else [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("id") == node_id:
+                return node
+            stack.extend(node.get("children") or [])
+    return None
 
 
 def build_agent_menu_json(profile_names):
-    """The exhaustive 'All Agents' submenu contents for the given profile
+    """The exhaustive 'All Agents' submenu *children* for the given profile
     names -- pure, no I/O, so it's directly unit-testable.
 
     Every known profile (hand-authored + catalog-detected) gets a direct
     Tools -> Ai Terminal -> All Agents -> <name> entry with zero setup:
     unlike the hand-curated Shells/etc. entries in Main.sublime-menu, this
-    submenu is regenerated whenever detection runs, so nothing needs anyone
-    to know a command exists or hand-edit a menu file.
+    list is regenerated whenever detection runs, so nothing needs anyone to
+    know a command exists or hand-edit a menu file.
     """
     ordered = sorted(set(profile_names), key=lambda n: n.lower())
-    children = [
+    return [
         {
             "caption": name,
             "command": "ai_terminal_open_here",
@@ -6269,35 +6280,39 @@ def build_agent_menu_json(profile_names):
         }
         for name in ordered
     ]
-    return [
-        {
-            "id": "tools",
-            "children": [
-                {
-                    "id": "ai-terminal",
-                    "children": [
-                        {"caption": "-"},
-                        {"caption": "All Agents", "children": children},
-                    ],
-                },
-            ],
-        },
-    ]
 
 
 def _write_agent_menu(profile_names):
-    """Regenerate the exhaustive agent submenu on disk. Best-effort: a
-    write failure (read-only install, permissions) degrades to 'Launch
-    Agent...' still working, not a hard failure."""
+    """Regenerate the exhaustive agent submenu in place inside the shipped
+    Main.sublime-menu. Best-effort: a write failure (read-only install,
+    permissions, unexpected file shape) degrades to 'Launch Agent...' still
+    working, not a hard failure.
+
+    Sublime Text has no API for dynamic menu items (confirmed by Sublime's
+    creator: https://forum.sublimetext.com/t/dynamic-menu-items/5352) --
+    the only real mechanism is a plugin rewriting its own .sublime-menu file
+    on disk. Critically, that file must be named exactly "Main.sublime-menu"
+    -- Sublime only scans that fixed filename (and Context/Side Bar/etc.)
+    for menu contributions, so a differently-named generated file (the
+    previous approach here) is silently invisible no matter its contents.
+    The hand-authored "all-agents" placeholder node in Main.sublime-menu
+    (empty "children": []) is what this function's output replaces, leaving
+    every hand-curated entry in the same file untouched.
+    """
     try:
-        path = _agent_menu_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        data = build_agent_menu_json(profile_names)
+        path = _main_menu_path()
+        with open(path, "r", encoding="utf-8") as f:
+            tree = json.load(f)
+        node = _find_menu_node(tree, "all-agents")
+        if node is None:
+            print("[ai_terminal] Main.sublime-menu missing 'all-agents' node, skipping menu regen")
+            return
+        node["children"] = build_agent_menu_json(profile_names)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+            json.dump(tree, f, indent=4)
         os.replace(tmp, path)
-    except OSError as e:
+    except (OSError, ValueError) as e:
         print("[ai_terminal] could not write agent menu: %s" % e)
 
 
