@@ -8,16 +8,33 @@ iterators for the active grid, and grid_ref for scrollback rows (which
 sit outside the render-state's viewport-only scope). See
 include/ghostty/vt/*.h in the ghostty checkout for the full API.
 
-DLL ships in-repo at terminal/bin/ghostty-vt.dll (built from the Zig
-checkout at ~/tools/ghostty/zig-out/bin/ghostty-vt.dll -- copy a fresh build
-over that file to update). Override via GHOSTTY_VT_DLL env var to point at
-a different build during development.
+The DLL is gitignored -- not shipped in the package archive. On first use,
+load_library() downloads it from RELEASE_DLL_URL (a pinned GitHub Release
+asset) to terminal/bin/ghostty-vt.dll and verifies it against
+EXPECTED_SHA256 before loading; a file already there that already matches
+is reused as-is, no network touched. See GHOSTTY_VT_PROVENANCE.md for the
+audit trail of the currently-pinned build. Override via GHOSTTY_VT_DLL env
+var (or pass an explicit path to load_library()) to point at a different
+build during development -- either one skips the download entirely.
 """
 import ctypes
 import hashlib
 import os
+import tempfile
+import urllib.error
+import urllib.request
 
 DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dll")
+
+# Pinned to the audited build recorded in GHOSTTY_VT_PROVENANCE.md. Update
+# both together when replacing the DLL.
+RELEASE_DLL_URL = (
+    "https://github.com/dpc00/GhostShell/releases/download/"
+    "ghostty-vt-634957c8/ghostty-vt.dll"
+)
+EXPECTED_SHA256 = (
+    "bab4d9aca5c96b0bdb97fdc30a7c04630166d4f9585fba4501a4e5dae1243c20"
+)
 
 _fingerprint_logged = False
 
@@ -69,9 +86,69 @@ def dll_fingerprint(path):
         return None
 
 
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def ensure_dll(path=DEFAULT_DLL_PATH, url=RELEASE_DLL_URL, expected_sha256=EXPECTED_SHA256, timeout=30):
+    """Ensure a verified DLL sits at ``path``, downloading it if needed.
+
+    No-op (no network touched) if a file already at ``path`` already matches
+    ``expected_sha256``. Otherwise downloads ``url`` to a temp file in the
+    same directory, verifies the checksum, then atomically renames it into
+    place -- an interrupted or corrupted download can never leave a partial
+    or bad DLL where load_library() would find it.
+    """
+    if os.path.exists(path):
+        try:
+            if _sha256_file(path) == expected_sha256:
+                return path
+        except OSError:
+            pass
+    dest_dir = os.path.dirname(path)
+    os.makedirs(dest_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dest_dir, suffix=".dll.download")
+    try:
+        with os.fdopen(fd, "wb") as tmp, urllib.request.urlopen(url, timeout=timeout) as resp:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+        got = _sha256_file(tmp_path)
+        if got != expected_sha256:
+            raise ValueError(
+                "downloaded ghostty-vt.dll checksum mismatch: expected %s, got %s"
+                % (expected_sha256, got)
+            )
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
 def load_library(path=None):
     global _fingerprint_logged
-    path = path or os.environ.get("GHOSTTY_VT_DLL", DEFAULT_DLL_PATH)
+    override = os.environ.get("GHOSTTY_VT_DLL")
+    explicit = path is not None
+    path = path or override or DEFAULT_DLL_PATH
+    if not explicit and not override:
+        try:
+            ensure_dll(path)
+        except (OSError, urllib.error.URLError, ValueError) as e:
+            raise OSError(
+                "could not obtain libghostty-vt.dll (%s); build it yourself and "
+                "set GHOSTTY_VT_DLL to point at it if the download keeps failing"
+                % e
+            ) from e
     try:
         lib = ctypes.CDLL(path)
     except OSError as e:
