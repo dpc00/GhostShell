@@ -1,25 +1,25 @@
 [
     {
         "id": "tools",
-        "children":
-        [
+        "children": [
             {
                 "caption": "Ai Terminal",
                 "mnemonic": "A",
                 "id": "ai-terminal",
-                "children":
-                [
+                "children": [
                     {
-                        "caption": "Launch Agent…",
+                        "caption": "Launch Agent\u2026",
                         "command": "ai_terminal_launcher"
                     },
                     {
-                        "caption": "All Agent History…",
+                        "caption": "All Agent History\u2026",
                         "command": "ai_terminal_history"
                     },
-                    { "caption": "-" },
                     {
-                        "caption": "Open Profile…",
+                        "caption": "-"
+                    },
+                    {
+                        "caption": "Open Profile\u2026",
                         "command": "ai_terminal_select_profile"
                     },
                     {
@@ -30,7 +30,9 @@
                         "caption": "Refresh Usage & Quota",
                         "command": "ai_terminal_refresh_usage"
                     },
-                    { "caption": "-" },
+                    {
+                        "caption": "-"
+                    },
                     {
                         "caption": "Set Working Directory",
                         "command": "ai_terminal_set_working_directory"
@@ -39,152 +41,440 @@
                         "caption": "Clear Working Directory",
                         "command": "ai_terminal_clear_working_directory"
                     },
-                    { "caption": "-" },
+                    {
+                        "caption": "-"
+                    },
                     {
                         "caption": "Shells",
-                        "children":
-                        [
+                        "children": [
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Bash" }
+                                "args": {
+                                    "profile": "Bash"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "PowerShell" }
+                                "args": {
+                                    "profile": "PowerShell"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Dos Console" }
+                                "args": {
+                                    "profile": "Dos Console"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "WSL Bash" }
+                                "args": {
+                                    "profile": "WSL Bash"
+                                }
                             }
                         ]
                     },
                     {
                         "caption": "Claude",
-                        "children":
-                        [
+                        "children": [
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Claude" }
+                                "args": {
+                                    "profile": "Claude"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Claude --chrome" }
+                                "args": {
+                                    "profile": "Claude --chrome"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Claude →⇢⇨ Ollama" }
+                                "args": {
+                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Claude →⇢⇨ Ollama --chrome" }
+                                "args": {
+                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama --chrome"
+                                }
                             }
                         ]
                     },
                     {
                         "caption": "OpenCode",
-                        "children":
-                        [
+                        "children": [
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "OpenCode" }
+                                "args": {
+                                    "profile": "OpenCode"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "OpenCode --mini" }
+                                "args": {
+                                    "profile": "OpenCode --mini"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "OpenCode →⇢⇨ Ollama" }
+                                "args": {
+                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "OpenCode →⇢⇨ Ollama --mini" }
+                                "args": {
+                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama --mini"
+                                }
                             }
                         ]
                     },
                     {
                         "caption": "Codex",
-                        "children":
-                        [
+                        "children": [
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Codex" }
+                                "args": {
+                                    "profile": "Codex"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Codex →⇢⇨ Ollama" }
+                                "args": {
+                                    "profile": "Codex \u2192\u21e2\u21e8 Ollama"
+                                }
                             }
                         ]
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Antigravity" }
+                        "args": {
+                            "profile": "Antigravity"
+                        }
                     },
                     {
                         "caption": "Grok Build",
-                        "children":
-                        [
+                        "children": [
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Grok Build" }
+                                "args": {
+                                    "profile": "Grok Build"
+                                }
                             },
                             {
                                 "command": "ai_terminal_open_here",
-                                "args": { "profile": "Grok Build --minimal" }
+                                "args": {
+                                    "profile": "Grok Build --minimal"
+                                }
                             }
                         ]
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "dsh" }
+                        "args": {
+                            "profile": "dsh"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "jcode" }
+                        "args": {
+                            "profile": "jcode"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Junie" }
+                        "args": {
+                            "profile": "Junie"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Kimi" }
+                        "args": {
+                            "profile": "Kimi"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Kiro" }
+                        "args": {
+                            "profile": "Kiro"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Mimo" }
+                        "args": {
+                            "profile": "Mimo"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Pybackup Go TUI" }
+                        "args": {
+                            "profile": "Pybackup Go TUI"
+                        }
                     },
                     {
                         "caption": "Qwen",
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Qwen" }
+                        "args": {
+                            "profile": "Qwen"
+                        }
                     },
                     {
-                        "caption": "Qwen →⇢⇨ Ollama",
+                        "caption": "Qwen \u2192\u21e2\u21e8 Ollama",
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Qwen →⇢⇨ Ollama" }
+                        "args": {
+                            "profile": "Qwen \u2192\u21e2\u21e8 Ollama"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Vibe" }
+                        "args": {
+                            "profile": "Vibe"
+                        }
                     },
                     {
                         "command": "ai_terminal_open_here",
-                        "args": { "profile": "Testing Agent" }
+                        "args": {
+                            "profile": "Testing Agent"
+                        }
                     },
-                    { "caption": "-" },
+                    {
+                        "caption": "-"
+                    },
+                    {
+                        "id": "all-agents",
+                        "caption": "All Agents",
+                        "children": [
+                            {
+                                "caption": "Antigravity",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Antigravity"
+                                }
+                            },
+                            {
+                                "caption": "Bash",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Bash"
+                                }
+                            },
+                            {
+                                "caption": "Claude",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Claude"
+                                }
+                            },
+                            {
+                                "caption": "Claude --chrome",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Claude --chrome"
+                                }
+                            },
+                            {
+                                "caption": "Claude \u2192 Cloud",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Claude \u2192 Cloud"
+                                }
+                            },
+                            {
+                                "caption": "Claude \u2192\u21e2\u21e8 Ollama",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama"
+                                }
+                            },
+                            {
+                                "caption": "Claude \u2192\u21e2\u21e8 Ollama --chrome",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Claude \u2192\u21e2\u21e8 Ollama --chrome"
+                                }
+                            },
+                            {
+                                "caption": "Codex",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Codex"
+                                }
+                            },
+                            {
+                                "caption": "Codex \u2192\u21e2\u21e8 Ollama",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Codex \u2192\u21e2\u21e8 Ollama"
+                                }
+                            },
+                            {
+                                "caption": "Dos Console",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Dos Console"
+                                }
+                            },
+                            {
+                                "caption": "dsh",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "dsh"
+                                }
+                            },
+                            {
+                                "caption": "Gemini",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Gemini"
+                                }
+                            },
+                            {
+                                "caption": "Grok Build",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Grok Build"
+                                }
+                            },
+                            {
+                                "caption": "Grok Build --minimal",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Grok Build --minimal"
+                                }
+                            },
+                            {
+                                "caption": "jcode",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "jcode"
+                                }
+                            },
+                            {
+                                "caption": "Junie",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Junie"
+                                }
+                            },
+                            {
+                                "caption": "Kimi",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Kimi"
+                                }
+                            },
+                            {
+                                "caption": "Kiro",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Kiro"
+                                }
+                            },
+                            {
+                                "caption": "Mimo",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Mimo"
+                                }
+                            },
+                            {
+                                "caption": "OpenCode",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "OpenCode"
+                                }
+                            },
+                            {
+                                "caption": "OpenCode --mini",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "OpenCode --mini"
+                                }
+                            },
+                            {
+                                "caption": "OpenCode \u2192\u21e2\u21e8 Ollama",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama"
+                                }
+                            },
+                            {
+                                "caption": "OpenCode \u2192\u21e2\u21e8 Ollama --mini",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "OpenCode \u2192\u21e2\u21e8 Ollama --mini"
+                                }
+                            },
+                            {
+                                "caption": "Pi",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Pi"
+                                }
+                            },
+                            {
+                                "caption": "PowerShell",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "PowerShell"
+                                }
+                            },
+                            {
+                                "caption": "Pybackup Go TUI",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Pybackup Go TUI"
+                                }
+                            },
+                            {
+                                "caption": "Qwen",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Qwen"
+                                }
+                            },
+                            {
+                                "caption": "Qwen (repo)",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Qwen (repo)"
+                                }
+                            },
+                            {
+                                "caption": "Qwen \u2192\u21e2\u21e8 Ollama",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Qwen \u2192\u21e2\u21e8 Ollama"
+                                }
+                            },
+                            {
+                                "caption": "Testing Agent",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Testing Agent"
+                                }
+                            },
+                            {
+                                "caption": "Vibe",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "Vibe"
+                                }
+                            },
+                            {
+                                "caption": "WSL Bash",
+                                "command": "ai_terminal_open_here",
+                                "args": {
+                                    "profile": "WSL Bash"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "caption": "-"
+                    },
                     {
                         "caption": "Nuke Ai Terminal",
                         "command": "ai_terminal_nuke"
