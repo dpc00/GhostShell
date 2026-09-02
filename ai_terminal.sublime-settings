@@ -54,17 +54,13 @@
     // color-scheme logging entirely. Changes take effect after plugin reload.
     "color_scheme_log_path": "~/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log",
     // Files whose content is appended to the system prompt on every bridge
-    // startup. Each is read and prepended with its basename as a markdown
-    // header, then joined with '---'. This is how the AI gets its working
-    // context: agents.md (the lobby), router.md (project map), and the
-    // project's CLAUDE.md (project-specific rules). Edit this list to add
-    // or remove context. Restart the bridge to pick up changes.
-    "context_files": [
-        // "C:\\Users\\donal\\agents.md",
-        // "C:\\Users\\donal\\router.md",
-        // "C:\\Users\\donal\\projects\\SText\\agents.md",
-        // "C:\\Users\\donal\\projects\\SText\\CLAUDE.md"
-    ],
+    // startup (each read and prepended with its basename as a markdown
+    // header, then joined with '---'). Not read by anything in this repo --
+    // consumed by an external "bridge" process some users run alongside
+    // GhostShell. Add your own file paths here if you use one; safe to leave
+    // empty otherwise. Example shape:
+    //   "context_files": ["C:\\path\\to\\agents.md", "C:\\path\\to\\router.md"]
+    "context_files": [],
     // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
     // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
     // Off by default (extra text in every terminal tab's status bar
@@ -159,10 +155,12 @@
     // This allows SText to work as a multi-console terminal launcher.
     "profiles": {
         "Antigravity": {
-            // Google Antigravity CLI. Shim installed to
-            // C:\Users\donal\AppData\Local\agy\bin\agy.exe -- not on PATH
-            // until the shell that launches ST is restarted, so use the
-            // full path (same reasoning as the Junie profile below).
+            // Google Antigravity CLI. Its shim is often not on PATH until
+            // the shell that launches ST is restarted (same reasoning as
+            // the Junie profile below) -- if launches fail right after
+            // installing it, override launch_command in your own
+            // Packages/User/ai_terminal.sublime-settings with the full
+            // shim path (e.g. %LOCALAPPDATA%\agy\bin\agy.exe on Windows).
             // Mouse tracking: never enables DEC ?1000/1002/1003 (checked all
             // 5 recorded asciicast sessions, 2026-08-11) -- no PTY-side
             // receiver for a forwarded click; mouse_handling would be a no-op.
@@ -176,7 +174,7 @@
             // alt-screen use, and ST's default steal-for-native-page
             // behavior breaks that just the same.
             "launch_command": [
-                "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
+                "agy"
             ],
             "page_keys_to_pty": true,
             "spawn_env": {
@@ -430,13 +428,16 @@
         },
         "Junie": {
             "detachable": true,
-            // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
-            // in the project cwd — not the PyCharm plugin panel. Prefer full
-            // path so a long-lived ST process still finds the shim.
+            // JetBrains Junie CLI. Interactive TUI in the project cwd — not
+            // the PyCharm plugin panel. Its shim (e.g. ~/.local/bin/junie.bat)
+            // is often installed after ST's process already cached PATH; if
+            // launches fail right after installing it, override
+            // launch_command in your own
+            // Packages/User/ai_terminal.sublime-settings with the full path.
             // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
             // asciicast sessions checked, 2026-08-11).
             "launch_command": [
-                "C:\\Users\\donal\\.local\\bin\\junie.bat"
+                "junie"
             ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -575,47 +576,6 @@
             ],
             "spawn_env": {}
         },
-        "Pybackup Go TUI": {
-            "force_main_screen": true,
-            "home_end_native": true,
-            // gotui.exe spawns `python ui/app.py` itself and talks to it over
-            // HTTP -- see ui/gotui/backend.go.
-            "launch_command": [
-                "C:\\Users\\donal\\projects\\pybackup\\ui\\gotui\\gotui.exe"
-            ],
-            // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
-            // SGR coords; no bare 1000) -- confirmed across 32+ recorded
-            // asciicast sessions (2026-08-11).
-            // 2026-08-12: mouse_handling turned on. gotui's own click math
-            // (handleTableMouse) was fixed to anchor to the viewport bottom
-            // instead of assuming msg.Y was frame-relative -- see
-            // pybackup ui/gotui/update.go. This host doesn't need to tell
-            // gotui's clickable rows apart from scrollback log rows itself:
-            // gotui does its own hit-testing once raw SGR click coords reach
-            // it, same as any real terminal.
-            // pin_viewport:false -- gotui streams real scrollback (tea.Println)
-            // instead of owning a fixed scroll region, so the hard-pin the
-            // mouse_tracking heuristic normally applies (for altscreen-style
-            // apps like Qwen/Vibe) must stay off; see _pin_viewport_enabled.
-            // wheel_to_pty:false -- keep the mouse wheel scrolling real ST
-            // scrollback (the shipped feature of the no-alt-screen redesign)
-            // rather than moving gotui's table cursor.
-            // drag_forwards_by_default stays at its global default (false,
-            // copy-first): drags still go to ST text-select; only taps/clicks
-            // forward to the PTY.
-            // home_end_native opts in separately (see _home_end_native_enabled
-            // in ai_terminal.py) since it's no longer tied to mouse_handling.
-            "mouse_handling": true,
-            "pin_viewport": false,
-            // pybackup's own run logging routinely exceeds the global 300-line
-            // default (real GitPush/rclone output across many repos/folders),
-            // truncating the start of a run's log out of scrollback.
-            "scrollback_history_size": 2000,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
-            "wheel_to_pty": false
-        },
         "Qwen": {
             "detachable": true,
             // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
@@ -649,52 +609,6 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             }
-        },
-        // Patched clone at ~/src/qwen-code-ctrlc-pr (Ctrl-C exit-warning
-        // overflow: keep the status-line row budget so Ink does not
-        // full-clear at PTY rows and scroll the banner off the tab).
-        // Leave the plain "Qwen" profile on the installed 0.21.12
-        // standalone until this build is confirmed. Requires a local
-        // `npm run build` in that clone before the dist path exists.
-        "Qwen (repo)": {
-            "detachable": true,
-            "launch_command": [
-                "C:\\Program Files\\nodejs\\node.exe",
-                "--expose-gc",
-                "C:\\Users\\donal\\src\\qwen-code-ctrlc-pr\\packages\\cli\\dist\\index.js"
-            ],
-            "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
-        },
-        "Testing Agent": {
-            // 2026-08-21: per-profile bisection-gate override, isolated to
-            // this profile only (ai_terminal.py's five _setting_bool call
-            // sites now pass profile_name=_term_profile_name(term), profile
-            // override wins over the global key of the same name -- see
-            // TODO.md). All five false = raw Terminus baseline, safe to
-            // test here without touching any other live tab/profile.
-            "caret_footer_pinning_enabled": false,
-            "click_to_cursor_fallback_enabled": false,
-            "detachable": true,
-            "fast_caret_patch_enabled": false,
-            "host_cursor_paint_enabled": false,
-            // Default mock_agent_cli mode is Codex replay: each Enter
-            // dumps the whole transcript after ESC[H inside CSI ?2026.
-            // Search the tab for TURN-00. One hit = clean scrollback.
-            "launch_command": [
-                "python",
-                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
-            ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
-            // Experimental tab-X lifecycle: the close is swallowed, this
-            // input asks the mock process to exit, and normal PTY EOF closes
-            // the tab afterward. Isolated here until live-tested.
-            "tab_close_input": "q",
-            "user_owns_caret_enabled": false
         },
         "Vibe": {
             "detachable": true,
@@ -797,8 +711,11 @@
     // Path to a markdown file whose contents are prepended to the system
     // prompt (above the context files). Edit the file directly to change
     // the wrapper text — the file is plain markdown, no JSON escaping.
-    // Default location is ai_sdk_prompt.md alongside this settings file.
-    "system_prompt_wrapper_file": "C:\\Users\\donal\\projects\\SText\\ai_sdk_prompt.md",
+    // Not read by anything in this repo -- same external "bridge" process
+    // as context_files, above. Default location is ai_sdk_prompt.md
+    // alongside this settings file; set your own path here if it lives
+    // elsewhere.
+    // "system_prompt_wrapper_file": "C:\\path\\to\\ai_sdk_prompt.md",
     // Host ST caret is ALWAYS off for terminal views (see _terminal_view).
     // Claude/OpenCode paint the cursor with reverse fg/bg (SGR 7) in the cell
     // stream — same model as Terminus. Do not turn on block_caret; a visible
