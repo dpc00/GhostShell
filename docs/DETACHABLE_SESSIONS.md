@@ -50,10 +50,35 @@ default is 2 MiB and it is clamped to 1–256 MiB. Change
 pipe client without terminating the agent. Use this first when a terminal tab
 stops accepting keys or repainting but Sublime itself still works.
 
-`Ai Terminal: Recover Orphaned Session...` searches the external registry,
-known terminal objects, and broker processes, then offers live sessions that
-are not already attached to a usable tab. Use it after reopening Sublime or
-when the original tab is gone.
+`Ai Terminal: Recover Orphaned Session...` searches the on-disk broker
+registry, known terminal objects, and as a fallback broker process command
+lines, then offers live sessions that are not already attached to a usable
+tab. Use it after reopening Sublime or when the original tab is gone.
+Production brokers start with `--launch-file` and do not put `--pipe-name`
+on the process command line, so the registry is the source of truth.
+
+A registry record is only trusted after `_broker_process_matches()`
+(`ai_terminal.py`, mirrored in `tools/recover_console.py`) confirms the
+recorded PID is not just alive but plausibly *that* broker: its image name
+must be `python.exe`/`pythonw.exe` and its actual process start time
+(`GetProcessTimes`) must sit within ~5 minutes of the record's `created_at`.
+A bare PID-alive check is not enough -- Windows recycles PIDs, and a broker
+that crashed or was killed without reaching its own registry cleanup leaves
+a stale record behind indefinitely; days later an unrelated process can land
+on that same PID and would otherwise look "live" forever, hanging recovery
+for ~10s before it fails against a pipe that no longer exists.
+
+Windows Terminal cannot host the already-running Grok process. Grok is bound
+to the broker's ConPTY at `CreateProcess` time
+(`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`); WT always creates its own ConPTY for
+whatever it launches. There is no public API to hand an existing HPCON to a
+WT tab (`wt grok` is always a new process). A Sublime command that opened WT
+on a pipe adapter is not the same thing and is not provided.
+
+`tools/recover_console.py` remains an emergency VT relay for when Sublime is
+unusable: it is a named-pipe client, not `grok.exe` inside WT. Close the
+Sublime *window* (do not close the tab) so the broker detaches, then run
+`python tools/recover_console.py --pipe-name <name>`.
 
 A deliberate single-tab close ends that tab's underlying detachable session.
 Closing a Sublime window is treated differently: GhostShell detaches its local
