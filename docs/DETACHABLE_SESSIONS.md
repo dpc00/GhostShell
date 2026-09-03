@@ -83,23 +83,41 @@ against the current tab's broker pipes -- a raw named-pipe relay, not a new
 agent process, so it's the same live session, same conversation state,
 nothing restarted. The broker accepts only one connected client at a time,
 so this is a *handoff*, not a second view: the Sublime tab detaches (the
-dialog says so before it runs) the moment WT's relay connects, and the tab
-then closes itself -- confirmed live, it does not linger as a frozen tab.
+dialog says so before it runs) the moment WT's relay connects.
 
-That close is deliberately not an ordinary one. Detaching closes this tab's
-own read handle via `CancelIoEx`, which the reader thread cannot otherwise
-tell apart from the child actually dying -- left alone, that would both
-auto-close the tab as a false "process exited" *and* send a real `KILL` to
-the still-live broker WT is now attached to, ending the very session just
-handed off. `_Terminal._deliberate_detach`, set immediately before the
+Detaching closes this tab's own read handle via `CancelIoEx`, which the
+reader thread cannot otherwise tell apart from the child actually dying --
+left alone (this really happened, live, before it was fixed) that made the
+tab auto-close ~1.5s later as a false "process exited", *and* that close
+sent a real `KILL` to the still-live broker WT was attached to, ending the
+very session just handed off; it only survived by luck (a pipe WT itself
+happened to be holding blocked the KILL). `_Terminal
+._expected_termination_reason`, set to `"handoff"` immediately before the
 detaching `kill()` call, is what tells both the reader thread (skip the
-false-exit auto-close reasoning; close for the real reason instead) and
-`on_close` (skip `KILL`; nothing local is ending) that this is a hand-off,
-not a death. Nothing stays registered to the closed tab -- the session
-lives on purely in WT (and the broker) until you close the WT window, after
-which `Ai Terminal: Recover Orphaned Session...` brings it back into a
-Sublime tab -- proven round-trip
-(Sublime -> WT -> Sublime, same broker PID throughout) on 2026-09-02.
+false-exit auto-close reasoning entirely -- the tab now stays open, showing
+`[detached -- session handed off, still running]`) and `on_close` (skip
+`KILL`; nothing local is ending) that this is a hand-off, not a death. The
+tab is left in the same state as a frozen one -- `Ai Terminal: Revive Frozen
+Tab`, run on that same tab, reconnects it; `Recover Orphaned Session...`
+also finds it (its term is still locally registered) if the tab itself gets
+closed by hand afterward. The session otherwise lives on purely in WT (and
+the broker) until you close the WT window. Sublime -> WT -> Sublime,
+same broker PID throughout, was proven live on 2026-09-02 -- against the
+version of this fix that (incorrectly, since corrected) auto-closed the
+handed-off tab rather than freezing it; the "tab stays open" behavior
+itself is source-verified (`tests/test_broker_recovery.py`) but not yet
+re-confirmed live since.
+
+Symmetric, deliberate control over the same "kill vs. detach" x "keep tab
+vs. lose tab" split is also available directly, not just as a side effect
+of handing off to WT: `Ai Terminal: Kill Session (Keep Tab Open)` ends the
+agent for real but leaves the tab (and its transcript) open -- for when the
+process is done but the transcript is still wanted, to read, copy, or Save
+As, before closing the tab yourself. `Ai Terminal: Close Tab (Keep Session
+Alive)` is the mirror image: closes the tab, agent keeps running in the
+background, recoverable later the same way a WT hand-off is. Both share the
+same `_expected_termination_reason` mechanism (`"killed"` /  `"closed"`),
+just with different follow-through than the WT command's `"handoff"`.
 
 `tools/recover_console.py` also still works run by hand, as an emergency VT
 relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
@@ -108,9 +126,11 @@ tab) so the broker detaches, then run
 `python tools/recover_console.py --pipe-name <name>` (or `--list` to find
 it). This is the same relay the in-app command launches through WT.
 
-A deliberate single-tab close ends that tab's underlying detachable session.
-Closing a Sublime window is treated differently: GhostShell detaches its local
-client so restored tabs can reconnect later.
+A deliberate single-tab close ends that tab's underlying detachable session
+-- unless something already told it not to (a WT hand-off, Kill Session, or
+Close Tab (Keep Session Alive), all above). Closing a Sublime window is
+treated differently: GhostShell detaches its local client so restored tabs
+can reconnect later.
 
 Recovery is not persistence across Windows restart, sign-out, child-agent
 exit, or an explicit session end. A broker can only restore output still held

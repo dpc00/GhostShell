@@ -262,29 +262,74 @@ def test_plugin_load_reapplies_terminal_view_styling_before_reattach():
 def test_open_in_windows_terminal_does_not_auto_close_or_kill_the_handoff_tab():
     # kill() on a deliberate hand-off closes this tab's own read handle via
     # CancelIoEx -- indistinguishable, to the reader thread, from the child
-    # actually dying. Without _deliberate_detach, that self-inflicted "death"
-    # both auto-closes the tab (~1.5s later, close_tab_on_exit) AND that
-    # close sends a real KILL to the still-live broker WT is now attached
-    # to -- reproduced live: the tab really did vanish, not just look frozen.
-    # This checks the three places that must agree on the flag.
+    # actually dying. Without _expected_termination_reason, that
+    # self-inflicted "death" both auto-closes the tab (~1.5s later,
+    # close_tab_on_exit) AND that close sends a real KILL to the still-live
+    # broker WT is now attached to -- reproduced live: the tab really did
+    # vanish, not just look frozen. This checks the three places that must
+    # agree on the flag.
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
 
     cmd_start = source.index("class AiTerminalOpenInWindowsTerminalCommand")
-    cmd_end = source.index("class AiTerminalReattachSessionCommand", cmd_start)
+    cmd_end = source.index("class AiTerminalKillSessionCommand", cmd_start)
     cmd_source = source[cmd_start:cmd_end]
-    set_flag = cmd_source.index("term._deliberate_detach = True")
+    set_flag = cmd_source.index('term._expected_termination_reason = "handoff"')
     kill_call = cmd_source.index("pty.kill()")
     assert set_flag < kill_call, "flag must be set before kill() races the reader thread"
 
     read_loop_start = source.index("def _read_loop(self):")
     read_loop_end = source.index("def _maybe_close_dead_view(self):", read_loop_start)
     read_loop_source = source[read_loop_start:read_loop_end]
-    assert "self._deliberate_detach" in read_loop_source
-    assert "error is None and not self._deliberate_detach" in read_loop_source
+    assert "self._expected_termination_reason" in read_loop_source
+    assert "error is None and reason is None" in read_loop_source
 
     on_close_start = source.index("def on_close(self):")
     on_close_end = source.index(
         "# ─── pre-empt ST's internal view.show", on_close_start
     )
     on_close_source = source[on_close_start:on_close_end]
-    assert "not term._deliberate_detach" in on_close_source
+    assert "term._expected_termination_reason is None" in on_close_source
+
+
+def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
+    # Kill Session: end the process for real but leave the tab (and its
+    # transcript) open -- distinct from a plain tab close, which does both.
+    # Close (Keep Alive): the opposite split -- close the tab, leave the
+    # session running. Both share the same _expected_termination_reason
+    # mechanism the WT hand-off uses, just with different reason strings and
+    # different follow-through (kill-only vs. detach-and-close).
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+
+    kill_start = source.index("class AiTerminalKillSessionCommand")
+    kill_end = source.index("class AiTerminalCloseKeepAliveCommand", kill_start)
+    kill_source = source[kill_start:kill_end]
+    assert 'term._expected_termination_reason = "killed"' in kill_source
+    assert "pty.explicit_kill()" in kill_source
+    assert "self.view.close()" not in kill_source
+
+    close_start = kill_end
+    close_end = source.index("class AiTerminalReattachSessionCommand", close_start)
+    close_source = source[close_start:close_end]
+    assert 'term._expected_termination_reason = "closed"' in close_source
+    set_flag = close_source.index('term._expected_termination_reason = "closed"')
+    close_call = close_source.index("self.view.close()")
+    assert set_flag < close_call, "flag must be set before close() triggers on_close"
+    assert "pty.explicit_kill()" not in close_source
+
+    import json
+
+    commands = json.loads(
+        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
+    )
+    assert any(
+        item.get("command") == "ai_terminal_kill_session" for item in commands
+    )
+    assert any(
+        item.get("command") == "ai_terminal_close_keep_alive" for item in commands
+    )
+    tab_menu = json.loads(
+        (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
+    )
+    tab_commands = {item.get("command") for item in tab_menu}
+    assert "ai_terminal_kill_session" in tab_commands
+    assert "ai_terminal_close_keep_alive" in tab_commands
