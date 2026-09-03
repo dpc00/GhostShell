@@ -568,6 +568,49 @@ class TestSanitizePtyEnv(unittest.TestCase):
         out = sanitize_pty_env({"TERM_PROGRAM": "tmux"})
         self.assertEqual(out["TERM_PROGRAM"], "tmux")
 
+    def test_strips_claude_code_session_identity_vars(self):
+        # Confirmed live 2026-09-02 against this session's own environment:
+        # if Sublime Text were launched from inside a running Claude Code
+        # session, a freshly spawned Claude tab would inherit that parent
+        # session's own identity (CLAUDE_CODE_CHILD_SESSION=1 in particular
+        # disables cursor-key prompt-history replay and session logging in
+        # the new process, not just cosmetic differences) unless stripped
+        # here, at the one spawn choke point every profile passes through.
+        out = sanitize_pty_env({
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_CHILD_SESSION": "1",
+            "CLAUDE_CODE_ENTRYPOINT": "cli",
+            "CLAUDE_CODE_SESSION_ID": "some-parent-session-id",
+            "CLAUDE_CODE_BRIDGE_SESSION_ID": "session_abc",
+            "CLAUDE_CODE_MESSAGING_SOCKET": "\\\\.\\pipe\\LOCAL\\cc-msg-xyz",
+            "CLAUDE_CODE_MESSAGING_TOKEN": "secret-token",
+            "CLAUDE_CODE_SSE_PORT": "60929",
+            "CLAUDE_CODE_EXECPATH": "C:\\Users\\donal\\.local\\bin\\claude.exe",
+            "PATH": "C:\\bin",
+        })
+        for key in out:
+            self.assertFalse(
+                key.startswith("CLAUDECODE") or key.startswith("CLAUDE_CODE_"),
+                f"{key!r} should have been stripped",
+            )
+        self.assertEqual(out["PATH"], "C:\\bin")
+
+    def test_claude_code_identity_strip_does_not_touch_unrelated_claude_vars(self):
+        # CLAUDE_PID / CLAUDE_EFFORT don't match the CLAUDECODE / CLAUDE_CODE_
+        # prefixes -- only the session-identity family is in scope here.
+        out = sanitize_pty_env({"CLAUDE_PID": "18600", "CLAUDE_EFFORT": "medium"})
+        self.assertEqual(out["CLAUDE_PID"], "18600")
+        self.assertEqual(out["CLAUDE_EFFORT"], "medium")
+
+    def test_profile_can_reintroduce_a_stripped_claude_code_var_on_purpose(self):
+        # A profile's own spawn_env is applied after sanitization, so a
+        # deliberate override still wins -- same guarantee as NO_COLOR/TERM.
+        out = sanitize_pty_env(
+            {"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "inherited-should-not-matter"},
+            {"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"},
+        )
+        self.assertEqual(out["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"], "1")
+
 
 class TestReadOnlyUri(unittest.TestCase):
     def test_windows_path_is_read_only(self):
