@@ -6,13 +6,29 @@
 	},
 	{ "caption": "-" },
 	{
-		"caption": "Ai Terminal: Kill Session (Keep Tab Open)",
-		"command": "ai_terminal_kill_session",
-		"args": { "group": -1, "index": -1 }
-	},
-	{
-		"caption": "Ai Terminal: Close Tab (Keep Session Alive)",
-		"command": "ai_terminal_close_keep_alive",
-		"args": { "group": -1, "index": -1 }
+		"caption": "Ai Terminal: Session",
+		"children": [
+			{
+				"caption": "Session Info...",
+				"command": "ai_terminal_session_info",
+				"args": { "group": -1, "index": -1 }
+			},
+			{ "caption": "-" },
+			{
+				"caption": "Kill Session (Keep Tab Open)",
+				"command": "ai_terminal_kill_session",
+				"args": { "group": -1, "index": -1 }
+			},
+			{
+				"caption": "Close Tab (Keep Session Alive)",
+				"command": "ai_terminal_close_keep_alive",
+				"args": { "group": -1, "index": -1 }
+			},
+			{
+				"caption": "End Session (Kill + Close)",
+				"command": "ai_terminal_end_session",
+				"args": { "group": -1, "index": -1 }
+			}
+		]
 	}
 ]

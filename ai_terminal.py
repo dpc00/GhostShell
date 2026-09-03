@@ -490,6 +490,17 @@ def _broker_registry_file(pipe_name):
     return os.path.join(_broker_registry_dir(), pipe_name + ".json")
 
 
+def _read_broker_registry_record(pipe_name):
+    """The registry JSON for a live pipe (child_argv, broker_pid,
+    created_at, ...), or None if it's missing/unreadable -- e.g. the broker
+    already exited and removed its own record."""
+    try:
+        with open(_broker_registry_file(pipe_name), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def _pid_is_alive(pid):
     if os.name == "nt" and _k32 is not None:
         try:
@@ -7678,30 +7689,6 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             sublime.set_timeout(lambda t=term: _post_render_follow(t), 35)
 
 
-class AiTerminalEndSessionCommand(sublime_plugin.TextCommand):
-    """End a detachable session's underlying agent/shell for real, then close
-    the tab. Plain tab-close only detaches (see _BrokerPty.kill) -- this is
-    the explicit "actually stop it" action for a detachable profile. No
-    command palette / menu entry yet; run via View > Show Console:
-        view.run_command("ai_terminal_end_session")
-    Hidden/no-op on non-detachable tabs.
-    """
-
-    def run(self, edit):
-        term = _Terminal.from_id(self.view.id())
-        if term is None or not _is_broker_pty(term.pty):
-            return
-        try:
-            term.pty.explicit_kill()
-        except Exception as e:
-            print(f"[ai_terminal] explicit_kill failed: {e}")
-        self.view.close()
-
-    def is_visible(self):
-        term = _Terminal.from_id(self.view.id())
-        return term is not None and _is_broker_pty(term.pty)
-
-
 def _revive_terminal_client(term, window):
     """Reconnect one tab to its broker without ending the agent process."""
     old_view = term.view
@@ -7914,6 +7901,114 @@ class AiTerminalCloseKeepAliveCommand(sublime_plugin.WindowCommand):
         sublime.status_message(
             f"Ai terminal: closed -- {pipe_name} still running in the background"
         )
+
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
+class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
+    """End a detachable session's underlying agent/shell for real, then
+    close the tab -- kill and close together, in one action. A plain tab
+    close already does both; this is the explicit, discoverable form of the
+    same combination, reachable from Tab Context/the palette without
+    needing to physically close the tab. Kill Session and Close Tab (Keep
+    Session Alive) are these same two effects split apart, for when only
+    one of them is wanted.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no session to end")
+            return
+        pty = term.pty
+        # Set before explicit_kill() blocks (below): closing the view once
+        # the kill completes fires on_close, which must not redundantly
+        # try to kill an already-dead broker again.
+        term._expected_termination_reason = "killed"
+
+        def _do_end():
+            try:
+                pty.explicit_kill()
+            except Exception as e:
+                print(f"[ai_terminal] explicit_kill (End Session) failed: {e}")
+            sublime.set_timeout(
+                lambda: view.close() if view.is_valid() else None, 0
+            )
+
+        # explicit_kill() reconnects over a named pipe with up to ~1s of
+        # WaitNamedPipeW/connect retries -- run off the main thread so a
+        # slow/stale broker can't freeze Sublime's UI for that long.
+        threading.Thread(target=_do_end, daemon=True).start()
+
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
+class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
+    """Show everything known about this tab's detachable session -- the
+    non-destructive fourth option alongside Kill/Close/End: the kill x
+    close matrix has one combination (neither) that needs no command since
+    it's just "don't click anything", so this fills that slot with
+    something actually useful instead of leaving it empty.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no detachable session")
+            return
+        pty = term.pty
+        lines = [
+            "Profile: %s" % (getattr(term, "profile_name", None) or "?"),
+            "Pipe: %s" % pty.pipe_name,
+            "Alive: %s" % ("yes" if pty.is_alive() else "no (frozen)"),
+        ]
+        reason = getattr(term, "_expected_termination_reason", None)
+        if reason:
+            lines.append("Detached reason: %s" % reason)
+        cwd = getattr(pty, "_cwd", None)
+        if cwd:
+            lines.append("Working directory: %s" % cwd)
+        record = _read_broker_registry_record(pty.pipe_name)
+        if record:
+            child = record.get("child_argv") or []
+            if isinstance(child, list):
+                child = " ".join(str(part) for part in child)
+            if child:
+                lines.append("Child: %s" % child)
+            broker_pid = record.get("broker_pid")
+            if broker_pid:
+                lines.append("Broker PID: %s" % broker_pid)
+            created_at = record.get("created_at")
+            if created_at:
+                lines.append(
+                    "Started: %s"
+                    % time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.localtime(created_at)
+                    )
+                )
+        else:
+            lines.append("(broker registry record not found -- may have exited)")
+        sublime.message_dialog("\n".join(lines))
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)
