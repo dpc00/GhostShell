@@ -1,12 +1,15 @@
 # Detachable agent sessions
 
-GhostShell can keep selected terminal sessions alive independently of Sublime
-Text. A profile opts in with `"detachable": true` in
-`ai_terminal.sublime-settings`.
+GhostShell keeps terminal sessions alive independently of Sublime Text. This
+is on by default (top-level `"detachable": true` in
+`ai_terminal.sublime-settings`) for every profile, plain shells included, not
+just long-running agents -- a profile can set `"detachable": false` to opt a
+specific one out (e.g. a throwaway shell not worth a background broker
+process for).
 
-This is intended for long-running interactive agents such as Codex and Claude.
-If Sublime Text closes or its terminal view becomes unusable, the agent and its
-ConPTY can remain alive while a later GhostShell client reconnects to them.
+If Sublime Text closes or its terminal view becomes unusable, the child
+process and its ConPTY can remain alive while a later GhostShell client
+reconnects to them.
 
 ## Components
 

@@ -5939,7 +5939,13 @@ def _spawn(window, path, profile=None):
         view.close()
         return
 
-    detachable = bool(profile_data.get("detachable")) if profile_data else False
+    # False here is only the fallback for a settings object with no
+    # top-level "detachable" key at all (e.g. a minimal one built in tests).
+    # The shipped ai_terminal.sublime-settings sets "detachable": true at
+    # the top level, which makes every profile -- plain shells included --
+    # detachable and thus eligible for recovery/Open in Windows Terminal by
+    # default. A profile can still set "detachable": false to opt out.
+    detachable = _setting_bool("detachable", False, profile_name=profile_name)
 
     if os.name != "nt":
         pty = _PosixPty(argv, path, cols, rows, env)

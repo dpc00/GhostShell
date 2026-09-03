@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from tests.sublime_stub import install as _install_stubs
+from tests.sublime_stub import Settings, install as _install_stubs
 
 _install_stubs()
 
@@ -13,6 +13,43 @@ import ai_terminal
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_shipped_settings_default_every_profile_to_detachable():
+    # Recovery/"Open in Windows Terminal" only exist for detachable
+    # sessions; this top-level key is what makes them available on every
+    # profile (throwaway shells included) rather than only ones that opt in
+    # by hand. Checked as a plain top-level key -- before "profiles": --
+    # rather than full JSON5 parsing, since .sublime-settings allows
+    # comments no stdlib json parser accepts.
+    text = (ROOT / "ai_terminal.sublime-settings").read_text(encoding="utf-8")
+    before_profiles = text[:text.index('"profiles":')]
+    assert '"detachable": true,' in before_profiles
+
+
+def test_detachable_default_is_settings_driven_not_hardcoded():
+    # A settings object with no top-level "detachable" key at all (e.g. a
+    # minimal one built in a test) must fall back to False -- the shipped
+    # sublime-settings file is what turns this on, not a Python-level
+    # default, so tests that build their own bare Settings() aren't
+    # silently switched onto the broker-backed spawn path.
+    bare = Settings({"profiles": {"X": {}}})
+    assert ai_terminal._setting_bool(
+        "detachable", False, profile_name="X", settings=bare
+    ) is False
+
+    on = Settings({"detachable": True, "profiles": {"X": {}}})
+    assert ai_terminal._setting_bool(
+        "detachable", False, profile_name="X", settings=on
+    ) is True
+
+    # A profile-level override still wins over the top-level default.
+    overridden = Settings({
+        "detachable": True, "profiles": {"X": {"detachable": False}},
+    })
+    assert ai_terminal._setting_bool(
+        "detachable", False, profile_name="X", settings=overridden
+    ) is False
 
 
 def test_pid_liveness_recognizes_current_process():
