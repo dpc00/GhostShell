@@ -68,17 +68,30 @@ a stale record behind indefinitely; days later an unrelated process can land
 on that same PID and would otherwise look "live" forever, hanging recovery
 for ~10s before it fails against a pipe that no longer exists.
 
-Windows Terminal cannot host the already-running Grok process. Grok is bound
-to the broker's ConPTY at `CreateProcess` time
-(`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`); WT always creates its own ConPTY for
-whatever it launches. There is no public API to hand an existing HPCON to a
-WT tab (`wt grok` is always a new process). A Sublime command that opened WT
-on a pipe adapter is not the same thing and is not provided.
+Windows Terminal cannot host the already-running agent process directly. A
+child like Grok or Claude is bound to the broker's ConPTY at `CreateProcess`
+time (`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`); WT always creates its own
+ConPTY for whatever it launches. There is no public API to hand an existing
+HPCON to a WT tab (`wt claude` is always a new, unrelated process).
 
-`tools/recover_console.py` remains an emergency VT relay for when Sublime is
-unusable: it is a named-pipe client, not `grok.exe` inside WT. Close the
-Sublime *window* (do not close the tab) so the broker detaches, then run
-`python tools/recover_console.py --pipe-name <name>`.
+`Ai Terminal: Open in Windows Terminal` gets you the equivalent result a
+different way: it launches `wt.exe` running `tools/recover_console.py`
+against the current tab's broker pipes -- a raw named-pipe relay, not a new
+agent process, so it's the same live session, same conversation state,
+nothing restarted. The broker accepts only one connected client at a time,
+so this is a *handoff*, not a second view: the Sublime tab detaches (the
+dialog says so before it runs) the moment WT's relay connects, leaving that
+tab in the same state as a frozen one. Close the WT window to detach the
+relay in turn, then `Ai Terminal: Recover Orphaned Session...` or `Revive
+Frozen Tab` brings the session back into Sublime -- proven round-trip
+(Sublime -> WT -> Sublime, same broker PID throughout) on 2026-09-02.
+
+`tools/recover_console.py` also still works run by hand, as an emergency VT
+relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
+in-app command isn't reachable: close the Sublime *window* (do not close the
+tab) so the broker detaches, then run
+`python tools/recover_console.py --pipe-name <name>` (or `--list` to find
+it). This is the same relay the in-app command launches through WT.
 
 A deliberate single-tab close ends that tab's underlying detachable session.
 Closing a Sublime window is treated differently: GhostShell detaches its local
@@ -94,6 +107,12 @@ On 2026-08-30, a full Sublime Text restart preserved and reattached both an
 active Codex session and a PowerShell session. Both tabs were responsive
 immediately after restoration. This verifies the production restart path in
 addition to the isolated Scheduled Task integration test below.
+
+On 2026-09-02, `Ai Terminal: Open in Windows Terminal` was run against a live
+Claude session: Sublime's tab detached, a real `wt.exe` window rendered the
+relayed session cleanly (screenshot-verified, no corruption), and closing
+that window followed by `Recover Orphaned Session...` reattached it to a
+Sublime tab -- same broker PID throughout, confirmed via the lifecycle log.
 
 ## Automated verification
 
