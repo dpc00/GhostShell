@@ -1481,26 +1481,11 @@ def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
             ai_terminal._term_registry().pop(view.id(), None)
 
 
-# ─── the exhaustive agent menu ────────────────────────────────────────────────
-
-
-def test_build_agent_menu_json_lists_every_profile_alphabetically():
-    children = ai_terminal.build_agent_menu_json(["Codex", "aider", "Bash"])
-    assert [c["caption"] for c in children] == ["aider", "Bash", "Codex"]
-    for child in children:
-        assert child["command"] == "ai_terminal_open_here"
-        assert child["args"] == {"profile": child["caption"]}
-
-
-def test_build_agent_menu_json_dedupes():
-    children = ai_terminal.build_agent_menu_json(["Codex", "Codex", "Bash"])
-    assert [c["caption"] for c in children] == ["Bash", "Codex"]
-
-
 def test_resync_catalog_profiles_only_touches_settings(monkeypatch):
-    """The 'All Agents' menu is static/checked-in (tools/regen_agent_menu.py),
-    not regenerated per machine -- _resync_catalog_profiles must persist
-    detection into the generated settings file and stop there."""
+    """_resync_catalog_profiles must persist detection into the generated
+    settings file and stop there -- it's the source live detection reads
+    (AiTerminalLauncherCommand, AiTerminalSyncAgentProfilesCommand), not a
+    menu writer."""
     monkeypatch.setattr(
         ai_terminal, "_resync_catalog_profiles", _REAL_RESYNC_CATALOG_PROFILES
     )
@@ -1520,25 +1505,3 @@ def test_resync_catalog_profiles_only_touches_settings(monkeypatch):
         "NewAgent": {"launch_command": ["newagent"]}
     }
     assert saved == [ai_terminal._GENERATED_SETTINGS_NAME]
-
-
-def test_main_sublime_menu_all_agents_matches_regen_script():
-    """Drift check: tools/regen_agent_menu.py's output for the current
-    CATALOG + shipped profiles must match what's actually committed in
-    Main.sublime-menu. A failure here means someone added/removed a CATALOG
-    entry or a hand-authored profile without re-running that script."""
-    import importlib
-
-    regen = importlib.import_module("tools.regen_agent_menu")
-    menu_path = os.path.join(REPO, "Main.sublime-menu")
-    with open(menu_path, encoding="utf-8") as f:
-        committed = json.load(f)
-    committed_children = regen._find_menu_node(committed, "all-agents")["children"]
-
-    expected_names = regen.known_agent_profile_names(ai_terminal)
-    expected_children = ai_terminal.build_agent_menu_json(expected_names)
-
-    assert committed_children == expected_children, (
-        "Main.sublime-menu's 'All Agents' list is stale -- "
-        "run: python tools/regen_agent_menu.py"
-    )

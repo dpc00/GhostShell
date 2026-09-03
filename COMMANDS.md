@@ -13,13 +13,12 @@ stripped, CamelCase -> snake_case).
 
 | Class | ST command | Type | Command palette | Menu(s) | Keybinding |
 |---|---|---|---|---|---|
-| `AiTerminalLauncherCommand` | `ai_terminal_launcher` | WindowCommand | "Ai Terminal: Launch Agent…" | Tools > Ai Terminal > Launch Agent… | `ctrl+alt+n` |
+| `AiTerminalLauncherCommand` | `ai_terminal_launcher` | WindowCommand | "Ai Terminal: Launch Agent…" | Tools > Ai Terminal > Launch Agent…; Side Bar: "Launch Ai Terminal Agent…" (`{"paths": [...]}`) | `ctrl+alt+n` |
 | `AiTerminalHistoryCommand` | `ai_terminal_history` | WindowCommand | "Ai Terminal: All Agent History…" | Tools > Ai Terminal > All Agent History… | `ctrl+alt+h` |
 | `AiTerminalRefreshUsageCommand` | `ai_terminal_refresh_usage` | WindowCommand | "Ai Terminal: Refresh Usage & Quota" | Tools > Ai Terminal > Refresh Usage & Quota | — |
 | `AiTerminalSyncAgentProfilesCommand` | `ai_terminal_sync_agent_profiles` | ApplicationCommand | "Ai Terminal: Sync Detected Agent Profiles" | — | — |
-| `AiTerminalOpenHereCommand` | `ai_terminal_open_here` | WindowCommand | "Ai Terminal: Open Here" | Tools > Ai Terminal > Default Profile, and once per configured profile (Shells/Claude/OpenCode/Codex submenus plus ~14 flat entries), each via `{"profile": "<name>"}`; Side Bar: "Open Ai Terminal here…" (`{"paths": [...]}` , default profile) | — |
+| `AiTerminalOpenHereCommand` | `ai_terminal_open_here` | WindowCommand | "Ai Terminal: Open Here" | Tools > Ai Terminal > Default Profile; Side Bar: "Open Ai Terminal here…" (`{"paths": [...]}`, default profile). Also the target every per-profile launch (menu or otherwise) resolves to via `{"profile": "<name>"}` -- no menu currently lists one entry per profile; that's what `ai_terminal_launcher`'s quick panel replaced. | — |
 | `AiTerminalOpenInEditorCommand` | `ai_terminal_open_in_editor` | TextCommand | "Ai Terminal: Open in Editor" | Context.sublime-menu and Tab Context.sublime-menu: "Open Ai Terminal here…" | — |
-| `AiTerminalSelectProfileCommand` | `ai_terminal_select_profile` | WindowCommand | "Ai Terminal: Open Profile..." | Tools > Ai Terminal > Open Profile…; Side Bar: "Open Ai Terminal Profile…" | — |
 | `AiTerminalSetWorkingDirectoryCommand` | `ai_terminal_set_working_directory` | WindowCommand | "Ai Terminal: Set Working Directory" | Tools > Ai Terminal > Set Working Directory; Side Bar: "Set Ai Terminal Working Directory" | — |
 | `AiTerminalClearWorkingDirectoryCommand` | `ai_terminal_clear_working_directory` | WindowCommand | "Ai Terminal: Clear Working Directory" | Tools > Ai Terminal > Clear Working Directory; Side Bar: "Clear Ai Terminal Working Directory" | — |
 | `AiTerminalReattachSessionCommand` | `ai_terminal_reattach_session` | WindowCommand | "Ai Terminal: Recover Orphaned Session..." | — | — |

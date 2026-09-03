@@ -32,7 +32,6 @@ def main():
     expected = [
         "AiTerminalOpenHereCommand",
         "AiTerminalOpenInEditorCommand",
-        "AiTerminalSelectProfileCommand",
         "AiTerminalLauncherCommand",
         "AiTerminalHistoryCommand",
         "AiTerminalSetWorkingDirectoryCommand",
