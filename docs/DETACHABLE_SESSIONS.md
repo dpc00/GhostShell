@@ -138,12 +138,19 @@ plus a read-only fourth:
 - `End Session (Kill + Close)` does both together, in one action -- the
   same combination a plain tab close already does, just explicit and
   reachable without needing to physically close the tab.
-- `Session Info...` is non-destructive: a dialog with everything known
-  about the session (profile, pipe name, alive/frozen state, working
-  directory, child command, broker PID, start time -- the last three read
-  from the on-disk registry record via `_read_broker_registry_record()`,
-  so they're absent if the broker already exited and removed its own
-  record).
+- `Session Info...` is non-destructive: opens a read-only scratch tab (not
+  `sublime.message_dialog` -- confirmed live 2026-09-02 that its fixed
+  small system font made a multi-line technical readout hard to read) with
+  everything known about the session. Human-relevant facts lead: profile,
+  running/frozen status, last output (`_human_ago()`, updated on every
+  `_on_data` call -- absolute start time alone doesn't answer "is this
+  still doing something"), working directory, child command. Pipe name and
+  broker PID are demoted to a "Details" footer -- also 2026-09-02 feedback,
+  the original ordering led with exactly the two fields least useful for
+  deciding what to do with a tab. Child command, broker PID, and start time
+  are read from the on-disk registry record via
+  `_read_broker_registry_record()`, so they're absent if the broker already
+  exited and removed its own record.
 
 Kill Session, Close Tab, and End Session all share the same
 `_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just

@@ -2954,6 +2954,13 @@ class _Terminal:
         # Up×N into the PTY before Grok draws (casts start with \x1b[A\x1b[A).
         self._vp_pan_armed = False
         self._spawn_mono = time.monotonic()
+        # Updated on every _on_data call; read by Session Info to show how
+        # long it's been since this session last produced any output, which
+        # answers "is this still doing something" -- absolute start time
+        # alone (registry created_at) doesn't. Defaults to spawn time so a
+        # session that has never produced output yet still reports something
+        # sane rather than a missing/zero value.
+        self._last_output_at = time.time()
         # Asciicast v3 recording (recording patch). When recording is on,
         # start() opens a per-session .cast file and writes the v3 header;
         # _on_data / send_string / resize / kill append timed events. Off
@@ -3241,6 +3248,7 @@ class _Terminal:
     def _on_data(self, data):
         if _DEBUG:
             _debug_log(data)
+        self._last_output_at = time.time()
         text = self._decoder.decode(data)
         _record_profile_usage(getattr(self, "profile_name", None), text)
         if getattr(self, "_resize_desynced", False):
@@ -7958,12 +7966,41 @@ class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
+def _human_ago(seconds):
+    """"3 minutes ago"-style relative time. `seconds` is elapsed, not a
+    timestamp. Pure -- no I/O, so directly unit-testable."""
+    seconds = max(0, int(seconds))
+    if seconds < 5:
+        return "just now"
+    if seconds < 60:
+        return "%d seconds ago" % seconds
+    minutes = seconds // 60
+    if minutes < 60:
+        return "%d minute%s ago" % (minutes, "" if minutes == 1 else "s")
+    hours = minutes // 60
+    if hours < 24:
+        return "%d hour%s ago" % (hours, "" if hours == 1 else "s")
+    days = hours // 24
+    return "%d day%s ago" % (days, "" if days == 1 else "s")
+
+
 class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
     """Show everything known about this tab's detachable session -- the
     non-destructive fourth option alongside Kill/Close/End: the kill x
     close matrix has one combination (neither) that needs no command since
     it's just "don't click anything", so this fills that slot with
     something actually useful instead of leaving it empty.
+
+    Opens a read-only scratch tab rather than sublime.message_dialog --
+    confirmed live 2026-09-02 that dialog's fixed small system font made a
+    multi-line technical readout hard to read; a normal view uses the same
+    font/theme as everything else and can be resized, scrolled, and
+    selected from.
+
+    Human-relevant facts (what is this, is it still doing something) lead;
+    plumbing (pipe name, broker PID) is demoted to a details footer -- also
+    2026-09-02 feedback: the original ordering led with exactly the two
+    fields least useful for deciding what to do with a tab.
 
     A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
     Tab Context.sublime-menu needs that to reach the right-clicked tab
@@ -7977,38 +8014,54 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
             sublime.status_message("Ai terminal: this tab has no detachable session")
             return
         pty = term.pty
+        alive = pty.is_alive()
+        record = _read_broker_registry_record(pty.pipe_name)
+
         lines = [
             "Profile: %s" % (getattr(term, "profile_name", None) or "?"),
-            "Pipe: %s" % pty.pipe_name,
-            "Alive: %s" % ("yes" if pty.is_alive() else "no (frozen)"),
+            "Status: %s" % ("running" if alive else "frozen (disconnected)"),
         ]
         reason = getattr(term, "_expected_termination_reason", None)
         if reason:
             lines.append("Detached reason: %s" % reason)
-        cwd = getattr(pty, "_cwd", None)
+        last_output_at = getattr(term, "_last_output_at", None)
+        if last_output_at is not None:
+            lines.append("Last output: %s" % _human_ago(time.time() - last_output_at))
+        cwd = getattr(pty, "_cwd", None) or (record or {}).get("cwd")
         if cwd:
             lines.append("Working directory: %s" % cwd)
-        record = _read_broker_registry_record(pty.pipe_name)
         if record:
             child = record.get("child_argv") or []
             if isinstance(child, list):
                 child = " ".join(str(part) for part in child)
             if child:
-                lines.append("Child: %s" % child)
+                lines.append("Child command: %s" % child)
+
+        lines.append("")
+        lines.append("--- Details ---")
+        lines.append("Pipe: %s" % pty.pipe_name)
+        if record:
             broker_pid = record.get("broker_pid")
             if broker_pid:
                 lines.append("Broker PID: %s" % broker_pid)
             created_at = record.get("created_at")
             if created_at:
                 lines.append(
-                    "Started: %s"
+                    "Broker started: %s"
                     % time.strftime(
                         "%Y-%m-%d %H:%M:%S", time.localtime(created_at)
                     )
                 )
         else:
             lines.append("(broker registry record not found -- may have exited)")
-        sublime.message_dialog("\n".join(lines))
+
+        info_view = self.window.new_file()
+        info_view.set_scratch(True)
+        info_view.set_name(
+            "Session Info: %s" % (getattr(term, "profile_name", None) or pty.pipe_name)
+        )
+        info_view.run_command("append", {"characters": "\n".join(lines)})
+        info_view.set_read_only(True)
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)

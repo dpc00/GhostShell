@@ -413,10 +413,19 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     # Read-only: never touches pty state or the view's lifecycle.
     assert "explicit_kill" not in info_source
     assert ".kill()" not in info_source
-    assert ".close()" not in info_source
+    assert "info_view.close()" not in info_source
     assert "_expected_termination_reason =" not in info_source
     assert "_read_broker_registry_record(" in info_source
-    assert "sublime.message_dialog(" in info_source
+    # A readable scratch tab, not sublime.message_dialog -- confirmed live
+    # 2026-09-02: the dialog's fixed small system font made a multi-line
+    # technical readout hard to read.
+    assert "sublime.message_dialog(" not in info_source
+    assert "self.window.new_file()" in info_source
+    assert "info_view.set_read_only(True)" in info_source
+    # Human-relevant facts lead; pipe name / broker PID (plumbing, not
+    # decision-relevant per the same feedback) are demoted to a footer.
+    assert info_source.index('"Status: %s"') < info_source.index('"Pipe: %s"')
+    assert '"Last output: %s" % _human_ago(' in info_source
 
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
@@ -435,6 +444,23 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     for name in ("ai_terminal_end_session", "ai_terminal_session_info"):
         assert name in by_command
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_human_ago_formats_relative_time():
+    assert ai_terminal._human_ago(0) == "just now"
+    assert ai_terminal._human_ago(4) == "just now"
+    assert ai_terminal._human_ago(5) == "5 seconds ago"
+    assert ai_terminal._human_ago(59) == "59 seconds ago"
+    assert ai_terminal._human_ago(60) == "1 minute ago"
+    assert ai_terminal._human_ago(61) == "1 minute ago"
+    assert ai_terminal._human_ago(120) == "2 minutes ago"
+    assert ai_terminal._human_ago(3600) == "1 hour ago"
+    assert ai_terminal._human_ago(7200) == "2 hours ago"
+    assert ai_terminal._human_ago(86400) == "1 day ago"
+    assert ai_terminal._human_ago(172800) == "2 days ago"
+    # Never negative even if the caller passes a slightly-future timestamp
+    # (clock skew between two time.time() reads on either side of work).
+    assert ai_terminal._human_ago(-5) == "just now"
 
 
 def test_read_broker_registry_record_missing_file_returns_none():
