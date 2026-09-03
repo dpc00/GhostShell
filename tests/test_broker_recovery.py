@@ -2,6 +2,7 @@
 
 import ast
 import os
+import time
 from pathlib import Path
 
 from tests.sublime_stub import install as _install_stubs
@@ -20,6 +21,23 @@ def test_pid_liveness_recognizes_current_process():
 
 def test_pid_liveness_rejects_invalid_pid():
     assert not ai_terminal._pid_is_alive(0x7FFFFFFF)
+
+
+def test_broker_process_matches_accepts_a_freshly_recorded_pid():
+    # The test runner itself is python.exe with a start time from moments
+    # ago -- exactly what a just-published broker registry record looks like.
+    assert ai_terminal._broker_process_matches(os.getpid(), time.time())
+
+
+def test_broker_process_matches_rejects_reused_pid():
+    # Same live, real python.exe process, but a created_at timestamp far
+    # outside its actual start time -- this is exactly what a stale registry
+    # record looks like once Windows has recycled the PID onto an unrelated
+    # process days after the original broker died without cleaning up.
+    # Plain PID-alive checks can't tell these apart; _broker_process_matches
+    # must, because it is what stops "Recover Orphaned Session" from
+    # offering a dead session that will hang for ~10s and then fail.
+    assert not ai_terminal._broker_process_matches(os.getpid(), time.time() - 100000)
 
 
 def _class_methods(path, class_name):
@@ -77,6 +95,33 @@ def test_recovery_tool_has_guarded_stale_output_path():
     assert "h_in = connect(in_path, _GENERIC_WRITE" in source
 
 
+def test_recovery_tool_is_a_raw_vt_console_client():
+    source = (ROOT / "tools" / "recover_console.py").read_text(encoding="utf-8")
+    assert "ENABLE_VIRTUAL_TERMINAL_PROCESSING" in source
+    assert "ENABLE_VIRTUAL_TERMINAL_INPUT" in source
+    assert "SetConsoleMode" in source
+    assert "SetConsoleCtrlHandler" in source
+    assert "sys.stdin.readline" not in source
+    assert 'pipe_name + "-ctl"' in source
+    assert "RESIZE" in source
+    start = source.index("def _enable_raw_vt(")
+    end = source.index("def _pump_output(", start)
+    raw = source[start:end]
+    assert "_ENABLE_LINE_INPUT" in raw
+    assert "_ENABLE_ECHO_INPUT" in raw
+    assert "_ENABLE_PROCESSED_INPUT" in raw
+
+
+def test_recovery_tool_discovers_sessions_from_registry():
+    source = (ROOT / "tools" / "recover_console.py").read_text(encoding="utf-8")
+    assert "broker_sessions" in source
+    start = source.index("def find_sessions():")
+    end = source.index("def connect(", start)
+    finder = source[start:end]
+    assert "Get-CimInstance" not in finder
+    assert ".json" in finder
+
+
 def test_nonempty_terminal_selection_is_preserved_before_endpoint_checks():
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
     selection_guard = source.index("if not sel[0].empty():")
@@ -129,11 +174,13 @@ def test_reattach_command_discovers_orphaned_broker_processes():
     start = source.index("class AiTerminalReattachSessionCommand")
     end = source.index("class AiTerminalNukeCommand", start)
     command_source = source[start:end]
-    assert "Get-CimInstance Win32_Process" in command_source
+    assert "_registered_brokers(" in command_source
     assert "def _attach_orphan(" in command_source
     assert 'state = "orphaned broker"' in command_source
     assert "threading.Thread(target=self._discover" in command_source
-    assert '_terminal_view(self.window, name="Recovered Codex")' in command_source
+    assert "_BROKER_PROFILE_SETTING" in command_source
+    assert 'name="Recovered Codex"' not in command_source
+    assert "timeout=" in command_source[command_source.index("def _running_brokers("):]
 
 
 def test_broker_reattach_never_connects_named_pipes_on_sublime_main_thread():

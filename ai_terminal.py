@@ -69,7 +69,7 @@ if os.name == "nt":
             sizeof,
             windll,
         )
-        from ctypes.wintypes import HANDLE, DWORD, WORD, BOOL, LPCWSTR, LPBYTE, SHORT
+        from ctypes.wintypes import HANDLE, DWORD, WORD, BOOL, LPCWSTR, LPBYTE, SHORT, FILETIME
 
         # wintypes does not export HRESULT; it is a signed LONG.
         HRESULT = ctypes.c_long
@@ -164,6 +164,19 @@ if os.name == "nt":
         _k32.WaitNamedPipeW.restype = BOOL
         _k32.CancelIoEx.argtypes = [HANDLE, c_void_p]
         _k32.CancelIoEx.restype = BOOL
+        # Used by _broker_process_matches() to tell a genuine broker process
+        # apart from an unrelated process that later reused the same PID
+        # (Windows recycles PIDs; a registry record for a broker that never
+        # cleaned up after itself can otherwise look "alive" for years).
+        _k32.QueryFullProcessImageNameW.argtypes = [
+            HANDLE, DWORD, LPCWSTR, POINTER(DWORD),
+        ]
+        _k32.QueryFullProcessImageNameW.restype = BOOL
+        _k32.GetProcessTimes.argtypes = [
+            HANDLE, POINTER(FILETIME), POINTER(FILETIME),
+            POINTER(FILETIME), POINTER(FILETIME),
+        ]
+        _k32.GetProcessTimes.restype = BOOL
         _INVALID_HANDLE_VALUE = HANDLE(-1).value
 
         _STILL_ACTIVE = 259
@@ -501,6 +514,65 @@ def _pid_is_alive(pid):
         return False
 
 
+_EPOCH_AS_FILETIME = 116444736000000000  # 1601-01-01 -> 1970-01-01, in 100ns units
+
+
+def _filetime_to_unix(ft):
+    value = (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+    return (value - _EPOCH_AS_FILETIME) / 10000000.0
+
+
+def _broker_process_matches(pid, created_at):
+    """True if `pid` is not just alive, but plausibly *the* broker recorded
+    at `created_at` -- not an unrelated process that later reused the PID.
+
+    Windows recycles PIDs. A broker that crashed or was killed without
+    reaching its own registry cleanup leaves a record behind forever; days
+    later some completely different process can land on that same PID and
+    _pid_is_alive() alone would call it live. Brokers always run as
+    python.exe/pythonw.exe (see _resolve_broker_python / spawn path below),
+    and a genuine broker's process start time sits within seconds of when it
+    published its registry record -- so cross-check both before trusting the
+    PID.
+    """
+    if not _pid_is_alive(pid):
+        return False
+    if os.name != "nt" or _k32 is None:
+        return True
+    try:
+        handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    except (TypeError, ValueError):
+        return False
+    if not handle:
+        return False
+    try:
+        size = DWORD(260)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not _k32.QueryFullProcessImageNameW(handle, 0, buf, byref(size)):
+            return False
+        exe_name = os.path.basename(buf.value).lower()
+        if exe_name not in ("python.exe", "pythonw.exe"):
+            return False
+        if created_at is None:
+            return True
+        creation = FILETIME()
+        exit_t = FILETIME()
+        kernel = FILETIME()
+        user = FILETIME()
+        if not _k32.GetProcessTimes(
+            handle, byref(creation), byref(exit_t), byref(kernel), byref(user)
+        ):
+            # Image name already matched; treat as a pass rather than fail
+            # recovery over a query we can't complete.
+            return True
+        started = _filetime_to_unix(creation)
+        # Generous either-direction skew: clock differences, slow machines,
+        # and the gap between process start and the registry write itself.
+        return abs(started - float(created_at)) < 300
+    finally:
+        _k32.CloseHandle(handle)
+
+
 def _registered_brokers(profile_name=None, cwd=None):
     """Return newest-first broker records matching a restored terminal."""
     folder = _broker_registry_dir()
@@ -520,7 +592,9 @@ def _registered_brokers(profile_name=None, cwd=None):
             pipe_name = record.get("pipe_name")
             if not pipe_name or pipe_name != name[:-5]:
                 continue
-            if not _pid_is_alive(record.get("broker_pid")):
+            if not _broker_process_matches(
+                record.get("broker_pid"), record.get("created_at")
+            ):
                 continue
             if profile_name and record.get("profile_name") != profile_name:
                 continue
@@ -541,6 +615,19 @@ def _broker_pipe_path(name):
 
 def _broker_script_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_broker.py")
+
+
+def _recover_console_script_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "recover_console.py")
+
+
+def _windows_terminal_exe():
+    """Locate wt.exe. Override with the `windows_terminal_exe` setting if
+    auto-detect picks the wrong install (e.g. Store vs. non-Store wt)."""
+    override = _settings_obj().get("windows_terminal_exe")
+    if override:
+        return override
+    return shutil.which("wt.exe") or shutil.which("wt")
 
 
 def _broker_python_exe():
@@ -4682,10 +4769,12 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         _USER_CLOSING_TERM_IDS.discard(vid)
 
         def _do_close():
-            if _is_broker_pty(term.pty) and (user_closing or not window_closing):
+            if (
+                _is_broker_pty(term.pty)
+                and (user_closing or not window_closing)
+            ):
                 # A deliberate single-tab close ends the session for real.
-                # (Window closes, and ST-restart reattach failures, must not
-                # -- see term.kill()'s own docstring.)
+                # Window closes must not: restored tabs reconnect later.
                 try:
                     term.pty.explicit_kill()
                 except Exception as e:
@@ -7671,6 +7760,75 @@ class AiTerminalReviveFrozenTabCommand(sublime_plugin.TextCommand):
         return self.is_enabled()
 
 
+class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
+    """Hand this tab's live broker session to a real Windows Terminal window.
+
+    tools/recover_console.py is a raw VT relay over the same named pipes
+    _BrokerPty itself uses -- not a new agent process, the same running one.
+    The broker accepts only one connected client at a time, so this is a
+    handoff, not a second view: this tab detaches (same state as a frozen
+    tab) the moment Windows Terminal's relay client connects. 'Revive Frozen
+    Tab' or 'Recover Orphaned Session...' bring the session back into
+    Sublime later; the agent process itself is untouched either way.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no detachable session")
+            return
+        pty = term.pty
+        pipe_name = pty.pipe_name
+
+        wt_exe = _windows_terminal_exe()
+        if not wt_exe:
+            sublime.error_message(
+                "Ai Terminal: Windows Terminal (wt.exe) was not found on PATH. "
+                "Set the 'windows_terminal_exe' setting if it is installed "
+                "somewhere auto-detect cannot see."
+            )
+            return
+        python_exe = _broker_python_exe()
+        if not python_exe:
+            sublime.error_message(
+                "Ai Terminal: no python.exe found on PATH to run the relay "
+                "script. Set the 'broker_python' setting."
+            )
+            return
+
+        if not sublime.ok_cancel_dialog(
+            "This tab will detach as soon as Windows Terminal connects -- "
+            "only one client can hold the session at a time. The agent "
+            "keeps running either way; use 'Revive Frozen Tab' to bring it "
+            "back into Sublime later.",
+            "Open in Windows Terminal",
+        ):
+            return
+
+        try:
+            subprocess.Popen(
+                [wt_exe, python_exe, _recover_console_script_path(),
+                 "--pipe-name", pipe_name],
+            )
+        except OSError as exc:
+            sublime.error_message(
+                f"Ai Terminal: failed to launch Windows Terminal: {exc}"
+            )
+            return
+
+        pty.kill()
+        sublime.status_message(
+            f"Ai terminal: handed off {pipe_name} to Windows Terminal"
+        )
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
 class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
     """Reconnect a detachable broker already held by this GhostShell process.
 
@@ -7721,6 +7879,7 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
             text=True,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=8,
         )
         pattern = re.compile(
             r"agent_broker\.py.*?--pipe-name\s+(ghostshell_[0-9a-f]+)"
@@ -7740,12 +7899,32 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
 
     def _discover(self):
         terms = self._local_terms()
+        brokers = []
+        error = None
+        # Production brokers start with --launch-file, so their command line
+        # never contains --pipe-name. The on-disk registry is authoritative.
         try:
-            brokers = self._running_brokers()
-            error = None
+            for record in _registered_brokers():
+                pipe_name = record.get("pipe_name")
+                if not pipe_name:
+                    continue
+                child = record.get("child_argv") or []
+                if isinstance(child, list):
+                    child = " ".join(str(part) for part in child)
+                brokers.append({
+                    "pipe_name": pipe_name,
+                    "cwd": record.get("cwd") or "",
+                    "child": child or "",
+                    "profile_name": record.get("profile_name"),
+                })
         except Exception as exc:
-            brokers = []
             error = str(exc)
+        if not brokers:
+            try:
+                brokers = self._running_brokers()
+            except Exception as exc:
+                if error is None:
+                    error = str(exc)
         sublime.set_timeout(
             lambda: self._show_choices(terms, brokers, error), 0
         )
@@ -7813,7 +7992,12 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
             cwd = broker.get("cwd") if broker else getattr(
                 getattr(term, "pty", None), "_cwd", ""
             )
-            rows.append([f"{name or 'Codex'} — {state}", pipe_name, cwd or ""])
+            profile = (broker or {}).get("profile_name") if broker else None
+            rows.append([
+                f"{name or profile or pipe_name} — {state}",
+                pipe_name,
+                cwd or "",
+            ])
 
         def _picked(index):
             if index < 0 or index >= len(sessions):
@@ -7829,9 +8013,10 @@ class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
     def _attach_orphan(self, pipe_name, broker):
         # Use the normal terminal-view constructor so recovered tabs receive
         # the dedicated ANSI colour scheme and every input/layout setting.
-        target = _terminal_view(self.window, name="Recovered Codex")
+        profile = broker.get("profile_name") or "Recovered"
+        target = _terminal_view(self.window, name=profile)
         target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
-        target.settings().set(_BROKER_PROFILE_SETTING, "Codex")
+        target.settings().set(_BROKER_PROFILE_SETTING, profile)
         cwd = broker.get("cwd")
         if cwd:
             target.settings().set(_BROKER_CWD_SETTING, cwd)
