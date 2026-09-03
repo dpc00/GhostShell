@@ -73,12 +73,10 @@ class SynchronizedScrollbackTests(unittest.TestCase):
     def test_closing_frame_synchronizes_once(self):
         parser = self._parser()
         parser._sync_open = True
-        parser._resize_replay_pending = True
         calls = []
         parser._sync = lambda: calls.append("sync")
         parser.feed("rest of frame\x1b[?2026l")
         self.assertEqual(calls, ["sync"])
-        self.assertFalse(parser._resize_replay_pending)
 
     def test_main_screen_home_replay_clears_stale_active_grid(self):
         parser = self._parser()
@@ -125,22 +123,29 @@ class SynchronizedScrollbackTests(unittest.TestCase):
         parser._get_size = unexpected_native_read
         parser._sync_scrollback()
 
-    def test_resize_replay_keeps_locally_reflowed_history(self):
+    def test_resize_forces_full_scrollback_rebuild_on_next_sync(self):
+        # Screen.resize() only clips/pads cells -- it does not reflow (no
+        # per-row "was this a wrapped continuation" bookkeeping to reflow
+        # from). Forcing _last_scrollback_rows back to -1 is what makes
+        # the *next* _sync_scrollback() fall through to a full rebuild
+        # from the native terminal (which does reflow) instead of an
+        # incremental append or a shortcut that trusted Screen.resize()'s
+        # own shallow adjustment. Deliberately reverted 2026-09-02 -- see
+        # GhosttyParser.resize()'s own comment for the live-verified bug
+        # the removed shortcut used to leave in place.
+        from terminal.screen import Screen
+
         parser = _detached_parser()
-        parser._sync_open = False
-        parser._replace_scroll = True
-        parser._replace_origin = 12
-        parser._resize_replay_pending = True
-        parser._last_scrollback_rows = 100
-        parser._get_size = lambda _kind: 6250
-        parser.s = type("ScreenStub", (), {"dirty": False})()
+        parser._g = type(
+            "Native", (), {"terminal_resize": staticmethod(lambda *a: gvt.SUCCESS)}
+        )()
+        parser._term = None
+        parser.s = Screen(80, 24)
+        parser._last_scrollback_rows = 12345
 
-        parser._sync_scrollback()
+        parser.resize(100, 30)
 
-        self.assertEqual(parser._last_scrollback_rows, 6250)
-        self.assertFalse(parser._resize_replay_pending)
-        self.assertIsNone(parser._replace_origin)
-        self.assertTrue(parser.s.dirty)
+        self.assertEqual(parser._last_scrollback_rows, -1)
 
 
 def _style(**kwargs):
@@ -591,6 +596,34 @@ class HomeReplaceScrollTests(unittest.TestCase):
         vis = _visible_text(self.screen)
         self.assertIn("UNIQUE-00", vis)
         self.assertEqual(vis.count("LINE-00"), 1)
+
+    def test_resize_then_home_dump_reflows_old_scrollback(self):
+        # The actual live-verified bug (2026-09-02): resizing alone changes
+        # nothing about already-retired scrollback -- old rows keep
+        # whatever wrapping they were originally drawn at unless a later
+        # synchronized home+full-transcript repaint (real resizing apps
+        # send one) is genuinely re-extracted from the native terminal,
+        # which does reflow, rather than trusted-and-skipped via a
+        # shortcut that assumed Screen.resize() had already reflowed it
+        # (it never did -- see GhosttyParser.resize()'s comment).
+        long_line = "REWRAP-ME-" + "".join(str(i % 10) for i in range(25))
+        self.assertEqual(len(long_line), 35)
+        # Screen is 20 cols (setUp): this auto-wraps across 2 physical rows
+        # with no explicit newline, so the 35-char run is never contiguous
+        # in _visible_text (a "\n" from the row join falls inside it).
+        self.parser.feed(long_line + "\n")
+        for i in range(6):
+            self.parser.feed("filler-%d\n" % i)
+        self.assertNotIn(long_line, _visible_text(self.screen))
+
+        self.parser.resize(40, 4)
+        self.parser.feed("\x1b[?2026h\x1b[H" + long_line + "\n\x1b[?2026l")
+
+        # At 40 cols the same 35 characters fit on one row -- contiguous
+        # in _visible_text only if the resize's synchronized repaint was
+        # actually re-extracted from native (reflowed) history, not
+        # skipped.
+        self.assertIn(long_line, _visible_text(self.screen))
 
 
 class ReplaceScrollMergeTests(unittest.TestCase):

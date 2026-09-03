@@ -453,7 +453,6 @@ class GhosttyParser:
         self._sync_open = False
         self._replace_scroll = False
         self._replace_origin = None
-        self._resize_replay_pending = False
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
@@ -487,7 +486,6 @@ class GhosttyParser:
     def feed(self, text):
         if self.force_main_screen:
             text = self._alt_screen_filter.feed(text)
-        sync_was_open = self._sync_open
         self._sync_open, self._replace_scroll = update_replace_scroll(
             self._sync_open, self._replace_scroll, text
         )
@@ -516,13 +514,6 @@ class GhosttyParser:
             self.s.sync_output = True
         else:
             self._sync()
-            # Some Codex versions wrap their resize repaint in mode 2026 but
-            # do not emit the CUP-home form recognized by _replace_scroll.
-            # Once that atomic cycle closes there is no resize replay left to
-            # match; do not let the optimization flag leak into a later,
-            # unrelated home redraw.
-            if sync_was_open:
-                self._resize_replay_pending = False
         # Next chunk starts clean unless 2026 is still open (split dump).
         if not self._sync_open:
             self._replace_scroll = False
@@ -556,7 +547,6 @@ class GhosttyParser:
         self._sync_title()
         self._replace_scroll = False
         self._replace_origin = None
-        self._resize_replay_pending = False
         self.s.sync_output = False
         self.s.dirty = True
 
@@ -568,12 +558,24 @@ class GhosttyParser:
             "ghostty_terminal_resize",
         )
         self.s.resize(cols, rows)
-        # Screen.resize has already reflowed the authoritative Python history.
-        # The child generally follows with a synchronized home+full-transcript
-        # repaint.  Remember that this replacement belongs to the resize so
-        # _sync_scrollback can retain the local reflow instead of extracting
-        # the same conversation cell-by-cell through the grid-ref API.
-        self._resize_replay_pending = True
+        # Screen.resize only clips/pads active-grid cells and truncates
+        # scrollback rows on narrow -- it does not reflow (there is no
+        # per-row "was this a wrapped continuation" bookkeeping to reflow
+        # from). The native terminal genuinely does reflow on resize; force
+        # a full rebuild of Python's history from it on the next sync
+        # rather than trusting Screen.resize's own shallow adjustment.
+        # Deliberately reverted 2026-09-02: an earlier optimization here
+        # (skip the rebuild, trust "Screen.resize already reflowed it")
+        # was live-verified to leave old scrollback wrapped at whatever
+        # width it was originally drawn at, permanently, once a resize's
+        # synchronized replay closed -- confirmed by diffing the same
+        # historical region across a narrow and a wide capture. The
+        # resize<->replay oscillation this optimization was mistaken for
+        # guarding against was already fixed independently, days earlier,
+        # by pinning cols against the gutter-digit-width crossing
+        # (gutter_digit_delta / accepted_cols, terminal/layout.py) -- this
+        # rebuild does not reintroduce that bug.
+        self._last_scrollback_rows = -1
 
     def reset(self):
         self._alt_screen_filter.reset()
@@ -582,7 +584,6 @@ class GhosttyParser:
         self._sync_open = False
         self._replace_scroll = False
         self._replace_origin = None
-        self._resize_replay_pending = False
         self._sync()
 
     def bind_write_pty(self, sink):
@@ -932,19 +933,16 @@ class GhosttyParser:
         scrollback_rows = self._get_size(gvt.TERMINAL_DATA_SCROLLBACK_ROWS)
         last = self._last_scrollback_rows
 
-        if self._resize_replay_pending and self._replace_scroll:
-            # resize() already reflowed s.history.  A home+2026 repaint is the
-            # child reproducing that same transcript at the new width; bulk
-            # importing it here costs several ctypes calls per cell and is the
-            # dominant cost for long sessions.  The active grid is synchronized
-            # separately by _sync_grid, so commit the native row-count baseline
-            # and let later genuinely new overflow use the incremental path.
-            self._last_scrollback_rows = scrollback_rows
-            self._resize_replay_pending = False
-            self._replace_origin = None
-            self.s.dirty = True
-            return
-
+        # A resize (last == -1, see GhosttyParser.resize) falls through to
+        # the full extraction below rather than trusting a shortcut here --
+        # deliberately reverted 2026-09-02, see resize()'s comment for why.
+        # A resize followed by a synchronized home+full-transcript repaint
+        # (_replace_scroll True, last == -1 so the `last >= 0` check below
+        # is false) instead takes the plain full-rebuild path further down,
+        # which re-extracts the *entire* capped scrollback fresh from the
+        # native terminal -- correct after a resize specifically, since a
+        # partial/incremental merge has nothing valid pinned to merge
+        # against when every row's wrapping may have just changed.
         if scrollback_rows == last:
             return
 
