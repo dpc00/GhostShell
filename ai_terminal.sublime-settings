@@ -147,6 +147,13 @@
     // instead of flipping this globally. Live: takes effect on the next
     // title change, no reload needed.
     "osc_title_updates_tab": false,
+    // Every terminal survives independently of Sublime (see
+    // docs/DETACHABLE_SESSIONS.md) and is reachable through Recover Orphaned
+    // Session, Revive Frozen Tab, and Open in Windows Terminal -- not just
+    // profiles that opt in by hand. A profile can set "detachable": false to
+    // opt a specific one out (e.g. a throwaway shell not worth a background
+    // broker process for). See docs/DETACHABLE_SESSIONS.md.
+    "detachable": true,
     // Every configured profile is eligible when its launch executable exists.
     // ai_terminal learns current quota state from real terminal output and grays
     // a profile after a provider reports exhaustion. It never probes a provider,
