@@ -22,6 +22,9 @@ stripped, CamelCase -> snake_case).
 | `AiTerminalSelectProfileCommand` | `ai_terminal_select_profile` | WindowCommand | "Ai Terminal: Open Profile..." | Tools > Ai Terminal > Open Profile…; Side Bar: "Open Ai Terminal Profile…" | — |
 | `AiTerminalSetWorkingDirectoryCommand` | `ai_terminal_set_working_directory` | WindowCommand | "Ai Terminal: Set Working Directory" | Tools > Ai Terminal > Set Working Directory; Side Bar: "Set Ai Terminal Working Directory" | — |
 | `AiTerminalClearWorkingDirectoryCommand` | `ai_terminal_clear_working_directory` | WindowCommand | "Ai Terminal: Clear Working Directory" | Tools > Ai Terminal > Clear Working Directory; Side Bar: "Clear Ai Terminal Working Directory" | — |
+| `AiTerminalReattachSessionCommand` | `ai_terminal_reattach_session` | WindowCommand | "Ai Terminal: Recover Orphaned Session..." | — | — |
+| `AiTerminalReviveFrozenTabCommand` | `ai_terminal_revive_frozen_tab` | TextCommand | "Ai Terminal: Revive Frozen Tab" | — | — |
+| `AiTerminalOpenInWindowsTerminalCommand` | `ai_terminal_open_in_windows_terminal` | TextCommand | "Ai Terminal: Open in Windows Terminal" | — | — |
 | `AiTerminalNukeCommand` | `ai_terminal_nuke` | TextCommand | "Ai Terminal: Nuke" | Tools > Ai Terminal > Nuke Ai Terminal | `ctrl+alt+k` (context: `setting.ai_terminal_view`) |
 | `AiTerminalKeypressCommand` | `ai_terminal_keypress` | TextCommand | — | — | ~259 bindings in `Default.sublime-keymap`, all gated on `setting.ai_terminal_view`; this is the keystroke → PTY forwarding path |
 
