@@ -1,15 +1,18 @@
 [
 	{
 		"caption": "Open Ai Terminal here...",
-		"command": "ai_terminal_open_in_editor"
+		"command": "ai_terminal_open_in_editor",
+		"args": { "group": -1, "index": -1 }
 	},
 	{ "caption": "-" },
 	{
 		"caption": "Ai Terminal: Kill Session (Keep Tab Open)",
-		"command": "ai_terminal_kill_session"
+		"command": "ai_terminal_kill_session",
+		"args": { "group": -1, "index": -1 }
 	},
 	{
 		"caption": "Ai Terminal: Close Tab (Keep Session Alive)",
-		"command": "ai_terminal_close_keep_alive"
+		"command": "ai_terminal_close_keep_alive",
+		"args": { "group": -1, "index": -1 }
 	}
 ]

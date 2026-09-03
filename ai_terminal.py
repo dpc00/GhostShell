@@ -6288,7 +6288,32 @@ class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
         return _profile_menu_caption(profile)
 
 
-class AiTerminalOpenInEditorCommand(sublime_plugin.TextCommand):
+def _tab_menu_target_view(window, group, index):
+    """The view a Tab Context menu command should act on.
+
+    Sublime substitutes real values into a menu entry's `"group": -1,
+    "index": -1` placeholders with the group/index of the *right-clicked*
+    tab -- but only for Tab Context.sublime-menu. Context.sublime-menu
+    (in-editor right click) and the Command Palette never pass these, so
+    group/index stay at their -1 defaults; -1 falls back to the window's
+    active view, which is correct there too (right-clicking inside a view's
+    text -- as opposed to its tab -- does make that view active, and a
+    Palette invocation has no clicked tab at all, only "whatever's focused").
+
+    Without this, a WindowCommand or a naive self.view-based TextCommand in
+    Tab Context.sublime-menu silently acts on the *active* tab instead of
+    the *right-clicked* one whenever they differ -- confirmed live
+    2026-09-02: right-clicking a background tab and choosing Kill Session
+    killed the session in the focused tab instead.
+    """
+    if group is not None and group >= 0 and index is not None and index >= 0:
+        views = window.views_in_group(group)
+        if 0 <= index < len(views):
+            return views[index]
+    return window.active_view()
+
+
+class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
     """Open a Claude TUI terminal in the active file's project root.
 
     Uses the nearest project root containing the file (not the bare
@@ -6296,11 +6321,16 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.TextCommand):
 
     Menu: Context.sublime-menu / Tab Context.sublime-menu — "Open Ai Terminal here..."
     Command palette: "Ai: Open Terminal in Editor"
+
+    A WindowCommand, not a TextCommand, specifically so Tab Context's
+    group/index (see _tab_menu_target_view) can target the right-clicked
+    tab rather than whatever tab happens to be focused.
     """
 
-    def run(self, edit, profile=None):
-        window = self.view.window()
-        path = _resolve_editor_path(self.view)
+    def run(self, profile=None, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        window = self.window
+        path = _resolve_editor_path(view) if view else None
         if path and window:
             _spawn(window, path, profile=profile)
             return
@@ -6313,10 +6343,10 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.TextCommand):
 
         _pick_cwd_then(window, on_path)
 
-    def is_enabled(self, profile=None):
+    def is_enabled(self, profile=None, group=-1, index=-1):
         return _profile_is_available(profile)
 
-    def description(self, profile=None):
+    def description(self, profile=None, group=-1, index=-1):
         return _profile_menu_caption(profile)
 
 
@@ -7817,17 +7847,27 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
         return self.is_enabled()
 
 
-class AiTerminalKillSessionCommand(sublime_plugin.TextCommand):
+def _tab_menu_term(window, group, index):
+    """The _Terminal a Tab Context menu command should act on, or None."""
+    view = _tab_menu_target_view(window, group, index)
+    return _Terminal.from_id(view.id()) if view else None
+
+
+class AiTerminalKillSessionCommand(sublime_plugin.WindowCommand):
     """End this tab's agent/shell for real, right now -- but keep the tab
     open. Deliberately not the same as a plain tab close (which kills AND
     closes): sometimes the process is done but the transcript in the tab
     is still wanted -- to read, copy, or Save As -- before the tab itself
     goes away. The tab is left read-only-looking (nothing more will ever
     be written to it) but not literally closed; close it yourself whenever.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
     """
 
-    def run(self, edit):
-        term = _Terminal.from_id(self.view.id())
+    def run(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
         if term is None or not _is_broker_pty(term.pty):
             sublime.status_message("Ai terminal: this tab has no session to kill")
             return
@@ -7854,25 +7894,30 @@ class AiTerminalKillSessionCommand(sublime_plugin.TextCommand):
         # slow/stale broker can't freeze Sublime's UI for that long.
         threading.Thread(target=_do_kill, daemon=True).start()
 
-    def is_enabled(self):
-        term = _Terminal.from_id(self.view.id())
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
         return term is not None and _is_broker_pty(term.pty)
 
-    def is_visible(self):
-        return self.is_enabled()
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
 
 
-class AiTerminalCloseKeepAliveCommand(sublime_plugin.TextCommand):
+class AiTerminalCloseKeepAliveCommand(sublime_plugin.WindowCommand):
     """Close this tab without ending the session -- the opposite of Kill
     Session. Same detach _BrokerPty.kill() does on any other close, just
     without the KILL a plain tab close would otherwise send: the agent/shell
     keeps running in the background, same as a hand-off to Windows Terminal,
     just with nothing on screen holding it. Recoverable later via
     'Recover Orphaned Session...'.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
     """
 
-    def run(self, edit):
-        term = _Terminal.from_id(self.view.id())
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
         if term is None or not _is_broker_pty(term.pty):
             sublime.status_message("Ai terminal: this tab has no detachable session")
             return
@@ -7883,17 +7928,17 @@ class AiTerminalCloseKeepAliveCommand(sublime_plugin.TextCommand):
         # _expected_termination_reason's definition on _Terminal.
         term._expected_termination_reason = "closed"
         pty.kill()
-        self.view.close()
+        view.close()
         sublime.status_message(
             f"Ai terminal: closed -- {pipe_name} still running in the background"
         )
 
-    def is_enabled(self):
-        term = _Terminal.from_id(self.view.id())
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
         return term is not None and _is_broker_pty(term.pty)
 
-    def is_visible(self):
-        return self.is_enabled()
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
 
 
 class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
