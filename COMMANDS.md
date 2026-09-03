@@ -21,8 +21,7 @@ stripped, CamelCase -> snake_case).
 | `AiTerminalOpenInEditorCommand` | `ai_terminal_open_in_editor` | WindowCommand | "Ai Terminal: Open in Editor" | Context.sublime-menu and Tab Context.sublime-menu: "Open Ai Terminal here…" (Tab Context passes `{"group": -1, "index": -1}`, substituted by Sublime with the right-clicked tab's real coordinates -- see `_tab_menu_target_view`) | — |
 | `AiTerminalSetWorkingDirectoryCommand` | `ai_terminal_set_working_directory` | WindowCommand | "Ai Terminal: Set Working Directory" | Tools > Ai Terminal > Set Working Directory; Side Bar: "Set Ai Terminal Working Directory" | — |
 | `AiTerminalClearWorkingDirectoryCommand` | `ai_terminal_clear_working_directory` | WindowCommand | "Ai Terminal: Clear Working Directory" | Tools > Ai Terminal > Clear Working Directory; Side Bar: "Clear Ai Terminal Working Directory" | — |
-| `AiTerminalReattachSessionCommand` | `ai_terminal_reattach_session` | WindowCommand | "Ai Terminal: Recover Orphaned Session..." | — | — |
-| `AiTerminalReviveFrozenTabCommand` | `ai_terminal_revive_frozen_tab` | TextCommand | "Ai Terminal: Revive Frozen Tab" | — | — |
+| `AiTerminalRecoverSessionCommand` | `ai_terminal_recover_session` | WindowCommand | "Ai Terminal: Recover Session..." | — | — |
 | `AiTerminalOpenInWindowsTerminalCommand` | `ai_terminal_open_in_windows_terminal` | TextCommand | "Ai Terminal: Open in Windows Terminal" | — | — |
 | `AiTerminalKillSessionCommand` | `ai_terminal_kill_session` | WindowCommand | "Ai Terminal: Kill Session (Keep Tab Open)" | Tab Context.sublime-menu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalCloseKeepAliveCommand` | `ai_terminal_close_keep_alive` | WindowCommand | "Ai Terminal: Close Tab (Keep Session Alive)" | Tab Context.sublime-menu (`{"group": -1, "index": -1}`, see above) | — |
