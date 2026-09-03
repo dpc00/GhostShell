@@ -426,6 +426,7 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     # decision-relevant per the same feedback) are demoted to a footer.
     assert info_source.index('"Status: %s"') < info_source.index('"Pipe: %s"')
     assert '"Last output: %s" % _human_ago(' in info_source
+    assert "_sublime_view_info_lines(view)" in info_source
 
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
@@ -444,6 +445,66 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     for name in ("ai_terminal_end_session", "ai_terminal_session_info"):
         assert name in by_command
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_sublime_view_info_lines_reports_ids_and_group_index():
+    # Requested directly: Session Info should also carry Sublime's own
+    # view/sheet/window identifiers, not just broker/session data.
+    class _Sheet:
+        def id(self):
+            return 555
+
+    class _Window:
+        def id(self):
+            return 7
+
+        def get_view_index(self, v):
+            return (1, 3)
+
+    class _View:
+        def id(self):
+            return 42
+
+        def buffer_id(self):
+            return 99
+
+        def sheet(self):
+            return _Sheet()
+
+        def window(self):
+            return _Window()
+
+    lines = ai_terminal._sublime_view_info_lines(_View())
+    assert "View ID: 42" in lines
+    assert "Buffer ID: 99" in lines
+    assert "Sheet ID: 555" in lines
+    assert "Window ID: 7" in lines
+    assert "Group/Index: 1/3" in lines
+
+
+def test_sublime_view_info_lines_degrades_gracefully_when_fields_missing():
+    # A view with no sheet() and no window() must still report what it can
+    # (view/buffer id) rather than raising or dropping the whole footer --
+    # view.sheet() in particular isn't guaranteed for every view kind.
+    class _BareView:
+        def id(self):
+            return 1
+
+        def buffer_id(self):
+            return 2
+
+        def sheet(self):
+            raise AttributeError("no sheet() on this view kind")
+
+        def window(self):
+            return None
+
+    lines = ai_terminal._sublime_view_info_lines(_BareView())
+    assert "View ID: 1" in lines
+    assert "Buffer ID: 2" in lines
+    assert not any(l.startswith("Sheet ID") for l in lines)
+    assert not any(l.startswith("Window ID") for l in lines)
+    assert not any(l.startswith("Group/Index") for l in lines)
 
 
 def test_human_ago_formats_relative_time():
