@@ -6146,7 +6146,27 @@ def _seed_restored_history(screen, restored_text):
     return len(restored_lines)
 
 
-def _reattach_broker_view(view, pipe_name):
+def _reattach_broker_view(view, pipe_name, force_full_replay=False):
+    """Connect `view` to the broker on `pipe_name`.
+
+    Normal path (force_full_replay=False): bootstrap mode. Trusts
+    `view`'s current text as history (the docstring on
+    GhosttyParser.feed_bootstrap says why: "a restored Sublime view
+    already owns readable historical text") and only advances the native
+    VT engine during replay -- fast (the ~10s-to-~1s win), but the
+    corollary is that already-materialized scrollback is never
+    reprocessed, so it can never come out correctly wrapped for a size
+    the view wasn't at when that text was written.
+
+    force_full_replay=True (AiTerminalRewrapConversationCommand): the
+    slow, correct path. The caller is expected to have already cleared
+    `view`'s text, and this feeds the broker's full replay buffer through
+    the real parser (`_on_data`/`parser.feed`, not `feed_bootstrap`) at
+    the view's *current* size, rebuilding Screen.history from scratch --
+    the same real derivation a first-ever connection gets, so a resize
+    done just before calling this comes out correctly wrapped throughout,
+    at the cost of reprocessing every replayed byte again.
+    """
     if not _PTY_OK or os.name != "nt":
         return
     vid = view.id()
@@ -6186,11 +6206,13 @@ def _reattach_broker_view(view, pipe_name):
         return
 
     cols, rows = _measure(view, profile_name=profile_name)
-    restored_text = view.substr(sublime.Region(0, view.size()))
+    restored_text = "" if force_full_replay else view.substr(sublime.Region(0, view.size()))
     try:
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
         # Keep restored plain text as host scrollback. The broker bootstrap
         # supplies the active grid; historical colours need not be rebuilt.
+        # (force_full_replay: restored_text is "" above, so this seeds
+        # nothing -- the real replay below rebuilds history from scratch.)
         restored_rows_seeded = _seed_restored_history(screen, restored_text)
         parser = _make_parser(screen, _force_main_screen(profile_name))
     except Exception:
@@ -6203,7 +6225,7 @@ def _reattach_broker_view(view, pipe_name):
         profile_name=profile_name,
     )
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
-    term._reattach_bootstrap = True
+    term._reattach_bootstrap = not force_full_replay
     term._restored_rows_seeded = restored_rows_seeded
 
     def _finish_connected():
@@ -7870,6 +7892,67 @@ class AiTerminalKillSessionCommand(sublime_plugin.WindowCommand):
         # WaitNamedPipeW/connect retries -- run off the main thread so a
         # slow/stale broker can't freeze Sublime's UI for that long.
         threading.Thread(target=_do_kill, daemon=True).start()
+
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
+class AiTerminalRewrapConversationCommand(sublime_plugin.WindowCommand):
+    """Force a full, correctly-wrapped re-render of this tab's entire
+    conversation at its current size.
+
+    An ordinary resize never fixes already-mismatched scrollback:
+    Screen.resize() (terminal/screen.py) only clips characters off
+    history rows on narrow and does nothing on widen -- there is no
+    "these N terminal rows were originally one logical line" bookkeeping
+    for a real reflow to work from. Reconnecting normally
+    (_reattach_broker_view's bootstrap path) does not fix it either: it
+    deliberately trusts the view's *existing* text instead of
+    reprocessing it, for speed (the ~10s -> ~1s optimization).
+
+    This is what a full reconnect apparently did as a side effect before
+    that optimization: detach, clear the tab, and reconnect with
+    force_full_replay=True, so the broker's retained output is fed
+    through the real parser -- not the bootstrap fast path -- at the
+    view's *current* size, rebuilding history from scratch. Correct
+    (Claude/Codex/etc.'s own redraw, replayed fresh, comes out wrapped
+    for the current width throughout), but reprocesses everything the
+    broker retained -- slow for a large session, which is why this is an
+    explicit, on-demand command and not what an ordinary resize does.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for
+    why Tab Context.sublime-menu needs that to reach the right-clicked
+    tab rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no detachable session")
+            return
+        pty = term.pty
+        pipe_name = pty.pipe_name
+
+        with _term_lock():
+            for vid, candidate in list(_term_registry().items()):
+                if candidate is term:
+                    _term_registry().pop(vid, None)
+
+        # Detach-only: leaves the broker/agent untouched, same guarantee
+        # as every other recovery command here.
+        pty.kill()
+
+        view.set_read_only(False)
+        view.run_command("select_all")
+        view.run_command("right_delete")
+
+        sublime.status_message("Ai terminal: rewrapping full conversation...")
+        _reattach_broker_view(view, pipe_name, force_full_replay=True)
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)

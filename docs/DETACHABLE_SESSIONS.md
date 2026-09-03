@@ -160,6 +160,46 @@ Kill Session, Close Tab, and End Session all share the same
 `_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just
 with different follow-through than the WT command's `"handoff"`.
 
+## Resize does not reflow scrollback -- `Rewrap Full Conversation`
+
+Resizing a terminal tab never fixes already-mismatched scrollback wrapping.
+`Screen.resize()` (`terminal/screen.py`) only clips characters off history
+rows when narrowing and does nothing to history when widening -- there is
+no "these N terminal rows were originally one logical line" bookkeeping for
+a real reflow to work from, so old rows just keep whatever wrapping the
+child app originally drew them at. Confirmed live 2026-09-02: split-view
+then resize left visibly mismatched scrollback ("newspaper column width"
+remnants next to correctly-wrapped recent output), reproduced deliberately
+by resizing narrow then wide and diffing the same historical region across
+both captures.
+
+Reconnecting (`_reattach_broker_view`'s default bootstrap mode) does not
+fix this either, and deliberately so: `GhosttyParser.feed_bootstrap`'s own
+docstring says a restored view "already owns readable historical text" and
+skips reprocessing it, advancing only the native VT engine during replay.
+That is the real ~10s -> ~1s speed win a past session made to detachable
+reconnect -- but the corollary, confirmed by reading the code (not
+recovered from any surviving comment -- nothing in the current codebase
+documented the tradeoff this explicitly before now), is that a session
+which has ever been reconnected can never have its old scrollback
+correctly rewrapped by an ordinary reconnect again, because bootstrap mode
+never reprocesses it.
+
+`Ai Terminal: Rewrap Full Conversation (slow)` is the deliberate, on-demand
+override: detaches the tab (`pty.kill()`, agent untouched, same guarantee
+as every other command here), clears the view's text, and reconnects with
+`_reattach_broker_view(view, pipe_name, force_full_replay=True)`. That
+flag flips `_reattach_bootstrap` off and forces `restored_text = ""`
+regardless of what was in the view, so the broker's retained replay buffer
+gets fed through the real parser (`_on_data`/`parser.feed`, not
+`feed_bootstrap`) at the view's *current* size, rebuilding `Screen.history`
+from scratch -- the same real derivation a first-ever connection gets.
+Correct (the child's own redraw, replayed fresh, comes out wrapped for the
+current width throughout), but reprocesses everything the broker retained,
+so it is slow for a large session -- this is why it is an explicit command
+and not what an ordinary resize does. Built same day as the finding above;
+not yet live-verified.
+
 `tools/recover_console.py` also still works run by hand, as an emergency VT
 relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
 in-app command isn't reachable: close the Sublime *window* (do not close the
