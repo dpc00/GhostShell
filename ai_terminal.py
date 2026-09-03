@@ -3210,20 +3210,29 @@ class _Terminal:
             # CancelIoEx on our own handles -- so it needs its own message and
             # must not be treated as either case below.
             reason = self._expected_termination_reason
-            if reason == "handoff":
-                notice = "\n[detached -- session handed off, still running]\n"
-            elif reason == "killed":
-                notice = "\n[session killed -- transcript kept, tab not closed]\n"
-            elif reason == "closed":
-                # Rarely actually seen -- the view is usually already gone by
-                # the time this async finally block runs -- kept for the
-                # unusual ordering where it isn't yet.
-                notice = "\n[closed -- session kept alive, still running]\n"
-            elif error is None:
-                notice = "\n[process exited]\n"
+            if reason == "rewrap":
+                # This same view is about to be cleared and reconnected in
+                # place (AiTerminalRewrapConversationCommand) -- writing a
+                # notice here would race the new connection's own writes to
+                # the same view and could land in the middle of freshly
+                # replayed output. Nothing to show; skip straight past the
+                # notice write below.
+                pass
             else:
-                notice = "\n[terminal read failed: %s]\n" % error
-            sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
+                if reason == "handoff":
+                    notice = "\n[detached -- session handed off, still running]\n"
+                elif reason == "killed":
+                    notice = "\n[session killed -- transcript kept, tab not closed]\n"
+                elif reason == "closed":
+                    # Rarely actually seen -- the view is usually already gone
+                    # by the time this async finally block runs -- kept for
+                    # the unusual ordering where it isn't yet.
+                    notice = "\n[closed -- session kept alive, still running]\n"
+                elif error is None:
+                    notice = "\n[process exited]\n"
+                else:
+                    notice = "\n[terminal read failed: %s]\n" % error
+                sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
             if error is None and reason is None:
                 # _close_tab_on_exit() reads Settings (via _all_profiles), which
                 # is main-thread-only in the Sublime API -- this finally block
@@ -7943,6 +7952,19 @@ class AiTerminalRewrapConversationCommand(sublime_plugin.WindowCommand):
                 if candidate is term:
                     _term_registry().pop(vid, None)
 
+        # Must be set before kill() (below): kill() closes this tab's read
+        # handle via CancelIoEx, which makes the reader thread's read()
+        # return exactly the way a real child death does. Without this,
+        # reproduced live: the old reader thread's now-unguarded
+        # _maybe_close_dead_view fires ~1.5s later and closes the view --
+        # and if the new connection below has *already* registered a fresh
+        # _Terminal against this same view id by then (a fast reconnect,
+        # or a slow one on a small session), on_close finds that live,
+        # legitimate replacement (not this detaching one) and sends it a
+        # real KILL, since its own _expected_termination_reason is still
+        # None. A stale timer from the detach reached across and killed
+        # the brand new session that replaced it.
+        term._expected_termination_reason = "rewrap"
         # Detach-only: leaves the broker/agent untouched, same guarantee
         # as every other recovery command here.
         pty.kill()

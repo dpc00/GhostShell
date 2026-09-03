@@ -298,6 +298,12 @@ def test_open_in_windows_terminal_does_not_auto_close_or_kill_the_handoff_tab():
     read_loop_source = source[read_loop_start:read_loop_end]
     assert "self._expected_termination_reason" in read_loop_source
     assert "error is None and reason is None" in read_loop_source
+    # "rewrap" (AiTerminalRewrapConversationCommand) must reach this same
+    # guard -- any reason value works, since the check is `reason is
+    # None`, not an enumerated list -- and must skip the notice write too
+    # (the view is about to be cleared and reconnected in place; a notice
+    # would race the new connection's own writes).
+    assert 'if reason == "rewrap":' in read_loop_source
 
     on_close_start = source.index("def on_close(self):")
     on_close_end = source.index(
@@ -422,6 +428,17 @@ def test_rewrap_conversation_command_detaches_clears_and_forces_full_replay():
         "must detach, then clear the stale text, then reconnect with a "
         "forced full replay, in that order"
     )
+    # Reproduced live 2026-09-02: without this, the detaching kill() left
+    # term._expected_termination_reason at its default None, so the old
+    # reader thread's unguarded _maybe_close_dead_view fired ~1.5s later
+    # and closed the view -- and if the new connection below had *already*
+    # registered a fresh _Terminal against that same view id by then,
+    # on_close found that live, legitimate replacement (its own reason
+    # also None) and sent it a real KILL. A stale timer from the detach
+    # reached across and killed the brand new session that replaced it --
+    # "ran Rewrap, session killed and tab closed."
+    set_reason_call = cmd_source.index('term._expected_termination_reason = "rewrap"')
+    assert set_reason_call < kill_call, "flag must be set before kill() races the reader thread"
 
     import json
 

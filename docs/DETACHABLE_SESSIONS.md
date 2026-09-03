@@ -197,8 +197,24 @@ from scratch -- the same real derivation a first-ever connection gets.
 Correct (the child's own redraw, replayed fresh, comes out wrapped for the
 current width throughout), but reprocesses everything the broker retained,
 so it is slow for a large session -- this is why it is an explicit command
-and not what an ordinary resize does. Built same day as the finding above;
-not yet live-verified.
+and not what an ordinary resize does.
+
+**First live run killed the session and closed the tab instead.** The
+detaching `pty.kill()` left `term._expected_termination_reason` at its
+default `None` -- the exact bug this same mechanism exists to prevent,
+reintroduced here by forgetting to set it. The old reader thread's
+now-unguarded `_maybe_close_dead_view` fired ~1.5s later and closed the
+view; by then the new connection had already registered a fresh
+`_Terminal` against that same view id (a fast reconnect, or a slow one on
+a small session), so `on_close` found that live, legitimate replacement --
+whose own reason was also `None` -- and sent *it* a real `KILL`. A stale
+timer from the detach reached across and killed the brand new session
+that had already replaced it. Fixed: `term._expected_termination_reason =
+"rewrap"` set before `pty.kill()`, same as every other detach here; a new
+`"rewrap"` branch in `_read_loop` also skips the notice write entirely
+(the view is about to be cleared and reconnected in place, so a notice
+would just race the new connection's own writes). Not yet re-verified
+live.
 
 `tools/recover_console.py` also still works run by hand, as an emergency VT
 relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
