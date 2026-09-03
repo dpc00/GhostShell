@@ -49,16 +49,29 @@ default is 2 MiB and it is clamped to 1–256 MiB. Change
 
 ## User recovery commands
 
-`Ai Terminal: Revive Frozen Tab` disconnects and rebuilds the current tab's
-pipe client without terminating the agent. Use this first when a terminal tab
-stops accepting keys or repainting but Sublime itself still works.
+`Ai Terminal: Recover Session...` is the one recovery command -- it used to
+be two (Revive Frozen Tab / Recover Orphaned Session), which required
+knowing which applied: whether the disconnected tab was still open (just
+frozen) or already gone. That distinction is plumbing, not something a user
+should have to reason about, so the command makes it itself: if the
+*focused* tab is itself a frozen detachable session (`_is_broker_pty(term.pty)
+and not term.pty.is_alive()`), it revives that tab in place -- same as the
+old Revive Frozen Tab. Otherwise it searches the on-disk broker registry,
+known terminal objects, and as a fallback broker process command lines, then
+offers live sessions not already attached to a usable tab -- same as the old
+Recover Orphaned Session. Production brokers start with `--launch-file` and
+do not put `--pipe-name` on the process command line, so the registry is the
+source of truth for that half.
 
-`Ai Terminal: Recover Orphaned Session...` searches the on-disk broker
-registry, known terminal objects, and as a fallback broker process command
-lines, then offers live sessions that are not already attached to a usable
-tab. Use it after reopening Sublime or when the original tab is gone.
-Production brokers start with `--launch-file` and do not put `--pipe-name`
-on the process command line, so the registry is the source of truth.
+**A tab counting as "usable" only checks the Sublime view, not the pty
+underneath it** -- confirmed live 2026-09-02: after a WT hand-off, the
+handed-off tab (open, but frozen -- its pty is dead) still counts as a
+"usable view" to the orphaned-broker search, so that broker never appeared
+in the list at all. Running Recover Session with that exact tab focused is
+what actually works in that situation (the command's own "is *this* tab a
+frozen match" check runs first and doesn't care whether the view still
+counts as "usable" elsewhere); the list is reached only once the tab itself
+is gone.
 
 A registry record is only trusted after `_broker_process_matches()`
 (`ai_terminal.py`, mirrored in `tools/recover_console.py`) confirms the
@@ -97,10 +110,10 @@ detaching `kill()` call, is what tells both the reader thread (skip the
 false-exit auto-close reasoning entirely -- the tab now stays open, showing
 `[detached -- session handed off, still running]`) and `on_close` (skip
 `KILL`; nothing local is ending) that this is a hand-off, not a death. The
-tab is left in the same state as a frozen one -- `Ai Terminal: Revive Frozen
-Tab`, run on that same tab, reconnects it; `Recover Orphaned Session...`
-also finds it (its term is still locally registered) if the tab itself gets
-closed by hand afterward. The session otherwise lives on purely in WT (and
+tab is left in the same state as a frozen one -- `Ai Terminal: Recover
+Session...`, run with that same tab focused, reconnects it in place; if the
+tab itself gets closed by hand afterward, the same command's list-based
+fallback finds it too. The session otherwise lives on purely in WT (and
 the broker) until you close the WT window. Sublime -> WT -> Sublime,
 same broker PID throughout, was proven live on 2026-09-02 -- against the
 version of this fix that (incorrectly, since corrected) auto-closed the
@@ -146,8 +159,16 @@ addition to the isolated Scheduled Task integration test below.
 On 2026-09-02, `Ai Terminal: Open in Windows Terminal` was run against a live
 Claude session: Sublime's tab detached, a real `wt.exe` window rendered the
 relayed session cleanly (screenshot-verified, no corruption), and closing
-that window followed by `Recover Orphaned Session...` reattached it to a
-Sublime tab -- same broker PID throughout, confirmed via the lifecycle log.
+that window followed by reattaching (then still the two-command split)
+reattached it to a Sublime tab -- same broker PID throughout, confirmed via
+the lifecycle log. The same day, a second live round trip against a real
+Grok session (`Open in Windows Terminal` -> close WT -> reattach) is what
+surfaced the "usable view doesn't check pty liveness" gap: Recover Orphaned
+Session's list never showed the Grok broker at all, because the frozen tab
+it left behind still counted as "usable"; focusing that tab and running
+Revive Frozen Tab worked. `Recover Session...` (this section, above) merges
+both into the one command that tries that first -- built same day, not yet
+re-confirmed live under its new name.
 
 ## Automated verification
 

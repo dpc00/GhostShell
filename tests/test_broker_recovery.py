@@ -72,8 +72,8 @@ def test_broker_process_matches_rejects_reused_pid():
     # record looks like once Windows has recycled the PID onto an unrelated
     # process days after the original broker died without cleaning up.
     # Plain PID-alive checks can't tell these apart; _broker_process_matches
-    # must, because it is what stops "Recover Orphaned Session" from
-    # offering a dead session that will hang for ~10s and then fail.
+    # must, because it is what stops "Recover Session..." from offering a
+    # dead session that will hang for ~10s and then fail.
     assert not ai_terminal._broker_process_matches(os.getpid(), time.time() - 100000)
 
 
@@ -167,48 +167,64 @@ def test_nonempty_terminal_selection_is_preserved_before_endpoint_checks():
     assert "term._user_owns_caret = True" in source[selection_guard:endpoint_check]
 
 
-def test_reattach_command_is_exposed_and_detaches_without_killing_broker():
+def test_recover_session_command_is_exposed_and_detaches_without_killing_broker():
     import json
 
     commands = json.loads(
         (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
     )
     assert any(
-        item.get("command") == "ai_terminal_reattach_session"
-        and item.get("caption") == "Ai Terminal: Recover Orphaned Session..."
+        item.get("command") == "ai_terminal_recover_session"
+        and item.get("caption") == "Ai Terminal: Recover Session..."
+        for item in commands
+    )
+    # The old two-command split (Recover Orphaned Session / Revive Frozen
+    # Tab) forced the user to know which applied -- whether the disconnected
+    # tab was still open (frozen) or already gone. Neither command name
+    # should be exposed anymore; this one command does both.
+    assert not any(
+        item.get("command") in ("ai_terminal_reattach_session", "ai_terminal_revive_frozen_tab")
         for item in commands
     )
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
-    start = source.index("class AiTerminalReattachSessionCommand")
+    assert "class AiTerminalReattachSessionCommand" not in source
+    assert "class AiTerminalReviveFrozenTabCommand" not in source
+    start = source.index("class AiTerminalRecoverSessionCommand")
     end = source.index("class AiTerminalNukeCommand", start)
     command_source = source[start:end]
     assert "_revive_terminal_client(term, self.window)" in command_source
     assert "explicit_kill" not in command_source
 
 
-def test_revive_frozen_tab_command_is_exposed_and_never_kills_agent():
-    import json
-
-    commands = json.loads(
-        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
-    )
-    assert any(
-        item.get("command") == "ai_terminal_revive_frozen_tab"
-        and item.get("caption") == "Ai Terminal: Revive Frozen Tab"
-        for item in commands
-    )
+def test_recover_session_tries_the_focused_frozen_tab_before_searching():
+    # This is what replaces Revive Frozen Tab: if the currently focused tab
+    # is itself a frozen (disconnected but still open) detachable session,
+    # revive it in place rather than falling through to the orphaned-broker
+    # search -- which, per the live 2026-09-02 finding, would not even find
+    # it (a tab counts as "usable" there regardless of whether its pty is
+    # still alive).
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("class AiTerminalRecoverSessionCommand")
+    end = source.index("class AiTerminalNukeCommand", start)
+    command_source = source[start:end]
+    run_start = command_source.index("def run(self):")
+    discover_call = command_source.index("threading.Thread(target=self._discover")
+    run_source = command_source[run_start:discover_call]
+    assert "not term.pty.is_alive()" in run_source
+    assert "_revive_terminal_client(term, self.window)" in run_source
+    assert "return" in run_source
+
     helper_start = source.index("def _revive_terminal_client(")
-    helper_end = source.index("class AiTerminalReviveFrozenTabCommand", helper_start)
+    helper_end = source.index("class AiTerminalOpenInWindowsTerminalCommand", helper_start)
     helper_source = source[helper_start:helper_end]
     assert "pty.kill()" in helper_source
     assert "explicit_kill" not in helper_source
     assert "_reattach_broker_view" in helper_source
 
 
-def test_reattach_command_discovers_orphaned_broker_processes():
+def test_recover_session_discovers_orphaned_broker_processes():
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
-    start = source.index("class AiTerminalReattachSessionCommand")
+    start = source.index("class AiTerminalRecoverSessionCommand")
     end = source.index("class AiTerminalNukeCommand", start)
     command_source = source[start:end]
     assert "_registered_brokers(" in command_source
@@ -308,7 +324,7 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
     assert ".close()" not in kill_source
 
     close_start = kill_end
-    close_end = source.index("class AiTerminalReattachSessionCommand", close_start)
+    close_end = source.index("class AiTerminalRecoverSessionCommand", close_start)
     close_source = source[close_start:close_end]
     assert 'term._expected_termination_reason = "closed"' in close_source
     set_flag = close_source.index('term._expected_termination_reason = "closed"')

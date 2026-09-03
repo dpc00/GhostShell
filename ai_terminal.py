@@ -7754,25 +7754,6 @@ def _revive_terminal_client(term, window):
     )
 
 
-class AiTerminalReviveFrozenTabCommand(sublime_plugin.TextCommand):
-    """Rebuild this tab's broker connection without terminating its agent."""
-
-    def run(self, edit):
-        term = _Terminal.from_id(self.view.id())
-        window = self.view.window()
-        if term is None or window is None or not _is_broker_pty(term.pty):
-            sublime.status_message("Ai terminal: this tab cannot be revived")
-            return
-        _revive_terminal_client(term, window)
-
-    def is_enabled(self):
-        term = _Terminal.from_id(self.view.id())
-        return term is not None and _is_broker_pty(term.pty)
-
-    def is_visible(self):
-        return self.is_enabled()
-
-
 class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
     """Hand this tab's live broker session to a real Windows Terminal window.
 
@@ -7780,9 +7761,10 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
     _BrokerPty itself uses -- not a new agent process, the same running one.
     The broker accepts only one connected client at a time, so this is a
     handoff, not a second view: this tab detaches (same state as a frozen
-    tab) the moment Windows Terminal's relay client connects. 'Revive Frozen
-    Tab' or 'Recover Orphaned Session...' bring the session back into
-    Sublime later; the agent process itself is untouched either way.
+    tab) the moment Windows Terminal's relay client connects.
+    'Recover Session...', run with this same tab focused, brings the
+    session back into Sublime later; the agent process itself is untouched
+    either way.
     """
 
     def run(self, edit):
@@ -7812,8 +7794,8 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
         if not sublime.ok_cancel_dialog(
             "This tab will detach as soon as Windows Terminal connects -- "
             "only one client can hold the session at a time. The agent "
-            "keeps running either way; use 'Revive Frozen Tab' to bring it "
-            "back into Sublime later.",
+            "keeps running either way; use 'Recover Session...' on this "
+            "same tab to bring it back into Sublime later.",
             "Open in Windows Terminal",
         ):
             return
@@ -7908,7 +7890,7 @@ class AiTerminalCloseKeepAliveCommand(sublime_plugin.WindowCommand):
     without the KILL a plain tab close would otherwise send: the agent/shell
     keeps running in the background, same as a hand-off to Windows Terminal,
     just with nothing on screen holding it. Recoverable later via
-    'Recover Orphaned Session...'.
+    'Recover Session...'.
 
     A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
     Tab Context.sublime-menu needs that to reach the right-clicked tab
@@ -7941,16 +7923,33 @@ class AiTerminalCloseKeepAliveCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
-class AiTerminalReattachSessionCommand(sublime_plugin.WindowCommand):
-    """Reconnect a detachable broker already held by this GhostShell process.
+class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
+    """Recover a detachable session -- one command instead of the two this
+    replaces (Revive Frozen Tab / Recover Orphaned Session), which required
+    knowing which applied: whether the old tab was still open (just
+    disconnected) or already gone. That's plumbing, not a decision a user
+    should have to make -- so this makes it itself:
 
-    This is deliberately different from End Session: it closes only the local
-    named-pipe handles and never sends KILL to the broker.  It also provides a
-    manual recovery path when automatic workspace-restore reattachment leaves
-    a live Codex/agent session trapped behind an unusable or hidden tab.
+    If the focused tab is itself a frozen detachable session (still open,
+    just disconnected -- e.g. right after a hand-off elsewhere, or a dropped
+    connection), revives it in place, exactly what Revive Frozen Tab did.
+    Otherwise searches for and offers any orphaned broker not already
+    attached to a usable tab -- exactly what Recover Orphaned Session did
+    alone before. Closes only local named-pipe handles and never sends KILL
+    to the broker either way -- deliberately different from Kill Session /
+    End Session.
     """
 
     def run(self):
+        view = self.window.active_view()
+        term = _Terminal.from_id(view.id()) if view is not None else None
+        if (
+            term is not None
+            and _is_broker_pty(term.pty)
+            and not term.pty.is_alive()
+        ):
+            _revive_terminal_client(term, self.window)
+            return
         # A broken/closed view can remove its terminal from the registry while
         # the standalone broker (and Codex child) remain alive.  Search both
         # the registry and old-generation Terminal objects retained by their

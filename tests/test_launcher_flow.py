@@ -1395,9 +1395,9 @@ def test_native_codex_tab_close_is_recorded_without_graceful_exit_input(clean_st
             ai_terminal._term_registry().pop(view.id(), None)
 
 
-def test_reattach_choices_hide_dead_gc_terms_after_successful_process_scan(monkeypatch):
+def test_recover_session_choices_hide_dead_gc_terms_after_successful_process_scan(monkeypatch):
     window = FakeWindow()
-    command = ai_terminal.AiTerminalReattachSessionCommand(window)
+    command = ai_terminal.AiTerminalRecoverSessionCommand(window)
     dead = types.SimpleNamespace(
         pty=types.SimpleNamespace(pipe_name="dead-pipe"),
         view=FakeView(vid=904),
@@ -1413,11 +1413,20 @@ def test_reattach_choices_hide_dead_gc_terms_after_successful_process_scan(monke
     assert messages == ["Ai terminal: no orphaned sessions found"]
 
 
-def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch):
+def test_recover_session_choices_hide_broker_already_attached_to_valid_tab(monkeypatch):
+    # This is the list-search half's known blind spot (confirmed live
+    # 2026-09-02): it only checks that the tab's *view* is still valid, not
+    # whether the pty underneath it is alive -- a frozen-but-open tab still
+    # counts as "attached" here and the broker never appears in this list.
+    # AiTerminalRecoverSessionCommand.run() compensates for the one case
+    # that matters (the tab you're currently looking at) by trying that
+    # revive path first, before ever reaching _show_choices -- see
+    # test_recover_session_tries_the_focused_frozen_tab_before_reconnecting.
+    # This test documents _show_choices' own behavior stays as-is otherwise.
     attached_view = FakeView(vid=905)
     window = FakeWindow(active_view=attached_view)
     attached_view.window = lambda: window
-    command = ai_terminal.AiTerminalReattachSessionCommand(window)
+    command = ai_terminal.AiTerminalRecoverSessionCommand(window)
     attached = types.SimpleNamespace(
         pty=types.SimpleNamespace(pipe_name="live-pipe"),
         view=attached_view,
@@ -1437,9 +1446,13 @@ def test_reattach_choices_hide_broker_already_attached_to_valid_tab(monkeypatch)
     assert messages == ["Ai terminal: no orphaned sessions found"]
 
 
-def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
+def test_recover_session_tries_the_focused_frozen_tab_before_reconnecting(
     monkeypatch,
 ):
+    # Replaces the old, separate Revive Frozen Tab command: run(), with a
+    # frozen (disconnected but still open) detachable tab focused, revives
+    # that tab in place instead of falling through to the broker search --
+    # whose blind spot (previous test) would otherwise never surface it.
     view = FakeView(vid=907)
     window = FakeWindow(active_view=view)
     view.window = lambda: window
@@ -1448,6 +1461,7 @@ def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
         pipe_name="frozen-pipe",
         _cwd=BETA,
         kill=lambda: detached.append(True),
+        is_alive=lambda: False,
     )
     term = types.SimpleNamespace(view=view, pty=pty, profile_name="Codex")
     with ai_terminal._term_lock():
@@ -1465,17 +1479,70 @@ def test_revive_frozen_tab_reconnects_same_view_without_killing_broker(
         "_reattach_broker_view",
         lambda target, pipe: reattached.append((target, pipe)),
     )
+    discovered = []
+    monkeypatch.setattr(
+        ai_terminal.AiTerminalRecoverSessionCommand,
+        "_discover",
+        lambda self: discovered.append(True),
+    )
     try:
-        command = ai_terminal.AiTerminalReviveFrozenTabCommand(view)
-        assert command.is_enabled()
-        command.run(None)
+        command = ai_terminal.AiTerminalRecoverSessionCommand(window)
+        command.run()
 
+        assert discovered == [], "must not fall through to the broker search"
         assert detached == [True]
         assert ai_terminal._Terminal.from_id(view.id()) is None
         assert view.settings().get(ai_terminal._BROKER_PIPE_SETTING) == "frozen-pipe"
         assert scheduled[0][1] == 500
         scheduled[0][0]()
         assert reattached == [(view, "frozen-pipe")]
+    finally:
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_recover_session_falls_through_to_search_when_focused_tab_is_not_frozen(
+    monkeypatch,
+):
+    # A live (not frozen) focused tab, or no terminal focused at all, must
+    # fall through to the broker search rather than trying to "revive" a
+    # perfectly healthy session.
+    view = FakeView(vid=908)
+    window = FakeWindow(active_view=view)
+    pty = types.SimpleNamespace(pipe_name="alive-pipe", is_alive=lambda: True)
+    term = types.SimpleNamespace(view=view, pty=pty, profile_name="Codex")
+    with ai_terminal._term_lock():
+        ai_terminal._term_registry()[view.id()] = term
+    monkeypatch.setattr(ai_terminal, "_is_broker_pty", lambda candidate: candidate is pty)
+    discovered = []
+    monkeypatch.setattr(
+        ai_terminal.AiTerminalRecoverSessionCommand,
+        "_discover",
+        lambda self: discovered.append(True),
+    )
+    revived = []
+    monkeypatch.setattr(
+        ai_terminal, "_revive_terminal_client", lambda t, w: revived.append(t)
+    )
+
+    class _SyncThread:
+        """threading.Thread stand-in that runs its target synchronously in
+        start(), so this test doesn't race the real background thread."""
+
+        def __init__(self, target=None, daemon=None, args=(), kwargs=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(ai_terminal.threading, "Thread", _SyncThread)
+    try:
+        command = ai_terminal.AiTerminalRecoverSessionCommand(window)
+        command.run()
+        assert revived == []
+        assert discovered == [True]
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().pop(view.id(), None)

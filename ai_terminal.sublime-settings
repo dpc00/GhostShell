@@ -148,9 +148,9 @@
     // title change, no reload needed.
     "osc_title_updates_tab": false,
     // Every terminal survives independently of Sublime (see
-    // docs/DETACHABLE_SESSIONS.md) and is reachable through Recover Orphaned
-    // Session, Revive Frozen Tab, and Open in Windows Terminal -- not just
-    // profiles that opt in by hand. A profile can set "detachable": false to
+    // docs/DETACHABLE_SESSIONS.md) and is reachable through Recover Session
+    // and Open in Windows Terminal -- not just profiles that opt in by hand.
+    // A profile can set "detachable": false to
     // opt a specific one out (e.g. a throwaway shell not worth a background
     // broker process for). See docs/DETACHABLE_SESSIONS.md.
     "detachable": true,
