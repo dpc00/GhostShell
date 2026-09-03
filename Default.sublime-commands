@@ -5,7 +5,6 @@
 	{"caption": "Ai Terminal: Sync Detected Agent Profiles", "command": "ai_terminal_sync_agent_profiles"},
 	{"caption": "Ai Terminal: Open Here", "command": "ai_terminal_open_here"},
 	{"caption": "Ai Terminal: Open in Editor", "command": "ai_terminal_open_in_editor"},
-	{"caption": "Ai Terminal: Open Profile...", "command": "ai_terminal_select_profile"},
 	{"caption": "Ai Terminal: Set Working Directory", "command": "ai_terminal_set_working_directory"},
 	{"caption": "Ai Terminal: Clear Working Directory", "command": "ai_terminal_clear_working_directory"},
 	{"caption": "Ai Terminal: Recover Orphaned Session...", "command": "ai_terminal_reattach_session"},

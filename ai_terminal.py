@@ -6358,37 +6358,18 @@ def _detect_catalog_profiles():
     return detected
 
 
-def build_agent_menu_json(profile_names):
-    """The 'All Agents' submenu *children* for the given profile names --
-    pure, no I/O, so it's directly unit-testable.
-
-    Used by tools/regen_agent_menu.py to (re)generate the checked-in
-    "all-agents" node in Main.sublime-menu -- see that script's docstring
-    for why this list is static/committed rather than written at runtime.
-    Not called by the plugin itself.
-    """
-    ordered = sorted(set(profile_names), key=lambda n: n.lower())
-    return [
-        {
-            "caption": name,
-            "command": "ai_terminal_open_here",
-            "args": {"profile": name},
-        }
-        for name in ordered
-    ]
-
-
 def _resync_catalog_profiles():
     """Persist a fresh _detect_catalog_profiles() into the generated
     settings file. Returns the detected count. Side-effecting; callers that
     just want the dict without writing should call _detect_catalog_profiles
     directly.
 
-    Only settings are touched here -- the "All Agents" menu (Main.sublime-menu)
-    is static/checked-in (see tools/regen_agent_menu.py), not regenerated per
-    machine. A profile absent from this machine's detection simply greys out
-    via AiTerminalOpenHereCommand.is_enabled, so an undetected catalog entry
-    still shows correctly, just disabled.
+    This is what AiTerminalLauncherCommand's quick panel and
+    AiTerminalOpenHereCommand's per-profile launches (`{"profile": name}`)
+    read live-detected profiles from -- there is no per-machine-generated
+    menu; the quick panel greys out (AiTerminalOpenHereCommand.is_enabled)
+    a catalog entry this machine doesn't have installed rather than hiding
+    it.
     """
     detected = _detect_catalog_profiles()
     gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
@@ -6673,48 +6654,6 @@ class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
         view.set_name("%s — %s" % (sess["agent"], sess["title"]))
         view.run_command("append", {"characters": text})
         view.set_read_only(True)
-
-
-class AiTerminalSelectProfileCommand(sublime_plugin.WindowCommand):
-    """Pick a profile and open it in the resolved cwd.
-
-    Command palette: "Ai: Open Terminal Profile...". Kept as the one-step form
-    (cwd resolved from context) for users who never want the directory step;
-    the two-step flow is ai_terminal_launcher.
-    """
-
-    def run(self, paths=None):
-        s = sublime.load_settings(_SETTINGS_NAME)
-        profile_names = _profile_names(s)
-
-        if not profile_names:
-            # Fall back to launching default terminal
-            self.window.run_command("ai_terminal_open_here", {"paths": paths})
-            return
-
-        context_dir = _resolve_here_path(self.window, paths or [])
-        ordered, items = _profile_items(profile_names, s, context_dir=context_dir)
-
-        def on_done(idx):
-            if idx == -1:
-                return
-            name = ordered[idx]
-            if not _profile_is_available(name, s):
-                sublime.status_message(
-                    "Ai terminal: "
-                    + name
-                    + " is unavailable ("
-                    + _profile_availability_label(name, s).lower()
-                    + ")"
-                )
-                return
-            self.window.run_command(
-                "ai_terminal_open_here", {"profile": name, "paths": paths}
-            )
-
-        self.window.show_quick_panel(
-            items, on_done, placeholder="Open terminal profile", selected_index=0
-        )
 
 
 class AiTerminalSendStringCommand(sublime_plugin.TextCommand):
