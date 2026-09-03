@@ -7966,6 +7966,42 @@ class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
+def _sublime_view_info_lines(view):
+    """View/sheet/window identifiers for Session Info's Details footer --
+    Sublime-internal plumbing (same category as pipe name/broker PID), not
+    session state, so kept separate and always best-effort: view.sheet()
+    isn't guaranteed present for every view kind, and this must never break
+    the rest of the report over one field Sublime didn't provide.
+    """
+    lines = []
+    try:
+        lines.append("View ID: %s" % view.id())
+    except Exception:
+        pass
+    try:
+        lines.append("Buffer ID: %s" % view.buffer_id())
+    except Exception:
+        pass
+    try:
+        sheet = view.sheet()
+        if sheet is not None:
+            lines.append("Sheet ID: %s" % sheet.id())
+    except Exception:
+        pass
+    window = view.window()
+    if window is not None:
+        try:
+            lines.append("Window ID: %s" % window.id())
+        except Exception:
+            pass
+        try:
+            group, index = window.get_view_index(view)
+            lines.append("Group/Index: %d/%d" % (group, index))
+        except Exception:
+            pass
+    return lines
+
+
 def _human_ago(seconds):
     """"3 minutes ago"-style relative time. `seconds` is elapsed, not a
     timestamp. Pure -- no I/O, so directly unit-testable."""
@@ -8054,6 +8090,7 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
                 )
         else:
             lines.append("(broker registry record not found -- may have exited)")
+        lines.extend(_sublime_view_info_lines(view))
 
         info_view = self.window.new_file()
         info_view.set_scratch(True)

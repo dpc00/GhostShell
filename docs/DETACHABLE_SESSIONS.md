@@ -150,7 +150,11 @@ plus a read-only fourth:
   deciding what to do with a tab. Child command, broker PID, and start time
   are read from the on-disk registry record via
   `_read_broker_registry_record()`, so they're absent if the broker already
-  exited and removed its own record.
+  exited and removed its own record. The Details footer also carries
+  Sublime's own view/sheet/window identifiers (`_sublime_view_info_lines()`
+  -- requested directly, best-effort per field since e.g. `view.sheet()`
+  isn't guaranteed for every view kind): View ID, Buffer ID, Sheet ID,
+  Window ID, and Group/Index.
 
 Kill Session, Close Tab, and End Session all share the same
 `_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just
