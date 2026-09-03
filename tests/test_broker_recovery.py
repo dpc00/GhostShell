@@ -257,3 +257,34 @@ def test_plugin_load_reapplies_terminal_view_styling_before_reattach():
     style = loaded_source.rindex("_apply_terminal_view_settings(view)")
     reattach = loaded_source.rindex("_maybe_reattach_broker(view)")
     assert style < reattach
+
+
+def test_open_in_windows_terminal_does_not_auto_close_or_kill_the_handoff_tab():
+    # kill() on a deliberate hand-off closes this tab's own read handle via
+    # CancelIoEx -- indistinguishable, to the reader thread, from the child
+    # actually dying. Without _deliberate_detach, that self-inflicted "death"
+    # both auto-closes the tab (~1.5s later, close_tab_on_exit) AND that
+    # close sends a real KILL to the still-live broker WT is now attached
+    # to -- reproduced live: the tab really did vanish, not just look frozen.
+    # This checks the three places that must agree on the flag.
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+
+    cmd_start = source.index("class AiTerminalOpenInWindowsTerminalCommand")
+    cmd_end = source.index("class AiTerminalReattachSessionCommand", cmd_start)
+    cmd_source = source[cmd_start:cmd_end]
+    set_flag = cmd_source.index("term._deliberate_detach = True")
+    kill_call = cmd_source.index("pty.kill()")
+    assert set_flag < kill_call, "flag must be set before kill() races the reader thread"
+
+    read_loop_start = source.index("def _read_loop(self):")
+    read_loop_end = source.index("def _maybe_close_dead_view(self):", read_loop_start)
+    read_loop_source = source[read_loop_start:read_loop_end]
+    assert "self._deliberate_detach" in read_loop_source
+    assert "error is None and not self._deliberate_detach" in read_loop_source
+
+    on_close_start = source.index("def on_close(self):")
+    on_close_end = source.index(
+        "# ─── pre-empt ST's internal view.show", on_close_start
+    )
+    on_close_source = source[on_close_start:on_close_end]
+    assert "not term._deliberate_detach" in on_close_source
