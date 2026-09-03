@@ -2,7 +2,7 @@
     "folders":
     [
         {
-            "path": "."
+            "path": ".",
         }
     ],
     "debugger_configurations":
@@ -11,6 +11,7 @@
             "name": "GhostShell (isolated Sublime)",
             "type": "sublime",
             "request": "launch",
+            "python": "C:\\Users\\donal\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
             "entry": "GhostShell.ai_terminal",
             "args":
             [
@@ -21,7 +22,7 @@
             [
                 "${project_path}",
                 "${packages}/User/Preferences.sublime-settings"
-            ]
+            ],
         }
-    ]
+    ],
 }

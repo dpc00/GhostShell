@@ -1,0 +1,625 @@
+{
+	"auto_complete":
+	{
+		"selected_items":
+		[
+		]
+	},
+	"buffers":
+	[
+	],
+	"build_system": "",
+	"build_system_choices":
+	[
+	],
+	"build_varint": "",
+	"command_palette":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+			[
+				"debugger",
+				"Debugger: Quit"
+			],
+			[
+				"debugger sto",
+				"Debugger: Stop"
+			],
+			[
+				"",
+				"Ai Terminal: Open Profile..."
+			],
+			[
+				"revive",
+				"Ai Terminal: Revive Frozen Tab"
+			],
+			[
+				"recover",
+				"Ai Terminal: Recover Orphaned Session..."
+			],
+			[
+				"reat",
+				"Ai Terminal: Reattach Live Session..."
+			],
+			[
+				"json",
+				"LSP-json: Sort Document"
+			],
+			[
+				"debuggerq",
+				"Debugger: Quit"
+			],
+			[
+				"reaatt",
+				"Ai Terminal: Reattach Live Session..."
+			],
+			[
+				"ai",
+				"Ai Terminal: Open Profile..."
+			],
+			[
+				"ssh",
+				"SSH-Panel: Auto Connect Phone"
+			],
+			[
+				"install",
+				"Package Control: Install Package"
+			],
+			[
+				"package remove",
+				"Package Control: Remove Package"
+			],
+			[
+				"claude",
+				"Preferences: Claude Code IDE Settings"
+			],
+			[
+				"in",
+				"Package Control: Install Package"
+			],
+			[
+				"View",
+				"View: Toggle Line Numbers"
+			],
+			[
+				"packaglist",
+				"Package Control: Install Package"
+			],
+			[
+				"screen",
+				"STLogs: Toggle Periodic Screenshots"
+			],
+			[
+				"ccstatu",
+				"CC Statusline Editor"
+			],
+			[
+				"pack",
+				"Package Control: List Packages"
+			],
+			[
+				"sublime",
+				"Sublime Config"
+			],
+			[
+				"mark",
+				"Markdown Preview: Preview in Browser"
+			],
+			[
+				"terminus",
+				"Terminus: List Shells"
+			],
+			[
+				"prett",
+				"Pretty JSON: Format JSON"
+			],
+			[
+				"mcp commander",
+				"MCP Commander: Server Status"
+			],
+			[
+				"mcp:",
+				"MCP Commander: Server Status"
+			],
+			[
+				"setting",
+				"Sublime Settings Editor"
+			],
+			[
+				"config",
+				"Sublime Config"
+			],
+			[
+				"packag install",
+				"Package Control: Install Package"
+			],
+			[
+				"pan",
+				"Panic: Quote & Reply"
+			],
+			[
+				"panic",
+				"Panic: Quote & Reply"
+			],
+			[
+				"open",
+				"Ai: Open Terminal Profile..."
+			],
+			[
+				"pretty",
+				"Pretty JSON: Format JSON"
+			],
+			[
+				"toggl",
+				"View: Toggle Menu"
+			],
+			[
+				"toggle menu",
+				"View: Toggle Menu"
+			],
+			[
+				"View: ",
+				"View: Toggle Status Bar"
+			],
+			[
+				"toggle men",
+				"View: Toggle Menu"
+			],
+			[
+				"view:",
+				"Markdown Preview: Preview in Browser"
+			],
+			[
+				"packag",
+				"Package Control: List Packages"
+			],
+			[
+				"Package Control",
+				"Package Control: Satisfy Libraries"
+			],
+			[
+				"SSH-",
+				"SSH-Panel: Connect Server"
+			],
+			[
+				"Package Control: ",
+				"Package Control: Install Package"
+			],
+			[
+				"packa",
+				"Package Control: Remove Package"
+			],
+			[
+				"sub",
+				"Sublime Settings Editor"
+			],
+			[
+				"subl",
+				"Sublime Settings Editor"
+			],
+			[
+				"subli",
+				"Sublime Settings Editor"
+			],
+			[
+				"pret",
+				"Pretty JSON: Format JSON"
+			],
+			[
+				"package",
+				"Package Control: Remove Package"
+			],
+			[
+				"vintageous",
+				"Build With: Vintageous - Vintageous - Test (All)"
+			],
+			[
+				"m",
+				"MCP Commander: Server Status"
+			],
+			[
+				"pani",
+				"Panic: Quote & Reply"
+			],
+			[
+				"js",
+				"Pretty JSON: Format JSON"
+			],
+			[
+				"CC Status",
+				"MCP Commander: Server Status"
+			],
+			[
+				"cc",
+				"CC Statusline Editor"
+			],
+			[
+				"Subl",
+				"Sublime Settings"
+			],
+			[
+				"Subli",
+				"Sublime Keybindings"
+			],
+			[
+				"ccstatus",
+				"MCP Commander: Server Status"
+			],
+			[
+				"MCP:",
+				"MCP Commander: Server Status"
+			],
+			[
+				"package control remove package",
+				"Package Control: Remove Package"
+			],
+			[
+				"SSH",
+				"SSH-Panel: Edit Settings"
+			],
+			[
+				"SSH Panel",
+				"SSH-Panel: Connect Server"
+			],
+			[
+				"MCP",
+				"MCP Commander: Server Status"
+			],
+			[
+				"MCP Commander",
+				"MCP Commander: Server Status"
+			],
+			[
+				"llm",
+				"LLM: Show Status"
+			],
+			[
+				"pa",
+				"Package Control: List Packages"
+			],
+			[
+				"lsp",
+				"LSP-pyright: Create Pyright Configuration File"
+			],
+			[
+				"pyb",
+				"PyBackup: Flask App"
+			],
+			[
+				"py",
+				"PyBackup: Flask App"
+			],
+			[
+				"instal",
+				"Package Control: Install Package"
+			],
+			[
+				"ter",
+				"Terminus: List Shells"
+			],
+			[
+				"termin",
+				"Terminus: List Shells"
+			]
+		],
+		"width": 0.0
+	},
+	"console":
+	{
+		"height": 362.0,
+		"history":
+		[
+			"view.settings().get('ai_terminal_view')",
+			"print(\"hello\")",
+			"22"
+		]
+	},
+	"distraction_free":
+	{
+		"menu_visible": true,
+		"show_minimap": false,
+		"show_open_files": false,
+		"show_tabs": false,
+		"side_bar_visible": false,
+		"status_bar_visible": false
+	},
+	"expanded_folders":
+	[
+		"/C/Users/donal/projects/GhostShell"
+	],
+	"file_history":
+	[
+		"/C/Users/donal/projects/AiSDK/README.md",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-09-01_220519_971603_reattach.log",
+		"/C/Users/donal/.pi/agent/auth.json",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-09-01_005209_441022.log",
+		"/C/Users/donal/projects/GhostShell/CHAT_SESSION.md",
+		"/C/Users/donal/projects/GhostShell/Default.sublime-keymap",
+		"/C/Users/donal/projects/GhostShell/terminal/agent_catalog.py",
+		"/C/Users/donal/projects/GhostShell/terminal/GHOSTTY_VT_PROVENANCE.md",
+		"/C/Users/donal/.codex/history.jsonl",
+		"/C/Users/donal/.codex/config.toml",
+		"/C/Users/donal/projects/secrets/api_keys.txt",
+		"/C/Users/donal/projects/GhostShell/ai_terminal.sublime-settings",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-29_011859_617480_reattach.log",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-28_231458.log",
+		"/C/Users/donal/projects/GhostShell/terminal/session_text_log.py",
+		"/C/Users/donal/projects/finance/finance/ns_parse.log",
+		"/C/Users/donal/projects/finance/finance/tdump/tdump.py",
+		"/C/Users/donal/projects/finance/finance/app.py",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-27_213309.log",
+		"/C/Users/donal/projects/SText/ai/ai_tab_manager.py",
+		"/C/Users/donal/projects/SText/ai/__init__.py",
+		"/C/Users/donal/projects/GhostShell/ai/TODO.md",
+		"/C/Users/donal/AppData/Local/Microsoft/Windows/INetCache/IE/13BJQD1X/notes[1].txt",
+		"/C/Users/donal/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering/ai_2026-08-23_172113.cast",
+		"/C/Users/donal/projects/sublime-mcp/packages/st-plugin/acp_client.py",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-21_133340.log",
+		"/C/Users/donal/projects/sublime-mcp/packages/st-plugin/sublime_mcp.py",
+		"/C/Users/donal/AppData/Local/Temp/claude/C--Users-donal-projects-sublime-mcp/ce03c098-1ab1-4f38-9bcd-41e0da3daac1/scratchpad/difftest/sample.txt",
+		"/C/Users/donal/AppData/Roaming/Sublime Text/Packages/User/PluginLoader.py",
+		"/C/Users/donal/projects/STLogs/PluginLoader.py",
+		"/C/Users/donal/.claude/settings.json",
+		"/C/Users/donal/data/logs/2026-08-20.md",
+		"/C/Users/donal/data/logs/jsonl_tail_transcripts/2026-08-20.md",
+		"/C/Users/donal/projects/sublime-mcp/packages/debugger-mcp/debugger_mcp.py",
+		"/C/Users/donal/projects/sublime-mcp/packages/lsp-mcp/lsp_mcp.py",
+		"/C/Users/donal/AppData/Roaming/Sublime Text/Packages/sublime-mcp/sublime-mcp.sublime-settings",
+		"/C/Users/donal/projects/sublime-mcp/requirements.txt",
+		"/C/Users/donal/projects/sublime-mcp/packages/python-proxy/pyproject.toml",
+		"/C/Users/donal/projects/sublime-mcp/packages/python-proxy/mcp_server.py",
+		"/C/Users/donal/projects/GhostShell/.gitignore",
+		"/C/Users/donal/projects/sublime-mcp/.gitignore",
+		"/C/Users/donal/projects/pybackup/config.py",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-108/sublime_mcp_test0/scratch.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-108/sublime_mcp_test0/nonexistent_pytest.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-107/sublime_mcp_test0/scratch.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-107/sublime_mcp_test0/nonexistent_pytest.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-106/sublime_mcp_test0/scratch.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-106/sublime_mcp_test0/nonexistent_pytest.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-105/sublime_mcp_test0/scratch.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-105/sublime_mcp_test0/nonexistent_pytest.txt",
+		"/C/Users/donal/tools/sublime-claude/constants.py",
+		"/D/.bat/plaunch.bat",
+		"/C/Users/donal/projects/GhostShell/ai/ai_terminal.py",
+		"/C/Users/donal/projects/pybackup/platform_config.py",
+		"/C/Users/donal/projects/pybackup/pblog.py",
+		"/C/Users/donal/projects/pybackup/ldsv.py",
+		"/D/.bat/pybackup.bat",
+		"/D/Programs/Python/python312._pth",
+		"/C/Users/donal/projects/sublime-mcp/docs/superpowers/specs/2026-08-18-agent-plugin-design.md",
+		"/C/Users/donal/projects/sublime-mcp/docs/superpowers/specs/2026-08-18-agent-plugin-reply.md",
+		"/C/Users/donal/.dsh/settings.yaml",
+		"/C/Users/donal/.ollama/launch/dsh/settings.yaml",
+		"/C/Users/donal/projects/sublime-mcp/packages/node-proxy/index.js",
+		"/C/Users/donal/projects/sublime-mcp/messages.json",
+		"/C/Users/donal/projects/sublime-mcp/packages/node-proxy/package.json",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-17_223028.log",
+		"/C/Users/donal/data/logs/jsonl_tail_transcripts/2026-08-17.md",
+		"/C/Users/donal/data/logs/2026-08-17.md",
+		"/C/Users/donal/projects/sublime-mcp/AGENT_CHAT.md",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-71/sublime_mcp_test0/scratch.txt",
+		"/C/Users/donal/AppData/Local/Temp/pytest-of-donal/pytest-71/sublime_mcp_test0/nonexistent_pytest.txt",
+		"/C/Users/donal/projects/sublime-mcp/docs/session-handoff.md",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-16_185658.log",
+		"/C/Users/donal/data/logs/2026-08-16.md",
+		"/C/Users/donal/data/logs/jsonl_tail_transcripts/2026-08-16.md",
+		"/C/Users/donal/.qwen/projects/c--users-donal-projects-sublime-mcp/chats/d2ee5104-69d4-4b67-a562-5ddf9035d1b3.jsonl",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-15_215050.log",
+		"/C/Users/donal/.gemini/config/mcp_config.json",
+		"/C/Users/donal/AppData/Roaming/Sublime Text/Packages/debugger-mcp/debugger_mcp.py",
+		"/C/Users/donal/projects/sublime-mcp/tests/test_debugger_state_reporting.py",
+		"/C/Users/donal/projects/sublime-mcp/tests/claude_ide_disposable.py",
+		"/C/Users/donal/projects/sublime-mcp/analysis/part2_qwen_approval_target.txt",
+		"/C/Users/donal/projects/sublime-mcp/analysis/part2_ide_review_target.txt",
+		"/C/Users/donal/projects/sublime-mcp/analysis/part2_qwen_native_edit_target.txt",
+		"/C/Users/donal/projects/STLogs/STLogs.sublime-settings",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-14_221425.log",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-14_211841.log",
+		"/C/Users/donal/.grok/config.toml",
+		"/C/Users/donal/projects/ccstatusline-editor/README.md",
+		"/C/Users/donal/projects/pybackup/ui/gotui/update.go",
+		"/C/Users/donal/projects/SText/ai/view_toggles.py",
+		"/C/Users/donal/projects/STConfig/settings_editor.py",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-13_054901.log",
+		"/C/Users/donal/projects/STConfig/.git/config",
+		"/C/Users/donal/data/logs/2026-08-12.md",
+		"/C/Users/donal/projects/GhostShell/temp_note.md",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-10_131544.log",
+		"/C/Users/donal/data/logs/2026-08-10.md",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-10_131518.log",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-10_015751.log",
+		"/C/Users/donal/data/logs/ai_terminal_session_text_logs/ai_2026-08-10_011726.log",
+		"/C/Users/donal/projects/secrets/client_secret_782908338549-5s9uol8ql4qgg3fr6mmdtkb8l5r8lvdi.apps.googleusercontent.com.json",
+		"/C/Users/donal/projects/GhostShell/COMMANDS.md",
+		"/C/Users/donal/projects/GhostShell/ai/terminal/ghostty_engine.py",
+		"/C/Users/donal/projects/GhostShell/README.md",
+		"/C/Users/donal/data/list-coding-agents/.git/config",
+		"/C/Users/donal/projects/SText/ai/ai_terminal.py",
+		"/C/Users/donal/projects/SText/Preferences.sublime-settings",
+		"/C/Users/donal/projects/SText/ai/ai_hub.py",
+		"/C/Users/donal/AppData/Roaming/Sublime Text/Packages/User/ai_terminal.sublime-settings",
+		"/C/Users/donal/projects/SText/ai_terminal.sublime-settings",
+		"/C/Users/donal/projects/SText/AGENTS.md",
+		"/C/Users/donal/.ollama/config.json",
+		"/C/Users/donal/.ollama/cache/model-recommendations.json",
+		"/C/Users/donal/projects/AGENTS.md",
+		"/C/Users/donal/projects/blog7/agents.md",
+		"/C/Users/donal/data/logs/2026-07-21.md",
+		"/C/Users/donal/projects/sublime-mcp/README.md",
+		"/C/Users/donal/projects/sublime-mcp/docs/AGENT_GUIDE.md",
+		"/C/Users/donal/projects/sublime-mcp/docs/agents.md",
+		"/C/Users/donal/projects/sublime-mcp/ai_charges.json",
+		"/C/Users/donal/.kimi-code/mcp.json",
+		"/C/Users/donal/.kimi-code/mcp.toml",
+		"/C/Users/donal/.kimi-code/config.toml",
+		"/C/Users/donal/projects/sublime-mcp/MCP Speedup Response.md",
+		"/C/Users/donal/AppData/Local/Temp/opencode/scratch_test_batch1.txt",
+		"/C/Users/donal/projects/SText/ai/ai_sdk.py",
+		"/C/Users/donal/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log"
+	],
+	"find":
+	{
+		"height": 27.0
+	},
+	"find_in_files":
+	{
+		"height": 169.0,
+		"where_history":
+		[
+		]
+	},
+	"find_state":
+	{
+		"case_sensitive": false,
+		"find_history":
+		[
+		],
+		"highlight": true,
+		"in_selection": false,
+		"preserve_case": false,
+		"regex": true,
+		"replace_history":
+		[
+		],
+		"reverse": false,
+		"scrollbar_highlights": true,
+		"show_context": false,
+		"use_buffer2": false,
+		"use_gitignore": true,
+		"whole_word": false,
+		"wrap": false
+	},
+	"groups":
+	[
+		{
+			"sheets":
+			[
+			]
+		}
+	],
+	"incremental_find":
+	{
+		"height": 27.0
+	},
+	"input":
+	{
+		"height": 59.0
+	},
+	"layout":
+	{
+		"cells":
+		[
+			[
+				0,
+				0,
+				1,
+				1
+			]
+		],
+		"cols":
+		[
+			0.0,
+			1.0
+		],
+		"rows":
+		[
+			0.0,
+			1.0
+		]
+	},
+	"menu_visible": true,
+	"output.Debugger":
+	{
+		"height": 262.0,
+		"history":
+		[
+		]
+	},
+	"output.Debugger Console":
+	{
+		"height": 262.0,
+		"history":
+		[
+		]
+	},
+	"output.LSP Log Panel":
+	{
+		"height": 0.0,
+		"history":
+		[
+		]
+	},
+	"output.diagnostics":
+	{
+		"height": 0.0,
+		"history":
+		[
+		]
+	},
+	"output.find_results":
+	{
+		"height": 281.0,
+		"history":
+		[
+		]
+	},
+	"pinned_build_system": "",
+	"project": "GhostShell-debug.sublime-project",
+	"replace":
+	{
+		"height": 50.0
+	},
+	"save_all_on_build": true,
+	"select_file":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+			[
+				"agents.md",
+				"projects\\blog7\\agents.md"
+			],
+			[
+				"agents",
+				"projects\\AGENTS.md"
+			]
+		],
+		"width": 0.0
+	},
+	"select_project":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"select_symbol":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"selected_group": 0,
+	"settings":
+	{
+		"lsp_show_inlay_hints": false
+	},
+	"show_minimap": true,
+	"show_open_files": true,
+	"show_tabs": true,
+	"side_bar_visible": true,
+	"side_bar_width": 318.0,
+	"status_bar_visible": true,
+	"template_settings":
+	{
+	}
+}
