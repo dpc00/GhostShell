@@ -2954,16 +2954,23 @@ class _Terminal:
         # Parser failures are reported once per terminal; see _on_data.
         self._feed_failed = False
         self._reattach_bootstrap = False
-        # Set right before a deliberate hand-off (e.g. Open in Windows
-        # Terminal) calls pty.kill() on this tab's own client. That kill()
-        # closes the same handles a real child death would, so the reader
-        # thread cannot otherwise tell "we did this on purpose" apart from
-        # "the process actually exited" -- this flag is what tells it.
-        # Consumed by _read_loop (skip the exited-process auto-close) and by
-        # AiTerminalViewListener.on_close (skip explicit_kill: nothing local
-        # is ending, the session already lives on in whatever it was handed
-        # to).
-        self._deliberate_detach = False
+        # None normally. Set to a short reason string right before code in
+        # this file deliberately ends this tab's connection on purpose --
+        # either "handoff" (Open in Windows Terminal: pty.kill() detaches,
+        # the session lives on elsewhere) or "killed" (Kill Session:
+        # pty.explicit_kill(), the session really does end, on request, not
+        # as a surprise crash). Either way the handles this closes are
+        # indistinguishable, to the reader thread, from the child actually
+        # dying unexpectedly -- this is what tells it "we meant this," and
+        # which of the two messages to show. Consumed by _read_loop (skip
+        # the exited-process auto-close reasoning either way -- the
+        # commands that set this decide for themselves whether the tab
+        # stays open or closes, not that heuristic) and by
+        # AiTerminalViewListener.on_close (skip explicit_kill: for a
+        # hand-off nothing local is ending; for an already-killed session a
+        # second KILL would just be a harmless no-op against an
+        # already-dead broker, but there is no reason to send it).
+        self._expected_termination_reason = None
         # Geometry watcher for standard terminal resize behavior.
         self._watcher = _LayoutWatcher(self)
 
@@ -3180,18 +3187,26 @@ class _Terminal:
             self._close_text_log()
             # A reader that died must not be reported as an ordinary exit, and
             # the tab must stay open so the reason remains readable. A
-            # deliberate detach (self._deliberate_detach) makes read() return
-            # exactly the same way a real child death does -- CancelIoEx on
-            # our own handles -- so it needs its own message and must not be
-            # treated as either case below.
-            if self._deliberate_detach:
+            # deliberate termination (self._expected_termination_reason) makes
+            # read() return exactly the same way a real child death does --
+            # CancelIoEx on our own handles -- so it needs its own message and
+            # must not be treated as either case below.
+            reason = self._expected_termination_reason
+            if reason == "handoff":
                 notice = "\n[detached -- session handed off, still running]\n"
+            elif reason == "killed":
+                notice = "\n[session killed -- transcript kept, tab not closed]\n"
+            elif reason == "closed":
+                # Rarely actually seen -- the view is usually already gone by
+                # the time this async finally block runs -- kept for the
+                # unusual ordering where it isn't yet.
+                notice = "\n[closed -- session kept alive, still running]\n"
             elif error is None:
                 notice = "\n[process exited]\n"
             else:
                 notice = "\n[terminal read failed: %s]\n" % error
             sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
-            if error is None and not self._deliberate_detach:
+            if error is None and reason is None:
                 # _close_tab_on_exit() reads Settings (via _all_profiles), which
                 # is main-thread-only in the Sublime API -- this finally block
                 # still runs on the PTY reader thread, so the check itself must
@@ -4787,14 +4802,17 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             if (
                 _is_broker_pty(term.pty)
                 and (user_closing or not window_closing)
-                and not term._deliberate_detach
+                and term._expected_termination_reason is None
             ):
                 # A deliberate single-tab close ends the session for real.
                 # Window closes must not: restored tabs reconnect later.
                 # Neither must a tab already handed off elsewhere (Open in
                 # Windows Terminal) -- nothing local is ending, the session
                 # already lives on in whatever it was handed to; killing it
-                # here would end that live session out from under it.
+                # here would end that live session out from under it. Nor an
+                # already-Kill-Session'd tab -- explicit_kill() again here
+                # would just be a harmless no-op against an already-dead
+                # broker, but there's no reason to send it.
                 try:
                     term.pty.explicit_kill()
                 except Exception as e:
@@ -7783,12 +7801,91 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
 
         # Must be set before kill(): kill() closes this tab's read handle
         # via CancelIoEx, which makes the reader thread's read() return
-        # exactly the way a real child death does -- this flag is the only
-        # thing that tells _read_loop and on_close this wasn't one.
-        term._deliberate_detach = True
+        # exactly the way a real child death does -- this is the only thing
+        # that tells _read_loop and on_close this wasn't one.
+        term._expected_termination_reason = "handoff"
         pty.kill()
         sublime.status_message(
             f"Ai terminal: handed off {pipe_name} to Windows Terminal"
+        )
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
+class AiTerminalKillSessionCommand(sublime_plugin.TextCommand):
+    """End this tab's agent/shell for real, right now -- but keep the tab
+    open. Deliberately not the same as a plain tab close (which kills AND
+    closes): sometimes the process is done but the transcript in the tab
+    is still wanted -- to read, copy, or Save As -- before the tab itself
+    goes away. The tab is left read-only-looking (nothing more will ever
+    be written to it) but not literally closed; close it yourself whenever.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no session to kill")
+            return
+        pty = term.pty
+        # Set before explicit_kill() blocks (below) so a fast on_close --
+        # this command doesn't close the view, but the user might -- won't
+        # redundantly try to kill an already-dying/dead broker again.
+        term._expected_termination_reason = "killed"
+
+        def _do_kill():
+            try:
+                pty.explicit_kill()
+            except Exception as e:
+                print(f"[ai_terminal] explicit_kill (Kill Session) failed: {e}")
+            sublime.set_timeout(
+                lambda: sublime.status_message(
+                    "Ai terminal: session killed, tab kept open"
+                ),
+                0,
+            )
+
+        # explicit_kill() reconnects over a named pipe with up to ~1s of
+        # WaitNamedPipeW/connect retries -- run off the main thread so a
+        # slow/stale broker can't freeze Sublime's UI for that long.
+        threading.Thread(target=_do_kill, daemon=True).start()
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
+class AiTerminalCloseKeepAliveCommand(sublime_plugin.TextCommand):
+    """Close this tab without ending the session -- the opposite of Kill
+    Session. Same detach _BrokerPty.kill() does on any other close, just
+    without the KILL a plain tab close would otherwise send: the agent/shell
+    keeps running in the background, same as a hand-off to Windows Terminal,
+    just with nothing on screen holding it. Recoverable later via
+    'Recover Orphaned Session...'.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None or not _is_broker_pty(term.pty):
+            sublime.status_message("Ai terminal: this tab has no detachable session")
+            return
+        pty = term.pty
+        pipe_name = pty.pipe_name
+        # Must be set before kill()/close(): on_close (fired by close()
+        # below) must see this and not send a real KILL -- see
+        # _expected_termination_reason's definition on _Terminal.
+        term._expected_termination_reason = "closed"
+        pty.kill()
+        self.view.close()
+        sublime.status_message(
+            f"Ai terminal: closed -- {pipe_name} still running in the background"
         )
 
     def is_enabled(self):
