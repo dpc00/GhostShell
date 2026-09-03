@@ -324,7 +324,7 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
     assert ".close()" not in kill_source
 
     close_start = kill_end
-    close_end = source.index("class AiTerminalRecoverSessionCommand", close_start)
+    close_end = source.index("class AiTerminalEndSessionCommand", close_start)
     close_source = source[close_start:close_end]
     assert 'term._expected_termination_reason = "closed"' in close_source
     set_flag = close_source.index('term._expected_termination_reason = "closed"')
@@ -356,7 +356,17 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
     )
-    by_command = {item.get("command"): item for item in tab_menu if item.get("command")}
+
+    def _flatten(items):
+        for item in items:
+            yield item
+            yield from _flatten(item.get("children") or [])
+
+    by_command = {
+        item.get("command"): item
+        for item in _flatten(tab_menu)
+        if item.get("command")
+    }
     assert "ai_terminal_kill_session" in by_command
     assert "ai_terminal_close_keep_alive" in by_command
     assert "ai_terminal_open_in_editor" in by_command
@@ -369,6 +379,69 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
         # right-clicked tab's real coordinates -- the command falls back to
         # the active view every time, exactly the bug this fixes.
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_end_session_kills_and_closes_session_info_is_read_only():
+    # End Session is the third point of the kill x close matrix (the fourth,
+    # neither, needs no command -- that's Session Info's slot instead, see
+    # below). It should kill for real (like Kill Session) AND close the tab
+    # (like Close Tab), in that order, off the main thread the same way Kill
+    # Session already does (explicit_kill() can block on a stale broker).
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    import json
+
+    commands = json.loads(
+        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
+    )
+    assert any(c.get("command") == "ai_terminal_end_session" for c in commands)
+    assert any(c.get("command") == "ai_terminal_session_info" for c in commands)
+
+    end_start = source.index("class AiTerminalEndSessionCommand")
+    end_end = source.index("class AiTerminalSessionInfoCommand", end_start)
+    end_source = source[end_start:end_end]
+    assert "sublime_plugin.WindowCommand" in end_source.split("\n")[0]
+    assert 'term._expected_termination_reason = "killed"' in end_source
+    assert "threading.Thread(target=_do_end" in end_source
+    kill_call = end_source.index("pty.explicit_kill()")
+    close_call = end_source.index("view.close()")
+    assert kill_call < close_call, "must kill before closing"
+
+    info_start = end_end
+    info_end = source.index("class AiTerminalRecoverSessionCommand", info_start)
+    info_source = source[info_start:info_end]
+    assert "sublime_plugin.WindowCommand" in info_source.split("\n")[0]
+    # Read-only: never touches pty state or the view's lifecycle.
+    assert "explicit_kill" not in info_source
+    assert ".kill()" not in info_source
+    assert ".close()" not in info_source
+    assert "_expected_termination_reason =" not in info_source
+    assert "_read_broker_registry_record(" in info_source
+    assert "sublime.message_dialog(" in info_source
+
+    tab_menu = json.loads(
+        (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
+    )
+
+    def _flatten(items):
+        for item in items:
+            yield item
+            yield from _flatten(item.get("children") or [])
+
+    by_command = {
+        item.get("command"): item
+        for item in _flatten(tab_menu)
+        if item.get("command")
+    }
+    for name in ("ai_terminal_end_session", "ai_terminal_session_info"):
+        assert name in by_command
+        assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_read_broker_registry_record_missing_file_returns_none():
+    result = ai_terminal._read_broker_registry_record(
+        "ghostshell_does-not-exist-" + os.urandom(4).hex()
+    )
+    assert result is None
 
 
 def test_tab_menu_target_view_resolves_clicked_tab_not_active_one():

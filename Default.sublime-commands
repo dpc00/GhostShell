@@ -11,6 +11,8 @@
 	{"caption": "Ai Terminal: Open in Windows Terminal", "command": "ai_terminal_open_in_windows_terminal"},
 	{"caption": "Ai Terminal: Kill Session (Keep Tab Open)", "command": "ai_terminal_kill_session"},
 	{"caption": "Ai Terminal: Close Tab (Keep Session Alive)", "command": "ai_terminal_close_keep_alive"},
+	{"caption": "Ai Terminal: End Session (Kill + Close)", "command": "ai_terminal_end_session"},
+	{"caption": "Ai Terminal: Session Info...", "command": "ai_terminal_session_info"},
 	{"caption": "Ai Terminal: Nuke", "command": "ai_terminal_nuke"},
 	{"caption": "Ai Terminal: Switch Panel...", "command": "ai_terminal_switch_panel"}
 ]

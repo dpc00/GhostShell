@@ -121,16 +121,33 @@ handed-off tab rather than freezing it; the "tab stays open" behavior
 itself is source-verified (`tests/test_broker_recovery.py`) but not yet
 re-confirmed live since.
 
-Symmetric, deliberate control over the same "kill vs. detach" x "keep tab
-vs. lose tab" split is also available directly, not just as a side effect
-of handing off to WT: `Ai Terminal: Kill Session (Keep Tab Open)` ends the
-agent for real but leaves the tab (and its transcript) open -- for when the
-process is done but the transcript is still wanted, to read, copy, or Save
-As, before closing the tab yourself. `Ai Terminal: Close Tab (Keep Session
-Alive)` is the mirror image: closes the tab, agent keeps running in the
-background, recoverable later the same way a WT hand-off is. Both share the
-same `_expected_termination_reason` mechanism (`"killed"` /  `"closed"`),
-just with different follow-through than the WT command's `"handoff"`.
+Deliberate control over "kill vs. detach" x "keep tab vs. lose tab" is also
+available directly, grouped under the "Ai Terminal: Session" submenu in
+Tab Context.sublime-menu, not just as a side effect of handing off to WT.
+Of the four combinations, one (neither kill nor close) needs no command --
+that's just not clicking anything -- so the submenu has the other three
+plus a read-only fourth:
+
+- `Kill Session (Keep Tab Open)` ends the agent for real but leaves the tab
+  (and its transcript) open -- for when the process is done but the
+  transcript is still wanted, to read, copy, or Save As, before closing the
+  tab yourself.
+- `Close Tab (Keep Session Alive)` is the mirror image: closes the tab,
+  agent keeps running in the background, recoverable later the same way a
+  WT hand-off is.
+- `End Session (Kill + Close)` does both together, in one action -- the
+  same combination a plain tab close already does, just explicit and
+  reachable without needing to physically close the tab.
+- `Session Info...` is non-destructive: a dialog with everything known
+  about the session (profile, pipe name, alive/frozen state, working
+  directory, child command, broker PID, start time -- the last three read
+  from the on-disk registry record via `_read_broker_registry_record()`,
+  so they're absent if the broker already exited and removed its own
+  record).
+
+Kill Session, Close Tab, and End Session all share the same
+`_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just
+with different follow-through than the WT command's `"handoff"`.
 
 `tools/recover_console.py` also still works run by hand, as an emergency VT
 relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
