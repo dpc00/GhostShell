@@ -586,21 +586,32 @@ class TestSanitizePtyEnv(unittest.TestCase):
             "CLAUDE_CODE_MESSAGING_TOKEN": "secret-token",
             "CLAUDE_CODE_SSE_PORT": "60929",
             "CLAUDE_CODE_EXECPATH": "C:\\Users\\donal\\.local\\bin\\claude.exe",
+            "CLAUDE_PID": "18600",
             "PATH": "C:\\bin",
         })
         for key in out:
             self.assertFalse(
-                key.startswith("CLAUDECODE") or key.startswith("CLAUDE_CODE_"),
+                key.startswith("CLAUDECODE")
+                or key.startswith("CLAUDE_CODE_")
+                or key == "CLAUDE_PID",
                 f"{key!r} should have been stripped",
             )
         self.assertEqual(out["PATH"], "C:\\bin")
 
     def test_claude_code_identity_strip_does_not_touch_unrelated_claude_vars(self):
-        # CLAUDE_PID / CLAUDE_EFFORT don't match the CLAUDECODE / CLAUDE_CODE_
-        # prefixes -- only the session-identity family is in scope here.
-        out = sanitize_pty_env({"CLAUDE_PID": "18600", "CLAUDE_EFFORT": "medium"})
-        self.assertEqual(out["CLAUDE_PID"], "18600")
+        # CLAUDE_EFFORT doesn't match the CLAUDECODE / CLAUDE_CODE_ prefixes
+        # or the CLAUDE_PID exact name -- only the session-identity family
+        # (including the one exact-name addition, CLAUDE_PID -- a fresh
+        # process reporting its parent's own pid as "me" is wrong on its
+        # face, same reasoning as the rest even without a confirmed symptom)
+        # is in scope here.
+        out = sanitize_pty_env({"CLAUDE_EFFORT": "medium"})
         self.assertEqual(out["CLAUDE_EFFORT"], "medium")
+
+    def test_strips_claude_pid_exact_name(self):
+        out = sanitize_pty_env({"CLAUDE_PID": "18600", "PATH": "C:\\bin"})
+        self.assertNotIn("CLAUDE_PID", out)
+        self.assertEqual(out["PATH"], "C:\\bin")
 
     def test_profile_can_reintroduce_a_stripped_claude_code_var_on_purpose(self):
         # A profile's own spawn_env is applied after sanitization, so a

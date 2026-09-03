@@ -7,32 +7,41 @@ inherit that block and apps like Grok report color=none (see `grok doctor`).
 If Sublime Text itself was launched from inside a running Claude Code
 session (e.g. this very session spawning a Sublime process), a spawned
 Claude tab inherits that session's own identity: CLAUDECODE=1,
-CLAUDE_CODE_CHILD_SESSION=1, and per-session bridge/messaging/session-id
-vars pointing at a socket that has nothing to do with the new tab.
-CLAUDE_CODE_CHILD_SESSION=1 makes the new claude process treat itself as a
-nested child -- confirmed live 2026-09-02: cursor-key prompt-history replay
-and session logging both come up disabled, not just cosmetically different.
-This is worth stripping unconditionally (not just for the "Claude" profile)
-since the inheritance path is the parent shell, not the target profile, and
-a stripped var a profile actually wants back can still be set via its own
-spawn_env, applied after this.
+CLAUDE_CODE_CHILD_SESSION=1, CLAUDE_PID=<parent's own pid>, and per-session
+bridge/messaging/session-id vars pointing at a socket that has nothing to do
+with the new tab. CLAUDE_CODE_CHILD_SESSION=1 makes the new claude process
+treat itself as a nested child -- confirmed live 2026-09-02: cursor-key
+prompt-history replay and session logging both come up disabled, not just
+cosmetically different. CLAUDE_PID is added on the same "session identity
+that must not leak" reasoning (a fresh process reporting its parent's PID as
+its own under a variable that means "me" is wrong on its face) though
+without an equivalent confirmed symptom. This is worth stripping
+unconditionally (not just for the "Claude" profile) since the inheritance
+path is the parent shell, not the target profile, and a stripped var a
+profile actually wants back can still be set via its own spawn_env, applied
+after this.
 
 Profile spawn_env is applied last so intentional overrides still win.
 """
 
 _DUMB_TERMS = frozenset(("", "dumb", "unknown", "none"))
 
-# Prefix match, not an exact-name list: covers CLAUDECODE itself and the
-# whole CLAUDE_CODE_* family (child-session flag, bridge/messaging socket,
-# session id, entrypoint, sse port, execpath, ...) without needing to name
-# every one Claude Code currently sets or might add later. Deliberately
-# narrower than a bare "CLAUDE" prefix -- CLAUDE_PID, CLAUDE_EFFORT, and any
-# other CLAUDE_* a profile sets on purpose are left alone.
+# Prefix match for CLAUDECODE itself and the whole CLAUDE_CODE_* family
+# (child-session flag, bridge/messaging socket, session id, entrypoint, sse
+# port, execpath, ...) without needing to name every one Claude Code
+# currently sets or might add later, plus one exact name (CLAUDE_PID) that
+# doesn't share that prefix. Deliberately not a bare "CLAUDE" prefix --
+# CLAUDE_EFFORT and any other CLAUDE_* a profile sets on purpose are left
+# alone.
 _CLAUDE_SESSION_IDENTITY_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
+_CLAUDE_SESSION_IDENTITY_EXACT_NAMES = frozenset(("CLAUDE_PID",))
 
 
 def _is_claude_session_identity_var(name):
-    return name.startswith(_CLAUDE_SESSION_IDENTITY_PREFIXES)
+    return (
+        name.startswith(_CLAUDE_SESSION_IDENTITY_PREFIXES)
+        or name in _CLAUDE_SESSION_IDENTITY_EXACT_NAMES
+    )
 
 
 def sanitize_pty_env(base_env, profile_env=None):
