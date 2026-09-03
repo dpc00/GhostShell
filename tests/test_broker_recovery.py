@@ -305,16 +305,26 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
     kill_source = source[kill_start:kill_end]
     assert 'term._expected_termination_reason = "killed"' in kill_source
     assert "pty.explicit_kill()" in kill_source
-    assert "self.view.close()" not in kill_source
+    assert ".close()" not in kill_source
 
     close_start = kill_end
     close_end = source.index("class AiTerminalReattachSessionCommand", close_start)
     close_source = source[close_start:close_end]
     assert 'term._expected_termination_reason = "closed"' in close_source
     set_flag = close_source.index('term._expected_termination_reason = "closed"')
-    close_call = close_source.index("self.view.close()")
+    close_call = close_source.index("view.close()")
     assert set_flag < close_call, "flag must be set before close() triggers on_close"
     assert "pty.explicit_kill()" not in close_source
+
+    # Both are WindowCommands resolving the right-clicked tab via
+    # _tab_menu_target_view (group/index), not self.view -- a naive
+    # TextCommand acts on whatever tab happens to be focused instead of the
+    # one actually right-clicked. Reproduced live 2026-09-02: Kill Session
+    # on a background tab killed the focused tab's session instead.
+    assert "sublime_plugin.WindowCommand" in kill_source.split("\n")[0]
+    assert "sublime_plugin.WindowCommand" in close_source.split("\n")[0]
+    assert "_tab_menu_term(self.window, group, index)" in kill_source
+    assert "_tab_menu_target_view(self.window, group, index)" in close_source
 
     import json
 
@@ -330,6 +340,50 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
     )
-    tab_commands = {item.get("command") for item in tab_menu}
-    assert "ai_terminal_kill_session" in tab_commands
-    assert "ai_terminal_close_keep_alive" in tab_commands
+    by_command = {item.get("command"): item for item in tab_menu if item.get("command")}
+    assert "ai_terminal_kill_session" in by_command
+    assert "ai_terminal_close_keep_alive" in by_command
+    assert "ai_terminal_open_in_editor" in by_command
+    for name in (
+        "ai_terminal_kill_session",
+        "ai_terminal_close_keep_alive",
+        "ai_terminal_open_in_editor",
+    ):
+        # Without these placeholders Sublime has no way to substitute the
+        # right-clicked tab's real coordinates -- the command falls back to
+        # the active view every time, exactly the bug this fixes.
+        assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_tab_menu_target_view_resolves_clicked_tab_not_active_one():
+    """_tab_menu_target_view: real group/index picks that specific view;
+    -1/-1 (Context.sublime-menu, Command Palette -- neither ever passes real
+    coordinates) falls back to the active view."""
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("def _tab_menu_target_view(")
+    end = source.index("class AiTerminalOpenInEditorCommand", start)
+    helper_source = source[start:end]
+    assert "window.views_in_group(group)" in helper_source
+    assert "window.active_view()" in helper_source
+
+    class FakeWindow:
+        def __init__(self, views, active):
+            self._views = views
+            self._active = active
+
+        def views_in_group(self, group):
+            return self._views if group == 0 else []
+
+        def active_view(self):
+            return self._active
+
+    ns = {}
+    exec(compile(helper_source, "ai_terminal.py", "exec"), ns)
+    resolve = ns["_tab_menu_target_view"]
+
+    clicked, focused = object(), object()
+    window = FakeWindow(views=["v0", clicked, "v2"], active=focused)
+
+    assert resolve(window, 0, 1) is clicked
+    assert resolve(window, -1, -1) is focused
+    assert resolve(window, None, None) is focused
