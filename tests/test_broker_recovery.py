@@ -381,6 +381,74 @@ def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
 
 
+def test_reattach_broker_view_force_full_replay_flips_bootstrap_and_skips_seed():
+    # force_full_replay=True is the whole point: bootstrap mode
+    # (_reattach_bootstrap=True) deliberately trusts the view's existing
+    # text instead of reprocessing it (GhosttyParser.feed_bootstrap's own
+    # docstring says so) -- fast, but that's exactly why an ordinary
+    # reconnect can never fix already-mismatched scrollback wrapping.
+    # force_full_replay must invert that: bootstrap off, and nothing
+    # seeded from restored_text (which must become "" regardless of the
+    # view's actual current content) so the real replay below rebuilds
+    # history from scratch instead of layering on top of stale seeded rows.
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("def _reattach_broker_view(")
+    end = source.index("class AiTerminalOpenHereCommand", start)
+    fn_source = source[start:end]
+    assert "def _reattach_broker_view(view, pipe_name, force_full_replay=False):" in fn_source
+    assert (
+        'restored_text = "" if force_full_replay else view.substr(sublime.Region(0, view.size()))'
+        in fn_source
+    )
+    assert "term._reattach_bootstrap = not force_full_replay" in fn_source
+
+
+def test_rewrap_conversation_command_detaches_clears_and_forces_full_replay():
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    start = source.index("class AiTerminalRewrapConversationCommand")
+    end = source.index("class AiTerminalCloseKeepAliveCommand", start)
+    cmd_source = source[start:end]
+    assert "sublime_plugin.WindowCommand" in cmd_source.split("\n")[0]
+    assert "_tab_menu_target_view(self.window, group, index)" in cmd_source
+    # Detach-only (pty.kill()), never explicit_kill -- the agent must
+    # survive this exactly like every other recovery command here.
+    assert "explicit_kill" not in cmd_source
+    kill_call = cmd_source.index("pty.kill()")
+    clear_call = cmd_source.index('view.run_command("right_delete")')
+    reattach_call = cmd_source.index(
+        "_reattach_broker_view(view, pipe_name, force_full_replay=True)"
+    )
+    assert kill_call < clear_call < reattach_call, (
+        "must detach, then clear the stale text, then reconnect with a "
+        "forced full replay, in that order"
+    )
+
+    import json
+
+    commands = json.loads(
+        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
+    )
+    assert any(
+        c.get("command") == "ai_terminal_rewrap_conversation" for c in commands
+    )
+    tab_menu = json.loads(
+        (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
+    )
+
+    def _flatten(items):
+        for item in items:
+            yield item
+            yield from _flatten(item.get("children") or [])
+
+    by_command = {
+        item.get("command"): item for item in _flatten(tab_menu) if item.get("command")
+    }
+    assert "ai_terminal_rewrap_conversation" in by_command
+    assert by_command["ai_terminal_rewrap_conversation"].get("args") == {
+        "group": -1, "index": -1,
+    }
+
+
 def test_end_session_kills_and_closes_session_info_is_read_only():
     # End Session is the third point of the kill x close matrix (the fourth,
     # neither, needs no command -- that's Session Info's slot instead, see

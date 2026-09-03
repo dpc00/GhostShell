@@ -13,6 +13,11 @@
 				"command": "ai_terminal_session_info",
 				"args": { "group": -1, "index": -1 }
 			},
+			{
+				"caption": "Rewrap Full Conversation (slow)",
+				"command": "ai_terminal_rewrap_conversation",
+				"args": { "group": -1, "index": -1 }
+			},
 			{ "caption": "-" },
 			{
 				"caption": "Kill Session (Keep Tab Open)",

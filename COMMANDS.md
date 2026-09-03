@@ -27,6 +27,7 @@ stripped, CamelCase -> snake_case).
 | `AiTerminalCloseKeepAliveCommand` | `ai_terminal_close_keep_alive` | WindowCommand | "Ai Terminal: Close Tab (Keep Session Alive)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalEndSessionCommand` | `ai_terminal_end_session` | WindowCommand | "Ai Terminal: End Session (Kill + Close)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalSessionInfoCommand` | `ai_terminal_session_info` | WindowCommand | "Ai Terminal: Session Info..." | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
+| `AiTerminalRewrapConversationCommand` | `ai_terminal_rewrap_conversation` | WindowCommand | "Ai Terminal: Rewrap Full Conversation (slow)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalNukeCommand` | `ai_terminal_nuke` | TextCommand | "Ai Terminal: Nuke" | Tools > Ai Terminal > Nuke Ai Terminal | `ctrl+alt+k` (context: `setting.ai_terminal_view`) |
 | `AiTerminalKeypressCommand` | `ai_terminal_keypress` | TextCommand | — | — | ~259 bindings in `Default.sublime-keymap`, all gated on `setting.ai_terminal_view`; this is the keystroke → PTY forwarding path |
 
