@@ -160,61 +160,66 @@ Kill Session, Close Tab, and End Session all share the same
 `_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just
 with different follow-through than the WT command's `"handoff"`.
 
-## Resize does not reflow scrollback -- `Rewrap Full Conversation`
+## Resize now reflows scrollback correctly -- no detach/reattach involved
 
-Resizing a terminal tab never fixes already-mismatched scrollback wrapping.
-`Screen.resize()` (`terminal/screen.py`) only clips characters off history
-rows when narrowing and does nothing to history when widening -- there is
-no "these N terminal rows were originally one logical line" bookkeeping for
-a real reflow to work from, so old rows just keep whatever wrapping the
-child app originally drew them at. Confirmed live 2026-09-02: split-view
-then resize left visibly mismatched scrollback ("newspaper column width"
-remnants next to correctly-wrapped recent output), reproduced deliberately
-by resizing narrow then wide and diffing the same historical region across
-both captures.
+Resizing a terminal tab used to leave already-drawn scrollback visibly
+mismatched ("newspaper column width" remnants next to correctly-wrapped
+recent output). Confirmed live 2026-09-02: split-view then resize
+reproduced it deliberately, resizing narrow then wide and diffing the same
+historical region across both captures.
 
-Reconnecting (`_reattach_broker_view`'s default bootstrap mode) does not
-fix this either, and deliberately so: `GhosttyParser.feed_bootstrap`'s own
-docstring says a restored view "already owns readable historical text" and
-skips reprocessing it, advancing only the native VT engine during replay.
-That is the real ~10s -> ~1s speed win a past session made to detachable
-reconnect -- but the corollary, confirmed by reading the code (not
-recovered from any surviving comment -- nothing in the current codebase
-documented the tradeoff this explicitly before now), is that a session
-which has ever been reconnected can never have its old scrollback
-correctly rewrapped by an ordinary reconnect again, because bootstrap mode
-never reprocesses it.
+The root cause was git-archaeologized rather than guessed at. Three same-day
+late-August 2026 commits explain it:
 
-`Ai Terminal: Rewrap Full Conversation (slow)` is the deliberate, on-demand
-override: detaches the tab (`pty.kill()`, agent untouched, same guarantee
-as every other command here), clears the view's text, and reconnects with
-`_reattach_broker_view(view, pipe_name, force_full_replay=True)`. That
-flag flips `_reattach_bootstrap` off and forces `restored_text = ""`
-regardless of what was in the view, so the broker's retained replay buffer
-gets fed through the real parser (`_on_data`/`parser.feed`, not
-`feed_bootstrap`) at the view's *current* size, rebuilding `Screen.history`
-from scratch -- the same real derivation a first-ever connection gets.
-Correct (the child's own redraw, replayed fresh, comes out wrapped for the
-current width throughout), but reprocesses everything the broker retained,
-so it is slow for a large session -- this is why it is an explicit command
-and not what an ordinary resize does.
+- `c93860c` fixed the *real*, previously-known bug in this area: a
+  resize<->replay oscillation loop, caused by Sublime's line-number gutter
+  crossing a digit boundary (9->10, 99->100) and retriggering PTY resizes
+  mid-replay. Fixed in `terminal/layout.py` (`gutter_digit_delta()`,
+  `accepted_cols()`) and remains active/unmodified.
+- `94f00ec` ("Optimize synchronized resize replays"), landed shortly after,
+  changed `GhosttyParser.resize()` (`terminal/ghostty_engine.py`) to set a
+  `_resize_replay_pending` flag instead of forcing a full scrollback
+  rebuild, and added a shortcut in `_sync_scrollback()` that skipped
+  re-extracting from the native ghostty-vt engine after a resize-triggered
+  synchronized repaint. It assumed `Screen.resize()` (`terminal/screen.py`)
+  had already reflowed the authoritative Python history. It hadn't:
+  `Screen.resize()` only clips characters off history rows when narrowing
+  and does nothing to history when widening -- there is no "these N
+  terminal rows were originally one logical line" bookkeeping for a real
+  reflow to work from. This is the actual cause of the mismatched
+  scrollback.
+- `5d7a88c`, later the same day, added `GhosttyParser.feed_bootstrap()` --
+  the real, correct ~10s -> ~1s reconnect speed win (a restored Sublime
+  view "already owns readable historical text", so reconnect only needs to
+  advance the native VT engine, not reprocess every byte through Python).
+  This is unrelated to resize and was never the cause of, nor a viable fix
+  for, the wrapping mismatch.
 
-**First live run killed the session and closed the tab instead.** The
-detaching `pty.kill()` left `term._expected_termination_reason` at its
-default `None` -- the exact bug this same mechanism exists to prevent,
-reintroduced here by forgetting to set it. The old reader thread's
-now-unguarded `_maybe_close_dead_view` fired ~1.5s later and closed the
-view; by then the new connection had already registered a fresh
-`_Terminal` against that same view id (a fast reconnect, or a slow one on
-a small session), so `on_close` found that live, legitimate replacement --
-whose own reason was also `None` -- and sent *it* a real `KILL`. A stale
-timer from the detach reached across and killed the brand new session
-that had already replaced it. Fixed: `term._expected_termination_reason =
-"rewrap"` set before `pty.kill()`, same as every other detach here; a new
-`"rewrap"` branch in `_read_loop` also skips the notice write entirely
-(the view is about to be cleared and reconnected in place, so a notice
-would just race the new connection's own writes). Not yet re-verified
-live.
+The fix: revert `94f00ec`'s optimization. `GhosttyParser.resize()` once
+again forces `self._last_scrollback_rows = -1`, and `_sync_scrollback()` no
+longer has a resize-triggered shortcut -- so a resize always falls through
+to a full rebuild of `Screen.history` from the native ghostty-vt engine's
+own scrollback, which reflows correctly because the native engine (not the
+Python-side clip/pad in `Screen.resize()`) is the one doing real VT reflow.
+Verified with a new integration test,
+`test_resize_then_home_dump_reflows_old_scrollback` in
+`tests/test_ghostty_engine.py`, that resizing then feeding a synchronized
+home+repaint reflows a previously-wrapped line into one contiguous line.
+
+An earlier version of this fix took a different approach: a detach/reattach
+command (`Ai Terminal: Rewrap Full Conversation (slow)`) that killed the PTY
+connection, cleared the view, and reconnected with a full (non-bootstrap)
+replay to force reprocessing. It worked, but was explicitly rejected as an
+architectural choice: detach/reattach exists for session recovery, not as a
+mechanism for fixing rendering/UI problems -- it hasn't been hardened for
+that use, and the earlier internal history in this file already had one
+recurrence of the same kill-bug pattern it introduces (stale
+`_expected_termination_reason` racing a fresh reconnect on the same view
+id -- see the WT hand-off note above; this command hit the identical bug on
+its first live run). Once the real root cause above was fixed, an ordinary
+resize reflows correctly on its own, making the workaround both the wrong
+technique and redundant. It has been removed (command, menu entries, docs,
+tests) rather than kept as a fallback.
 
 `tools/recover_console.py` also still works run by hand, as an emergency VT
 relay for when Sublime itself is unusable (crashed, frozen UI, etc.) and the
