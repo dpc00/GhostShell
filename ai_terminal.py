@@ -2954,6 +2954,16 @@ class _Terminal:
         # Parser failures are reported once per terminal; see _on_data.
         self._feed_failed = False
         self._reattach_bootstrap = False
+        # Set right before a deliberate hand-off (e.g. Open in Windows
+        # Terminal) calls pty.kill() on this tab's own client. That kill()
+        # closes the same handles a real child death would, so the reader
+        # thread cannot otherwise tell "we did this on purpose" apart from
+        # "the process actually exited" -- this flag is what tells it.
+        # Consumed by _read_loop (skip the exited-process auto-close) and by
+        # AiTerminalViewListener.on_close (skip explicit_kill: nothing local
+        # is ending, the session already lives on in whatever it was handed
+        # to).
+        self._deliberate_detach = False
         # Geometry watcher for standard terminal resize behavior.
         self._watcher = _LayoutWatcher(self)
 
@@ -3169,14 +3179,19 @@ class _Terminal:
         finally:
             self._close_text_log()
             # A reader that died must not be reported as an ordinary exit, and
-            # the tab must stay open so the reason remains readable.
-            notice = (
-                "\n[process exited]\n"
-                if error is None
-                else "\n[terminal read failed: %s]\n" % error
-            )
+            # the tab must stay open so the reason remains readable. A
+            # deliberate detach (self._deliberate_detach) makes read() return
+            # exactly the same way a real child death does -- CancelIoEx on
+            # our own handles -- so it needs its own message and must not be
+            # treated as either case below.
+            if self._deliberate_detach:
+                notice = "\n[detached -- session handed off, still running]\n"
+            elif error is None:
+                notice = "\n[process exited]\n"
+            else:
+                notice = "\n[terminal read failed: %s]\n" % error
             sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
-            if error is None:
+            if error is None and not self._deliberate_detach:
                 # _close_tab_on_exit() reads Settings (via _all_profiles), which
                 # is main-thread-only in the Sublime API -- this finally block
                 # still runs on the PTY reader thread, so the check itself must
@@ -4772,9 +4787,14 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             if (
                 _is_broker_pty(term.pty)
                 and (user_closing or not window_closing)
+                and not term._deliberate_detach
             ):
                 # A deliberate single-tab close ends the session for real.
                 # Window closes must not: restored tabs reconnect later.
+                # Neither must a tab already handed off elsewhere (Open in
+                # Windows Terminal) -- nothing local is ending, the session
+                # already lives on in whatever it was handed to; killing it
+                # here would end that live session out from under it.
                 try:
                     term.pty.explicit_kill()
                 except Exception as e:
@@ -7822,6 +7842,11 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
             )
             return
 
+        # Must be set before kill(): kill() closes this tab's read handle
+        # via CancelIoEx, which makes the reader thread's read() return
+        # exactly the way a real child death does -- this flag is the only
+        # thing that tells _read_loop and on_close this wasn't one.
+        term._deliberate_detach = True
         pty.kill()
         sublime.status_message(
             f"Ai terminal: handed off {pipe_name} to Windows Terminal"

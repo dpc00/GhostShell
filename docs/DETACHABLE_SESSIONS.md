@@ -83,10 +83,22 @@ against the current tab's broker pipes -- a raw named-pipe relay, not a new
 agent process, so it's the same live session, same conversation state,
 nothing restarted. The broker accepts only one connected client at a time,
 so this is a *handoff*, not a second view: the Sublime tab detaches (the
-dialog says so before it runs) the moment WT's relay connects, leaving that
-tab in the same state as a frozen one. Close the WT window to detach the
-relay in turn, then `Ai Terminal: Recover Orphaned Session...` or `Revive
-Frozen Tab` brings the session back into Sublime -- proven round-trip
+dialog says so before it runs) the moment WT's relay connects, and the tab
+then closes itself -- confirmed live, it does not linger as a frozen tab.
+
+That close is deliberately not an ordinary one. Detaching closes this tab's
+own read handle via `CancelIoEx`, which the reader thread cannot otherwise
+tell apart from the child actually dying -- left alone, that would both
+auto-close the tab as a false "process exited" *and* send a real `KILL` to
+the still-live broker WT is now attached to, ending the very session just
+handed off. `_Terminal._deliberate_detach`, set immediately before the
+detaching `kill()` call, is what tells both the reader thread (skip the
+false-exit auto-close reasoning; close for the real reason instead) and
+`on_close` (skip `KILL`; nothing local is ending) that this is a hand-off,
+not a death. Nothing stays registered to the closed tab -- the session
+lives on purely in WT (and the broker) until you close the WT window, after
+which `Ai Terminal: Recover Orphaned Session...` brings it back into a
+Sublime tab -- proven round-trip
 (Sublime -> WT -> Sublime, same broker PID throughout) on 2026-09-02.
 
 `tools/recover_console.py` also still works run by hand, as an emergency VT
