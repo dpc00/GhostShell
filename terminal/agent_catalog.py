@@ -230,105 +230,174 @@ CATALOG = {
         "launch_command": ["cody"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@sourcegraph/cody (npm). Installed 2026-09-04, launch_command "
+            "confirmed against the real binary -- still not yet run through "
+            "ai_terminal for mouse/scroll/alt-screen quirks."
+        ),
     },
     "crush": {
         "display_name": "Crush",
         "launch_command": ["crush"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: bare 'crush' on npm is an unrelated MediaCrush "
+            "package, not Charm's Crush agent -- real install method not "
+            "yet confirmed. Do not install the npm 'crush' package."
+        ),
     },
     "droid": {
         "display_name": "Droid",
         "launch_command": ["droid"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Factory AI's Droid CLI. Not distributed as an npm package "
+            "(@factory/droid 404s) -- real install method not yet confirmed."
+        ),
     },
     "amp": {
         "display_name": "Amp",
         "launch_command": ["amp"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@ampcode/cli (npm) -- Sourcegraph renamed the old @sourcegraph/amp "
+            "package to this. Installed 2026-09-04, launch_command confirmed "
+            "against the real binary -- still not yet run through ai_terminal "
+            "for mouse/scroll/alt-screen quirks."
+        ),
     },
     "goose": {
         "display_name": "Goose",
         "launch_command": ["goose"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Block's Goose. Neither npm 'goose' nor pip 'goose-ai' are the "
+            "real project (both are unrelated squats/single-release "
+            "packages) -- real install method (likely a curl script) not "
+            "yet confirmed."
+        ),
     },
     "cline": {
         "display_name": "Cline",
         "launch_command": ["cline"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "cline (npm, bare name is the real package here). Installed "
+            "2026-09-04, launch_command confirmed against the real binary "
+            "-- still not yet run through ai_terminal for mouse/scroll/"
+            "alt-screen quirks."
+        ),
     },
     "kilocode": {
         "display_name": "Kilo Code",
         "launch_command": ["kilocode"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@kilocode/cli (npm; bare 'kilocode' package name is unrelated). "
+            "Installed 2026-09-04 via the scoped package, launch_command "
+            "confirmed against the real binary (also has a 'kilo' alias "
+            "shim) -- still not yet run through ai_terminal for mouse/"
+            "scroll/alt-screen quirks."
+        ),
     },
     "factory": {
         "display_name": "Factory",
         "launch_command": ["factory"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: bare 'factory' on npm is an unrelated scaffolding "
+            "template tool, not Factory AI -- see 'droid' entry, which is "
+            "Factory AI's actual CLI name."
+        ),
     },
     "blackbox": {
         "display_name": "Blackbox",
         "launch_command": ["blackbox"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: bare 'blackbox' on npm is an unrelated dnode-based "
+            "IPC package, not Blackbox AI -- real install method not yet "
+            "confirmed."
+        ),
     },
     "auggie": {
         "display_name": "Auggie",
         "launch_command": ["auggie"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@augmentcode/auggie (npm; bare 'auggie' package name 404s). "
+            "Installed 2026-09-04 via the scoped package, launch_command "
+            "confirmed against the real binary -- still not yet run through "
+            "ai_terminal for mouse/scroll/alt-screen quirks."
+        ),
     },
     "cursor-agent": {
         "display_name": "Cursor Agent",
         "launch_command": ["cursor-agent"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: bare 'cursor-agent' on npm is an unrelated task-"
+            "sequence tool, not Cursor's own agent CLI -- real install "
+            "method not yet confirmed."
+        ),
     },
     "windsurf": {
         "display_name": "Windsurf",
         "launch_command": ["windsurf"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: bare 'windsurf' on npm is a placeholder ('Coming "
+            "soon.') squat, not the real product -- real install method "
+            "not yet confirmed."
+        ),
     },
-    "continue-cli": {
+    "cn": {
         "display_name": "Continue",
-        "launch_command": ["continue-cli"],
+        "launch_command": ["cn"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@continuedev/cli (npm). Real binary name is 'cn', NOT "
+            "'continue-cli' as originally guessed here -- corrected "
+            "2026-09-04 after installing and verifying against the actual "
+            "shim on PATH. Still not yet run through ai_terminal for "
+            "mouse/scroll/alt-screen quirks."
+        ),
     },
     "roo-code": {
         "display_name": "Roo Code",
         "launch_command": ["roo-code"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "Unverified: 'roo-code' is not published on npm under that "
+            "name -- real install method not yet confirmed."
+        ),
     },
     "copilot": {
         "display_name": "GitHub Copilot",
         "launch_command": ["copilot"],
         "detachable": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": "Unverified: not yet run through ai_terminal.",
+        "notes": (
+            "@github/copilot (npm; bare 'copilot' package is a different, "
+            "unrelated tool -- do not confuse the two, though the correct "
+            "binary shim ends up named 'copilot' either way). Installed "
+            "2026-09-04, launch_command confirmed against the real binary "
+            "-- still not yet run through ai_terminal for mouse/scroll/"
+            "alt-screen quirks."
+        ),
     },
 }
 

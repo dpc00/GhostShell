@@ -220,6 +220,11 @@
             "launch_command": [
                 "claude"
             ],
+            // Example per-profile font override (see the top-level
+            // "font_face"/"font_size" comment above) -- uncomment to give
+            // this profile's tabs a distinct look from other agents:
+            // "font_face": "Cascadia Code",
+            // "font_size": 11,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
@@ -731,13 +736,21 @@
     // "block_caret": false,
     // "caret_style": "solid",
     // "caret_extra_width": 0,
-    // Font for the terminal view only (overrides the global font_face for
-    // ai_terminal tabs). Must be a monospace font with full box-drawing
-    // (U+2500-U+257F), block-element (U+2580-U+259F), and miscellaneous
-    // TUI symbol coverage (U+23BF, U+23F8, U+2733, U+273B, U+2802, U+2B1D).
-    // "Cascadia Code" ships with Windows 10+ and has all of these.
-    // Set to null to inherit the global font_face.
-    "terminal_font": "Cascadia Code",
+    // Font for ai_terminal tabs/panels only -- never touches the user's
+    // global font_face/font_size (a dedicated view setting, scoped the same
+    // way as color_scheme above). Leave both null/absent (the default) and a
+    // terminal view just inherits whatever ST is already using. Set either
+    // here to change every profile's default, or set the same key inside a
+    // single profile (see "profiles" below) to override just that one --
+    // e.g. give one agent a distinct font so its tabs are visually
+    // recognizable at a glance among several open at once. A profile's value
+    // always wins over these top-level ones. Must be a monospace font with
+    // full box-drawing (U+2500-U+257F), block-element (U+2580-U+259F), and
+    // miscellaneous TUI symbol coverage (U+23BF, U+23F8, U+2733, U+273B,
+    // U+2802, U+2B1D). "Cascadia Code" ships with Windows 10+ and has all of
+    // these.
+    // "font_face": null,
+    // "font_size": null,
     // How often (minutes) to re-poll each provider's usage/quota endpoint so
     // the figures in the launcher and menus do not go stale mid-session. The
     // sweep uses the OAuth tokens the CLIs already persisted and spends no

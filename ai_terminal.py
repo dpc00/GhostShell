@@ -1,3 +1,5 @@
+
+
 """ai_terminal.py -- bare-bones owned terminal for the Claude CLI.
 
 Replaces the Terminus dependency for AI launch. No third-party packages: pure
@@ -1913,6 +1915,21 @@ def _setting_bool(key, default, profile_name=None, settings=None):
     return bool(s.get(key, default))
 
 
+def _setting_string(key, default, profile_name=None, settings=None):
+    """String knob resolved profile-override first, then the global settings
+    key of the same name, then `default`.
+
+    A falsy value (empty string, null, absent key) at either level means
+    "inherit" rather than "set to nothing" -- used for font_face, where the
+    fallback (`default=None`) means "leave ST's own current font alone."
+    """
+    s = _settings_obj(settings)
+    profile = _profile_settings(profile_name, s)
+    if profile is not None and profile.get(key):
+        return profile[key]
+    return s.get(key, default) or default
+
+
 def _setting_number(key, default, cast=int, profile_name=None, settings=None):
     """Numeric knob resolved profile-override first, then the global settings
     key of the same name, then `default`.
@@ -3775,7 +3792,7 @@ def _next_ai_panel_name(window, prefix=None):
     return f"{pfx} {n}"
 
 
-def _apply_terminal_view_settings(v):
+def _apply_terminal_view_settings(v, profile_name=None):
     """Settings/scheme shared by both the tab (new_file) and panel
     (get_output_panel) terminal views. Caller sets the name/scratch flag,
     which differ (or don't apply) between the two."""
@@ -3795,13 +3812,6 @@ def _apply_terminal_view_settings(v):
     # glyph at the PTY's own live position.
     v.settings().set("block_caret", False)
     v.settings().set("caret_extra_width", 0)
-    try:
-        ts = sublime.load_settings(_SETTINGS_NAME)
-        font = ts.get("terminal_font")
-        if font:
-            v.settings().set("font_face", font)
-    except Exception:
-        pass
     # draw_centered=False isolates the terminal from the user's global
     # preference. scroll_past_end must be True so two-finger trackpad gestures
     # keep generating scroll_lines even when the TUI framebuffer fits the
@@ -3852,26 +3862,42 @@ def _apply_terminal_view_settings(v):
     except Exception:
         v.settings().set("color_scheme",
                          "Packages/GhostShell/ai_terminal.sublime-color-scheme")
+    # Per-profile font override, global fallback, then ST's own current font.
+    # A profile's "font_face"/"font_size" wins; else the top-level setting of
+    # the same name; else erase so the view just inherits whatever ST is
+    # already using (no override at all) -- this is what lets one profile go
+    # untouched (system font) while another opts into something distinct for
+    # visual differentiation between agents.
+    font_face = _setting_string("font_face", None, profile_name=profile_name)
+    if font_face:
+        v.settings().set("font_face", font_face)
+    else:
+        v.settings().erase("font_face")
+    font_size = _setting_number("font_size", None, cast=float, profile_name=profile_name)
+    if font_size:
+        v.settings().set("font_size", font_size)
+    else:
+        v.settings().erase("font_size")
     # NOT read-only: on_text_command swallows insert/left_delete/right_delete/
     # move and forwards them to the PTY. Making the view read-only suppresses
     # keyboard `insert` before the listener fires, so real typing would do
     # nothing (only programmatic run_command("insert") bypasses the block).
 
 
-def _terminal_view(window, name=None):
+def _terminal_view(window, name=None, profile_name=None):
     v = window.new_file()
     v.set_name(name or _next_ai_name(window))
     v.set_scratch(True)
-    _apply_terminal_view_settings(v)
+    _apply_terminal_view_settings(v, profile_name=profile_name)
     return v
 
 
-def _terminal_panel_view(window, panel_name):
+def _terminal_panel_view(window, panel_name, profile_name=None):
     """Panel-mode counterpart to _terminal_view. get_output_panel returns a
     cached view keyed by name -- reused as-is across toggles (the caller
     forces a full render right after, so stale panel content never shows)."""
     v = window.get_output_panel(panel_name)
-    _apply_terminal_view_settings(v)
+    _apply_terminal_view_settings(v, profile_name=profile_name)
     return v
 
 
@@ -5955,7 +5981,7 @@ def _spawn(window, path, profile=None):
             pfx = profile_name
     tab_name = _next_ai_name(window, prefix=pfx)
 
-    view = _terminal_view(window, name=tab_name)
+    view = _terminal_view(window, name=tab_name, profile_name=profile_name)
     window.focus_view(view)
     cols, rows = _measure(view, profile_name=profile_name)
     
@@ -6166,8 +6192,8 @@ def _reattach_broker_view(view, pipe_name):
     # the complete terminal view configuration before parsing the broker's
     # redraw, especially the generated ANSI colour scheme. Sublime may restore
     # only the user's global scheme for an untitled scratch buffer.
-    _apply_terminal_view_settings(view)
     profile_name = view.settings().get(_BROKER_PROFILE_SETTING)
+    _apply_terminal_view_settings(view, profile_name=profile_name)
     path = view.settings().get(_BROKER_CWD_SETTING)
     s = _settings_obj()
     profile_data = _profile_settings(profile_name, s) if profile_name else None
@@ -7083,7 +7109,7 @@ class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
             window, prefix=term.view.name()
         )
         term._panel_home_name = panel_name
-        new_view = _terminal_panel_view(window, panel_name)
+        new_view = _terminal_panel_view(window, panel_name, profile_name=_term_profile_name(term))
         term.panel_name = panel_name
         _migrate_terminal_view(term, new_view)
         window.run_command("show_panel", {"panel": "output." + panel_name})
@@ -7114,7 +7140,7 @@ class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
             # updating content and swallowing keystrokes -- right alongside
             # the new tab it just moved into.
             window.run_command("hide_panel", {"panel": "output." + panel_name})
-        new_view = _terminal_view(window, name=panel_name)
+        new_view = _terminal_view(window, name=panel_name, profile_name=_term_profile_name(term))
         term.panel_name = None
         _migrate_terminal_view(term, new_view)
         window.focus_view(new_view)
@@ -8319,7 +8345,7 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
         # Use the normal terminal-view constructor so recovered tabs receive
         # the dedicated ANSI colour scheme and every input/layout setting.
         profile = broker.get("profile_name") or "Recovered"
-        target = _terminal_view(self.window, name=profile)
+        target = _terminal_view(self.window, name=profile, profile_name=profile)
         target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
         target.settings().set(_BROKER_PROFILE_SETTING, profile)
         cwd = broker.get("cwd")
