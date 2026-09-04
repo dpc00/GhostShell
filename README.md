@@ -7,50 +7,40 @@ ANSI renderer (backed by libghostty-vt) tailored to the subset TUI agents
 
 ![12 AI coding CLIs running natively in GhostShell terminal tabs](docs/screenshots/supported-clis.png)
 
-## Supported CLIs
-
-Each one gets its own tuned profile in `ai_terminal.sublime-settings` —
-mouse tracking, alt-screen handling, and page-key routing are calibrated
-per-agent, not guessed at generically:
-
-- **Claude Code** (Anthropic) — plus a `--chrome` variant
-- **Codex** (OpenAI)
-- **OpenCode**
-- **Grok Build** (xAI)
-- **Antigravity** (Google)
-- **Qwen Code** (Alibaba)
-- **Kimi Code** (Moonshot AI)
-- **Kiro** (AWS)
-- **Junie** (JetBrains)
-- **jcode**
-- **Mimo** (Xiaomi)
-- **Vibe** (Mistral)
-
-Claude Code, Codex, OpenCode, and Qwen Code each also have an
-`→⇢⇨ Ollama`-routed variant for running against Ollama's cloud model
-catalog instead of the provider's own backend.
-
-Plain shells (`Bash`, `PowerShell`, `WSL Bash`, `Dos Console`, `cmd.exe`)
-are supported too, as themselves — no agent-specific tuning applied.
+Which CLIs/agents run in a given tab is a matter of your own profiles in
+`ai_terminal.sublime-settings`. Mouse tracking, alt-screen handling, and
+page-key routing are per-profile knobs, set by trial and error against
+whatever a given TUI actually does — not vetted or "tuned" support, and not
+something this README tracks. Planned: a shared TUI-profile layer that
+individual agent profiles select from, instead of each one repeating its
+own knob values.
 
 ## Layout
 
 ```
-ai/
-  ai_terminal.py      -- Sublime adapter: ConPTY, view I/O, commands, color-scheme
-  terminal/            -- pure core, unit-testable without Sublime
+ai_terminal.py          -- Sublime adapter: ConPTY, view I/O, commands, color-scheme
+terminal/                -- pure core, unit-testable without Sublime
     screen.py, parser.py, colors.py, keys.py, render.py, caret.py, mouse.py
-    ghostty_engine.py, ghostty_vt.py -- ctypes bindings to libghostty-vt
-    launcher.py, profile_availability.py, pty_env.py -- profile/launch plumbing
+    ghostty_engine.py, ghostty_vt.py -- ctypes bindings to libghostty-vt (auto-downloads
+        the DLL on first load, see below)
+    launcher.py, profile_availability.py, profile_schema.py, pty_env.py -- profile/launch
+        plumbing
+    agent_catalog.py       -- known-CLI catalog backing "Sync Detected Agent Profiles"
     history_scan.py, usage_scan.py   -- scrollback/usage helpers
-    bin/ghostty-vt.dll  -- libghostty-vt, built from https://github.com/ghostty-org/ghostty
-Default.sublime-keymap -- key-forwarding bindings, gated by setting.ai_terminal_view
+    session_text_log.py, log_paths.py -- plain-text session transcript logging
+    layout.py, cast_recorder.py, color_scheme_log.py, raw_debug_log.py,
+        settings_debug_log.py -- resize/recording/diagnostic support
+    bin/ghostty-vt.dll  -- libghostty-vt (not tracked in Git, downloaded automatically)
+Default.sublime-keymap, Default.sublime-mousemap -- key/mouse-forwarding bindings, gated
+    by setting.ai_terminal_view
 Main.sublime-menu       -- Tools > Ai Terminal submenu
 Default.sublime-commands, Context.sublime-menu, Side Bar.sublime-menu,
 Tab Context.sublime-menu -- command palette / context-menu entries
 ai_terminal.sublime-settings     -- profiles (shells/agents), rendering knobs
 ai_terminal.sublime-color-scheme -- color scheme with the ai.terminal.* scopes
-tools/                  -- check_import.py (import sanity check), stale-scheme cleanup script
+tools/                  -- agent_broker.py + agent_broker_client.py (detachable-session
+    broker, see docs/DETACHABLE_SESSIONS.md), scan_agents.py, check_import.py (import
+    sanity check), recovery/diagnostic scripts
 tests/                  -- unit tests for terminal/*, no Sublime required
 ```
 
@@ -82,15 +72,18 @@ package-name import, so nothing needs updating to match.
 
 ### Getting libghostty-vt.dll
 
-The DLL isn't tracked in Git (it's a built binary artifact). The distributed
-binary is hosted on Google Drive; download it from the
-[shared Google Drive link](https://drive.google.com/open?id=1d1GyMHTtVN71RVYKjnsEnRzfBqrJwA1h)
-and place it at `terminal/bin/ghostty-vt.dll`.
+The DLL isn't tracked in Git (it's a built binary artifact). Nothing to do
+by hand: the first time `ai_terminal.py` loads, `terminal/ghostty_vt.py`
+downloads the pinned binary from a GitHub Release, verifies it against a
+recorded SHA-256, and places it at `terminal/bin/ghostty-vt.dll` — a file
+already there that already matches the checksum is reused as-is, no network
+touched. Set the `GHOSTTY_VT_DLL` env var (or pass a path to
+`load_library()`) to point at a different build during development instead.
 
-To build it yourself instead: clone https://github.com/ghostty-org/ghostty,
-run `zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
+To build it yourself: clone https://github.com/ghostty-org/ghostty, run
+`zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
 
-The fingerprint and source revision of the currently audited binary are in
+The fingerprint and source revision of the currently pinned binary are in
 [terminal/GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md); its
 reported libghostty-vt version is `0.1.0-dev`.
 

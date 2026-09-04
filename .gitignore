@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.venv/
+.idea/
 .pytest*/
 pytest-cache-files-*/
 .test-tmp/
