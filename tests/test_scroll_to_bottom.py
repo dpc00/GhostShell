@@ -321,5 +321,51 @@ class ClampLoopHeightDetectionTests(unittest.TestCase):
         self.assertEqual(new_y, true_bottom - 150.0)
 
 
+class NearFitDipVsDeliberateScrollTests(unittest.TestCase):
+    """_clamp_vp_loop's near_fit / tall-scrollback branches exist to kill a
+    specific glitch: ST's view.show() briefly parking vp[1] BELOW rest (a
+    negative overshoot, e.g. -20) when content already fits the viewport --
+    never a deliberate user scroll, since there is nothing below rest to
+    scroll into when content fits. The old `abs(dy_rest) >= 0.5` check fired
+    on drift in EITHER direction, so a user scrolling the other way -- past
+    rest, toward the tail, e.g. pushing a short conversation's permission
+    prompt up to read it in full -- got silently reverted on every 8ms tick
+    regardless of typing. Only the negative direction should be corrected.
+    """
+
+    def _register(self, view, term):
+        registry = ai_terminal._term_registry()
+        key = object()
+        registry[key] = term
+        return registry, key
+
+    def test_deliberate_forward_scroll_within_near_fit_content_is_preserved(self):
+        # true bottom = 10*20 = 200; ve height 200 -> near_fit (within 2*lh).
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 200.0), vp=(0.0, 30.0))
+        term = _FakeTerm(auto_follow=True)
+        term.view = view
+
+        registry, key = self._register(view, term)
+        try:
+            ai_terminal._clamp_vp_loop()
+        finally:
+            registry.pop(key, None)
+
+        self.assertEqual(view.vp_writes, [])
+
+    def test_negative_overshoot_dip_is_still_corrected(self):
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 200.0), vp=(0.0, -20.0))
+        term = _FakeTerm(auto_follow=True)
+        term.view = view
+
+        registry, key = self._register(view, term)
+        try:
+            ai_terminal._clamp_vp_loop()
+        finally:
+            registry.pop(key, None)
+
+        self.assertEqual(view.vp_writes, [((0.0, 0.0), False)])
+
+
 if __name__ == "__main__":
     unittest.main()
