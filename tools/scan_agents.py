@@ -18,9 +18,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO, "ai", "terminal"))
+sys.path.insert(0, os.path.join(REPO, "terminal"))
 
-from agent_catalog import CATALOG, profile_from_entry  # noqa: E402
+from agent_catalog import (CATALOG, profile_from_entry)  # noqa: E402
 from profile_availability import command_exists  # noqa: E402
 
 DEFAULT_SETTINGS = os.path.join(REPO, "ai_terminal.sublime-settings")

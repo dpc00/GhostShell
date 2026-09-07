@@ -20,6 +20,7 @@ import os
 import re
 import tempfile
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -177,6 +178,8 @@ def humanize_epoch(epoch, now=None):
     try:
         delta = int(epoch) - int(now if now is not None else time.time())
     except (TypeError, ValueError):
+        print("[usage_scan] humanize_epoch cast failed (epoch=%r):\n%s"
+              % (epoch, traceback.format_exc()))
         return None
     if delta <= 0:
         return "now"
@@ -204,6 +207,7 @@ def parse_codex_rate_limits(line):
     try:
         event = json.loads(line)
     except ValueError:
+        print("[usage_scan] codex rate-limit line parse failed:\n%s" % traceback.format_exc())
         return None
     payload = event.get("payload") or {}
     limits = payload.get("rate_limits") or payload.get("info", {}).get("rate_limits")
@@ -228,6 +232,7 @@ def _tail_lines(path, max_bytes=131072):
                 handle.seek(size - max_bytes)
             data = handle.read()
     except OSError:
+        print("[usage_scan] tail read failed for %s:\n%s" % (path, traceback.format_exc()))
         return []
     return data.decode("utf-8", "replace").splitlines()
 
@@ -248,8 +253,11 @@ def scan_codex_usage(codex_home, now=None, max_files=4):
                     try:
                         candidates.append((os.path.getmtime(full), full))
                     except OSError:
-                        pass
+                        print("[usage_scan] codex rollout mtime failed for %s:\n%s"
+                              % (full, traceback.format_exc()))
     except OSError:
+        print("[usage_scan] codex sessions walk failed for %s:\n%s"
+              % (sessions, traceback.format_exc()))
         return None
     for mtime, path in sorted(candidates, reverse=True)[:max_files]:
         for line in reversed(_tail_lines(path)):
@@ -321,6 +329,7 @@ def _read_json_file(path):
         with open(path, "r", encoding="utf-8") as handle:
             return json.load(handle)
     except (OSError, ValueError):
+        print("[usage_scan] read JSON file failed for %s:\n%s" % (path, traceback.format_exc()))
         return None
 
 
@@ -339,6 +348,7 @@ def _write_json_atomic(path, data):
             json.dump(data, handle)
         os.replace(tmp_path, path)
     except OSError as e:
+        print("[usage_scan] atomic write to %s failed:\n%s" % (path, traceback.format_exc()))
         return str(e)
     return None
 
@@ -368,6 +378,8 @@ def _iso_to_epoch(value):
             value.replace("Z", "+00:00")
         ).timestamp()
     except ValueError:
+        print("[usage_scan] ISO timestamp parse failed for %r:\n%s"
+              % (value, traceback.format_exc()))
         return None
 
 
@@ -478,6 +490,7 @@ def fetch_codex_usage(codex_home="~/.codex", now=None):
     try:
         payload = _get_json("https://chatgpt.com/backend-api/wham/usage", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Codex live usage fetch failed:\n%s" % traceback.format_exc())
         return _live_error(e)
     return parse_codex_wham_usage(payload, now=now)
 
@@ -550,6 +563,7 @@ def fetch_claude_usage(claude_home="~/.claude", now=None):
     try:
         payload = _get_json("https://api.anthropic.com/api/oauth/usage", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Claude live usage fetch failed:\n%s" % traceback.format_exc())
         return _live_error(e)
     usage = parse_claude_oauth_usage(payload, now=now)
     if usage is not None and warning:
@@ -611,6 +625,7 @@ def _refresh_claude_token(creds_path, oauth):
     try:
         payload = _http_json(request, timeout=30)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Claude token refresh request failed:\n%s" % traceback.format_exc())
         latest = _read_claude_oauth(creds_path)
         if latest and not _claude_token_expired(latest):
             # someone else (the CLI) refreshed first — use theirs
@@ -744,6 +759,7 @@ def _refresh_kimi_token(creds_path, creds):
     try:
         payload = _http_json(request, timeout=30)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Kimi token refresh request failed:\n%s" % traceback.format_exc())
         return None, "token refresh failed: %s" % (getattr(e, "reason", None) or e,)
     access_token = payload.get("access_token")
     if not access_token:
@@ -807,6 +823,7 @@ def fetch_kimi_usage(kimi_home="~/.kimi-code", now=None):
     try:
         payload = _get_json("https://api.kimi.com/coding/v1/me", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Kimi live usage fetch failed:\n%s" % traceback.format_exc())
         return _live_error(e)
     usage = parse_kimi_me(payload)
     if usage is not None and warning:
@@ -873,6 +890,7 @@ def fetch_openrouter_usage(qwen_home="~/.qwen", now=None):
     try:
         payload = _get_json("https://openrouter.ai/api/v1/key", headers)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] OpenRouter live usage fetch failed:\n%s" % traceback.format_exc())
         return _live_error(e)
     return parse_openrouter_key(payload)
 

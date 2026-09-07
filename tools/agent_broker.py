@@ -299,7 +299,7 @@ class _Pty:
                         ctypes.get_last_error(),
                     )
                 )
-        except Exception:
+        except OSError:
             print("[agent_broker] exit watcher failed:\n%s" % traceback.format_exc())
         self._close_pc()
 
@@ -642,6 +642,8 @@ class _ControlServer:
             try:
                 cols, rows = int(parts[1]), int(parts[2])
             except ValueError:
+                print("[agent_broker] RESIZE line parse failed for %r:\n%s"
+                      % (line, traceback.format_exc()))
                 return
             self._pty.resize(cols, rows)
         elif parts[0] == "KILL":
@@ -675,7 +677,8 @@ def _load_launch_file(argv):
         try:
             os.unlink(path)
         except OSError:
-            pass
+            print("[agent_broker] could not remove launch file %s:\n%s"
+                  % (path, traceback.format_exc()))
     env = launch.get("environment") if isinstance(launch, dict) else None
     own_argv = launch.get("broker_argv") if isinstance(launch, dict) else None
     child_argv = launch.get("child_argv") if isinstance(launch, dict) else None

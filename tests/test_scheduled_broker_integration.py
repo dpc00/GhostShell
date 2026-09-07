@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 
 import pytest
@@ -182,8 +183,9 @@ def test_scheduled_broker_detaches_and_reconnects_same_child(tmp_path, monkeypat
     finally:
         try:
             current.explicit_kill()
-        except Exception:
-            pass
+        except OSError:
+            print("[test_scheduled_broker_integration] cleanup explicit_kill failed:\n%s"
+                  % traceback.format_exc())
         _wait_until(
             lambda: not (registry / (pipe + ".json")).exists(),
             timeout=10.0,

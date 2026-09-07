@@ -24,6 +24,7 @@ import glob
 import os
 import sqlite3
 import time
+import traceback
 import urllib.parse
 
 
@@ -31,6 +32,7 @@ def _mtime(path):
     try:
         return os.path.getmtime(path)
     except OSError:
+        print("[history_scan] mtime lookup failed for %s:\n%s" % (path, traceback.format_exc()))
         return 0.0
 
 
@@ -154,6 +156,8 @@ def scan_ollama(localappdata):
     try:
         rows = _read_ollama_chats(db_path)
     except sqlite3.Error:
+        print("[history_scan] Ollama sqlite query failed for %s:\n%s"
+              % (db_path, traceback.format_exc()))
         return []
     sessions = []
     for chat_id, title, created_at in rows:
@@ -193,6 +197,8 @@ def scan_t3(home):
     try:
         rows = _read_t3_threads(db_path)
     except sqlite3.Error:
+        print("[history_scan] T3 sqlite query failed for %s:\n%s"
+              % (db_path, traceback.format_exc()))
         return []
     sessions = []
     for thread_id, title, updated_at, provider_name in rows:
@@ -237,7 +243,8 @@ def scan_all(home=None, localappdata=None, limit=60):
         try:
             sessions.extend(_scan_glob_source(source, base))
         except OSError:
-            pass
+            print("[history_scan] glob source %r scan failed:\n%s"
+                  % (source.get("base"), traceback.format_exc()))
     for base_key, scanner in _CUSTOM_SCANNERS:
         base = bases.get(base_key)
         if not base:
@@ -245,6 +252,7 @@ def scan_all(home=None, localappdata=None, limit=60):
         try:
             sessions.extend(scanner(base))
         except OSError:
-            pass
+            print("[history_scan] custom scanner %s failed:\n%s"
+                  % (scanner.__name__, traceback.format_exc()))
     sessions.sort(key=lambda s: s.get("mtime") or 0.0, reverse=True)
     return sessions[:limit]

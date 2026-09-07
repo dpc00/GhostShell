@@ -23,6 +23,7 @@ import os
 import signal
 import sys
 import time
+import traceback
 
 out = sys.stdout.buffer
 
@@ -33,15 +34,17 @@ def _log(msg):
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-    except Exception:
-        pass
+    except OSError:
+        print("[mock_agent_cli] _log write failed:\n%s" % traceback.format_exc(),
+              file=sys.stderr)
 
 
 def get_size():
     try:
         ts = os.get_terminal_size(sys.stdout.fileno())
         return ts.columns, ts.lines
-    except Exception:
+    except OSError:
+        _log("get_size failed:\n%s" % traceback.format_exc())
         return 80, 24
 
 
@@ -97,7 +100,8 @@ class ReplayAgent:
         while self._running:
             try:
                 ch = sys.stdin.read(1)
-            except Exception:
+            except (OSError, ValueError):
+                _log("stdin.read(1) failed:\n%s" % traceback.format_exc())
                 ch = ""
             if not ch:
                 time.sleep(0.02)
@@ -211,7 +215,8 @@ class MockInkAgent:
         while self._running:
             try:
                 ch = sys.stdin.read(1)
-            except Exception:
+            except (OSError, ValueError):
+                _log("stdin.read(1) failed:\n%s" % traceback.format_exc())
                 ch = ""
             if not ch:
                 time.sleep(0.02)
@@ -342,7 +347,8 @@ class MockAgent:
         while self._running:
             try:
                 ch = sys.stdin.read(1)
-            except Exception:
+            except (OSError, ValueError):
+                _log("stdin.read(1) failed:\n%s" % traceback.format_exc())
                 ch = ""
             if not ch:
                 time.sleep(0.05)
