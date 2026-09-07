@@ -367,5 +367,43 @@ class NearFitDipVsDeliberateScrollTests(unittest.TestCase):
         self.assertEqual(view.vp_writes, [((0.0, 0.0), False)])
 
 
+class PinViewportRestDipOnlyTests(unittest.TestCase):
+    """_pin_viewport_rest_dip_only: the render loop's sibling to
+    _clamp_vp_loop's near_fit fix, for the content_fits branch of
+    AiTerminalRenderCommand._run. Plain _pin_viewport_rest (direction
+    -agnostic, `abs(cur - rest) > 1.0`) is correct for an app-owned TUI
+    (tui_owns_scroll), where any drift really is noise. It was also being
+    used whenever content_fits was true, which snapped back a deliberate
+    forward scroll -- e.g. pushing a short conversation's permission prompt
+    up to read it in full -- on every render (Claude Code's CLI redraws its
+    footer roughly every half-second even while idle), reported live a
+    second time after the near_fit clamp-loop fix (same bug class, sibling
+    code path).
+    """
+
+    def test_deliberate_forward_scroll_is_left_alone(self):
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 200.0), vp=(0.0, 30.0))
+        term = _FakeTerm(auto_follow=True)
+
+        ai_terminal._pin_viewport_rest_dip_only(view, 0.0, term)
+
+        self.assertEqual(view.vp_writes, [])
+        # Anchor tracks the true position, not a `rest` value never returned
+        # to -- otherwise the next render's drift-disengage check compares
+        # against a lie.
+        self.assertEqual(term._last_vp_y, 30.0)
+        self.assertEqual(term._live_anchor_y, 30.0)
+
+    def test_negative_overshoot_is_corrected(self):
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 200.0), vp=(0.0, -20.0))
+        term = _FakeTerm(auto_follow=True)
+
+        ai_terminal._pin_viewport_rest_dip_only(view, 0.0, term)
+
+        self.assertEqual(view.vp_writes, [((0.0, 0.0), False)])
+        self.assertEqual(term._last_vp_y, 0.0)
+        self.assertEqual(term._live_anchor_y, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

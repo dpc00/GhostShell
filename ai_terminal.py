@@ -6941,6 +6941,41 @@ def _pin_viewport_rest(view, rest=None, term=None):
         print("[ai_terminal] pin viewport rest failed:\n%s" % traceback.format_exc())
 
 
+def _pin_viewport_rest_dip_only(view, rest, term):
+    """Like _pin_viewport_rest, but only corrects a NEGATIVE overshoot below
+    rest -- ST's view.show() briefly parking vp[1] below rest (e.g. -20)
+    when content fits the viewport, the same glitch _clamp_vp_loop's
+    near_fit branch guards against. A deliberate forward scroll past rest
+    (e.g. pushing a short conversation's permission prompt up to read it in
+    full) is left alone: unlike a real app-owned TUI (_pin_viewport_rest's
+    other caller, where any drift genuinely is noise to correct), content
+    that merely happens to fit the viewport is not "owned" by anything that
+    requires a fixed rest position. The render loop's content_fits branch
+    used plain _pin_viewport_rest (direction-agnostic) until this was
+    reported live: the same content ("does it fit the viewport") could
+    still be scrolled away from without the user having done anything
+    wrong, and every render (Claude Code's CLI redraws its footer roughly
+    every half-second even while idle) snapped it straight back.
+
+    Unlike _pin_viewport_rest, does not force term._last_vp_y/_live_anchor_y
+    to `rest` when no correction was made -- they track wherever the
+    viewport actually is, so the next render's drift-disengage check
+    doesn't compare against a rest value the viewport was deliberately never
+    returned to.
+    """
+    try:
+        cur = view.viewport_position()[1]
+        if cur < rest - 1.0:
+            _set_viewport(view, (0.0, rest), False)
+            cur = rest
+        if term is not None:
+            term._last_vp_y = cur
+            term._live_anchor_y = cur
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] pin viewport rest (dip-only) failed:\n%s"
+              % traceback.format_exc())
+
+
 def _real_content_height(view):
     """layout height of real terminal content (excludes both host pads).
 
@@ -7971,8 +8006,10 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             last_real = max(0, view.rowcol(view.size())[0] - pad)
             _place_auto_caret(view, term, view.text_point(last_real, 0))
         _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
-        if content_fits or tui_owns_scroll:
+        if tui_owns_scroll:
             _pin_viewport_rest(view, rest, term)
+        elif content_fits:
+            _pin_viewport_rest_dip_only(view, rest, term)
         elif do_follow:
             # Allow Sublime one turn to recompute layout_extent after the
             # full-buffer replace, then correct the live-tail viewport.
