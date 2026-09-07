@@ -32,6 +32,7 @@ import ctypes
 import errno
 import gc
 import json
+import math
 import os
 import queue
 import re
@@ -7118,54 +7119,62 @@ def _scroll_to_bottom(view):
         # direction.
         if term is not None:
             term._vp_anim_gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
+            term._vp_anim_active = False
         _set_viewport(view, (0.0, target), False)
     else:
-        _animate_viewport_scurve(view, term, target)
+        _animate_viewport_iir(view, term, target)
 
 
-_VP_ANIM_LINES_PER_SEC = 1.0  # glide speed target. What this corrects is
-                               # incidental content below the live command
-                               # (statusline/trailing rows), not something a
-                               # user is reading in real time -- per user
-                               # 2026-09-07, several seconds to restore is
-                               # fine, so bias slow over snappy here.
-_VP_ANIM_MIN_MS = 400
-_VP_ANIM_MAX_MS = 4000
+_VP_IIR_TAU_S = 0.8  # time constant: ~63% of the remaining gap closes per
+                      # tau, ~95% after 3*tau (~2.4s here). Content this
+                      # corrects (incidental statusline/trailing rows) isn't
+                      # read in real time, so bias slow over snappy.
+_VP_IIR_TICK_MS = 16
 
 
-def _animate_viewport_scurve(view, term, target):
-    """Ease the viewport to `target` via smoothstep, duration scaled to
-    distance so a multi-line correction glides proportionally longer
-    instead of covering the same ground in a fixed, too-short window (a
-    fixed short duration still reads as a blur/slam over a large gap,
-    confirmed live).
+def _animate_viewport_iir(view, term, target):
+    """Ease the viewport toward `target` with a one-pole IIR (exponential)
+    filter instead of a fixed-duration tween.
 
-    Cancels any in-flight tween on this terminal first so overlapping
-    corrections don't fight each other and produce jitter.
+    Switched from a smoothstep tween (2026-09-07) because that has a
+    "start": restarting it -- which every retarget did -- resets velocity
+    to zero and a fixed elapsed-time clock. During active scrolling this
+    gets retargeted on nearly every render (layout catching up one frame
+    at a time), so the tween kept restarting before ever building any
+    motion -- confirmed live as a stutter of tiny twitches, not a glide
+    (dozens of "ease start" logs, 2.0 -> 1.1 lines, each resetting).
+
+    An IIR has no start state to restart: each tick reads the CURRENT
+    viewport position and the CURRENT target and closes a fixed fraction
+    of whatever gap remains right now. Retargeting mid-flight is just
+    updating the target the next tick reads -- no reset, no discontinuity.
     """
     if term is None:
         _set_viewport(view, (0.0, target), False)
         return
+    term._vp_anim_target = target
+    if getattr(term, "_vp_anim_active", False):
+        return  # already ticking; next tick picks up the updated target
     gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
     term._vp_anim_gen = gen
-    start_y = view.viewport_position()[1]
-    start_t = time.time()
-    lh = view.line_height() or 12.0
-    lines = abs(target - start_y) / lh
-    duration_ms = max(_VP_ANIM_MIN_MS,
-                       min(_VP_ANIM_MAX_MS, lines / _VP_ANIM_LINES_PER_SEC * 1000.0))
+    term._vp_anim_active = True
 
     def _tick():
-        if term is not None and getattr(term, "_vp_anim_gen", None) != gen:
-            return  # superseded by a newer tween
+        if getattr(term, "_vp_anim_gen", None) != gen:
+            return  # superseded (an instant snap cancelled this)
         if view is None or not view.is_valid():
+            term._vp_anim_active = False
             return
-        frac = min(1.0, (time.time() - start_t) * 1000.0 / duration_ms)
-        eased = frac * frac * (3.0 - 2.0 * frac)
-        y = round(start_y + (target - start_y) * eased)
+        cur = view.viewport_position()[1]
+        live_target = term._vp_anim_target
+        gap = live_target - cur
+        if abs(gap) < 1.0:
+            term._vp_anim_active = False
+            return
+        alpha = 1.0 - math.exp(-(_VP_IIR_TICK_MS / 1000.0) / _VP_IIR_TAU_S)
+        y = round(cur + alpha * gap)
         _set_viewport(view, (0.0, y), False)
-        if frac < 1.0:
-            sublime.set_timeout(_tick, 16)
+        sublime.set_timeout(_tick, _VP_IIR_TICK_MS)
 
     _tick()
 
