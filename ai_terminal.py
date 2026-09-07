@@ -7092,91 +7092,20 @@ def _scroll_to_bottom(view):
     gap = target - cur
     if abs(gap) < 1.0:
         return
-    # Only ease BACKWARD corrections (gap < 0: target moved up, above where
-    # the view already sits). text_to_layout() can read stale layout right
-    # after a full-buffer replace (see _post_render_follow), so a hard snap
-    # can slam the viewport to a wrong, too-short target for one frame, then
-    # yank it back next frame once the real value arrives -- that reversal
-    # is the jarring case (confirmed live: line 212 shown, then hidden).
-    #
-    # Forward movement (gap > 0: new output legitimately extends real
-    # content below the current view) must stay instant/unanimated. A
-    # hand-rolled exponential blend on every gap direction (tried first)
-    # made active streaming permanently lag one-plus lines behind --
-    # confirmed live, the tail crept 341/342 instead of showing the newest
-    # line -- because exponential decay never fully closes and has an
-    # abrupt onset besides.
-    #
-    # ST's own animate=True was tried next, but its built-in curve/duration
-    # aren't exposed to the API and read as not-smooth live -- so this
-    # hand-rolls a fixed-duration smoothstep (3t^2-2t^3) tween instead,
-    # which gives a real ease-in/ease-out with a known, bounded end.
-    if gap > 0 or abs(gap) < lh:
-        # Cancel any in-flight tween first: otherwise its next scheduled
-        # tick still fires and drags the viewport back toward its now-stale
-        # target, right after this instant snap -- confirmed live as an
-        # instant jump immediately undone by a slow crawl in the opposite
-        # direction.
-        if term is not None:
-            term._vp_anim_gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
-            term._vp_anim_active = False
-        _set_viewport(view, (0.0, target), False)
-    else:
-        _animate_viewport_iir(view, term, target)
-
-
-_VP_IIR_TAU_S = 0.8  # time constant: ~63% of the remaining gap closes per
-                      # tau, ~95% after 3*tau (~2.4s here). Content this
-                      # corrects (incidental statusline/trailing rows) isn't
-                      # read in real time, so bias slow over snappy.
-_VP_IIR_TICK_MS = 16
-
-
-def _animate_viewport_iir(view, term, target):
-    """Ease the viewport toward `target` with a one-pole IIR (exponential)
-    filter instead of a fixed-duration tween.
-
-    Switched from a smoothstep tween (2026-09-07) because that has a
-    "start": restarting it -- which every retarget did -- resets velocity
-    to zero and a fixed elapsed-time clock. During active scrolling this
-    gets retargeted on nearly every render (layout catching up one frame
-    at a time), so the tween kept restarting before ever building any
-    motion -- confirmed live as a stutter of tiny twitches, not a glide
-    (dozens of "ease start" logs, 2.0 -> 1.1 lines, each resetting).
-
-    An IIR has no start state to restart: each tick reads the CURRENT
-    viewport position and the CURRENT target and closes a fixed fraction
-    of whatever gap remains right now. Retargeting mid-flight is just
-    updating the target the next tick reads -- no reset, no discontinuity.
-    """
-    if term is None:
-        _set_viewport(view, (0.0, target), False)
-        return
-    term._vp_anim_target = target
-    if getattr(term, "_vp_anim_active", False):
-        return  # already ticking; next tick picks up the updated target
-    gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
-    term._vp_anim_gen = gen
-    term._vp_anim_active = True
-
-    def _tick():
-        if getattr(term, "_vp_anim_gen", None) != gen:
-            return  # superseded (an instant snap cancelled this)
-        if view is None or not view.is_valid():
-            term._vp_anim_active = False
-            return
-        cur = view.viewport_position()[1]
-        live_target = term._vp_anim_target
-        gap = live_target - cur
-        if abs(gap) < 1.0:
-            term._vp_anim_active = False
-            return
-        alpha = 1.0 - math.exp(-(_VP_IIR_TICK_MS / 1000.0) / _VP_IIR_TAU_S)
-        y = round(cur + alpha * gap)
-        _set_viewport(view, (0.0, y), False)
-        sublime.set_timeout(_tick, _VP_IIR_TICK_MS)
-
-    _tick()
+    # 2026-09-07: backward corrections (content legitimately shrinking, e.g.
+    # Claude Code's own status footer redrawing shorter) were eased via a
+    # smoothstep tween, then a retargeting IIR filter, to avoid a jarring
+    # snap. Both were reverted the same day: retargeting mid-flight (which
+    # happens on nearly every render during active output, as layout
+    # catches up one frame at a time) produced real, confirmed-live bugs --
+    # a restarting tween that never built motion, then an IIR that could
+    # get stuck with no visible progress for dozens of frames, then a fix
+    # for interrupting scroll-back that didn't resolve the stuck case
+    # either. Simple instant correction has none of these failure modes;
+    # the actual bug that mattered (the last real line being hidden) is
+    # fixed above via the `+ lh` term, independent of whether the
+    # correction here is eased or instant.
+    _set_viewport(view, (0.0, target), False)
 
 
 def _place_auto_caret(view, term, pos):

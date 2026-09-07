@@ -190,7 +190,6 @@
                 "amp"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
                 "NO_ANIMATION": "1"
             }
         },
@@ -225,9 +224,7 @@
                 "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
             ],
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Auggie": {
             // Augment Code's Auggie CLI. Requires OAuth login (opens a
@@ -240,9 +237,7 @@
             "launch_command": [
                 "auggie"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Bash": {
             // Pin Git Bash — bare "bash" resolves to the WSL App Execution
@@ -277,7 +272,6 @@
                 "claude"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
             }
         },
@@ -288,7 +282,6 @@
                 "--chrome"
             ],
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_AI_TERMINAL_SENTINEL": "propagated",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
                 // "OLLAMA_MODEL":"glm-5.2:cloud"
@@ -327,7 +320,6 @@
                 "claude"
             ],
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1",
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -351,7 +343,6 @@
                 "--chrome"
             ],
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1",
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -380,9 +371,7 @@
                 "cline"
             ],
             "mouse_handling": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Cody": {
             // Sourcegraph's Cody CLI. NOT a chat-TUI agent -- confirmed live
@@ -408,9 +397,7 @@
             "launch_command": [
                 "codex"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Codex →⇢⇨ Ollama": {
             // Same native PageUp/PageDown policy as the Codex profile.
@@ -420,7 +407,6 @@
                 "codex"
             ],
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -459,9 +445,7 @@
                 "node",
                 "C:\\Users\\donal\\AppData\\Roaming\\npm\\node_modules\\@continuedev\\cli\\dist\\cn.js"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
             // force_tui_like: true was tried 2026-09-05 to fix the startup-
             // banner-duplication bug (cast ai_2026-09-05_100905_174369) but
             // made things worse -- pinning the viewport assumes the app's
@@ -487,9 +471,7 @@
                 "launch",
                 "dsh"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "GitHub Copilot": {
             // GitHub Copilot CLI (@github/copilot). Confirmed live across 3
@@ -515,9 +497,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Grok Build": {
             "detachable": true,
@@ -547,9 +527,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Grok Build --minimal": {
             "detachable": true,
@@ -579,9 +557,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "jcode": {
             "detachable": true,
@@ -619,9 +595,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Junie": {
             "detachable": true,
@@ -650,9 +624,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Kilo Code": {
             // @kilocode/cli (binary shimmed as `kilocode`; opencode-engine
@@ -674,9 +646,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Kimi": {
             "detachable": true,
@@ -685,9 +655,7 @@
             "launch_command": [
                 "kimi"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Kiro": {
             "detachable": true,
@@ -696,9 +664,7 @@
             "launch_command": [
                 "kiro-cli"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Mimo": {
             "detachable": true,
@@ -723,9 +689,7 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "OpenCode": {
             "detachable": true,
@@ -752,7 +716,6 @@
             "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -774,7 +737,6 @@
             ],
             "page_keys_to_pty": true,
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -797,7 +759,6 @@
             "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
-                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -826,7 +787,6 @@
             ],
             "page_keys_to_pty": true,
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
@@ -847,9 +807,7 @@
             "launch_command": [
                 "pi"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "PowerShell": {
             // Keep the PowerShell process outside Sublime's lifetime so the
@@ -896,9 +854,7 @@
             // default (real GitPush/rclone output across many repos/folders),
             // truncating the start of a run's log out of scrollback.
             "scrollback_history_size": 2000,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
+            "spawn_env": {},
             "wheel_to_pty": false
         },
         "Qwen": {
@@ -933,9 +889,7 @@
                 "qwen"
             ],
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Qwen →⇢⇨ Ollama": {
             "detachable": true,
@@ -945,9 +899,7 @@
                 "qwen"
             ],
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         // Patched clone at ~/src/qwen-code-ctrlc-pr (Ctrl-C exit-warning
         // overflow: keep the status-line row budget so Ink does not
@@ -963,9 +915,7 @@
                 "C:\\Users\\donal\\src\\qwen-code-ctrlc-pr\\packages\\cli\\dist\\index.js"
             ],
             "page_keys_to_pty": true,
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            }
+            "spawn_env": {}
         },
         "Testing Agent": {
             // 2026-08-21: per-profile bisection-gate override, isolated to
@@ -986,9 +936,7 @@
                 "python",
                 "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
             ],
-            "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1"
-            },
+            "spawn_env": {},
             // Experimental tab-X lifecycle: the close is swallowed, this
             // input asks the mock process to exit, and normal PTY EOF closes
             // the tab afterward. Isolated here until live-tested.
@@ -1012,7 +960,6 @@
             // DEC mouse tracking's click/drag behavior that caused that bug.
             "mouse_handling": true,
             "spawn_env": {
-                "AI_TERMINAL_LOG_LINES": "1",
                 "LOG_LEVEL": "DEBUG"
             }
         },
