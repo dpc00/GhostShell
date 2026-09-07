@@ -339,7 +339,7 @@ class _Pty:
             return
         try:
             _k32.WaitForSingleObject(h, _INFINITE)
-        except Exception:
+        except OSError:
             # Losing the wait would park the reader in ReadFile forever, so still
             # close the pseudoconsole and say why the watcher gave up early.
             print("[ai_terminal] exit watcher failed:\n%s" % traceback.format_exc())
@@ -500,6 +500,7 @@ def _read_broker_registry_record(pipe_name):
         with open(_broker_registry_file(pipe_name), "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
+        print("[ai_terminal] read broker registry record failed:\n%s" % traceback.format_exc())
         return None
 
 
@@ -510,6 +511,8 @@ def _pid_is_alive(pid):
                 _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid),
             )
         except (TypeError, ValueError):
+            print("[ai_terminal] pid liveness check: OpenProcess failed:\n%s"
+                  % traceback.format_exc())
             return False
         if not handle:
             return False
@@ -524,6 +527,8 @@ def _pid_is_alive(pid):
         os.kill(int(pid), 0)
         return True
     except (OSError, TypeError, ValueError):
+        print("[ai_terminal] pid liveness check: os.kill probe failed:\n%s"
+              % traceback.format_exc())
         return False
 
 
@@ -555,6 +560,8 @@ def _broker_process_matches(pid, created_at):
     try:
         handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     except (TypeError, ValueError):
+        print("[ai_terminal] broker process match: OpenProcess failed:\n%s"
+              % traceback.format_exc())
         return False
     if not handle:
         return False
@@ -592,6 +599,7 @@ def _registered_brokers(profile_name=None, cwd=None):
     try:
         names = os.listdir(folder)
     except OSError:
+        print("[ai_terminal] registered brokers: listdir failed:\n%s" % traceback.format_exc())
         return []
     wanted_cwd = os.path.normcase(os.path.realpath(cwd)) if cwd else None
     found = []
@@ -617,6 +625,8 @@ def _registered_brokers(profile_name=None, cwd=None):
                 continue
             found.append((os.path.getmtime(path), record))
         except (OSError, TypeError, ValueError):
+            print("[ai_terminal] registered brokers: record %s unreadable:\n%s"
+                  % (name, traceback.format_exc()))
             continue
     found.sort(key=lambda item: item[0], reverse=True)
     return [record for _mtime, record in found]
@@ -624,6 +634,25 @@ def _registered_brokers(profile_name=None, cwd=None):
 
 def _broker_pipe_path(name):
     return "\\\\.\\pipe\\" + name
+
+
+def _pipe_instance_free(pipe_name, timeout_ms=150):
+    """True if the broker's output pipe has no client attached right now.
+
+    A broker being alive (per the on-disk registry) does not mean its pipe
+    is available -- another client (e.g. a Windows Terminal hand-off) may
+    already hold the one connection slot. WaitNamedPipeW succeeds
+    immediately when an instance is free to accept; ERROR_FILE_NOT_FOUND
+    means the pipe doesn't exist yet (broker mid-restart), a transient
+    state treated as "try anyway" like _try_connect above does. Any other
+    outcome means busy. Caller must not run this on the main thread --
+    it can block up to timeout_ms.
+    """
+    if not _PTY_OK or os.name != "nt":
+        return True
+    if _k32.WaitNamedPipeW(_broker_pipe_path(pipe_name), timeout_ms):
+        return True
+    return ctypes.get_last_error() == _ERROR_FILE_NOT_FOUND
 
 
 def _broker_script_path():
@@ -801,11 +830,12 @@ class _BrokerPty:
                     "child_argv": self.argv,
                     "environment": self._env,
                 }, handle)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             try:
                 os.unlink(launch_file)
             except OSError:
-                pass
+                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
+                      % (launch_file, traceback.format_exc()))
             raise
         # Keep every broker option, child argument, and environment value in
         # the one-use launch file; only its randomized path appears in process
@@ -831,17 +861,19 @@ class _BrokerPty:
         )
         try:
             output, error = helper.communicate(payload, timeout=15.0)
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             try:
                 os.unlink(launch_file)
             except OSError:
-                pass
+                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
+                      % (launch_file, traceback.format_exc()))
             raise
         if helper.returncode != 0:
             try:
                 os.unlink(launch_file)
             except OSError:
-                pass
+                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
+                      % (launch_file, traceback.format_exc()))
             raise OSError(
                 "could not launch detachable broker through Task Scheduler: %s"
                 % ((error or output or "unknown WMI launcher error").strip(),)
@@ -854,7 +886,8 @@ class _BrokerPty:
             try:
                 os.unlink(launch_file)
             except OSError:
-                pass
+                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
+                      % (launch_file, traceback.format_exc()))
             raise OSError("invalid scheduled broker-launch response: %r (%s)" % (output, exc))
 
     def read(self, on_data, on_replay_complete=None):
@@ -1152,16 +1185,16 @@ class _PosixPty:
             try:
                 os.kill(self.pid, signal.SIGHUP)
             except OSError:
-                pass
+                print("[ai_terminal] posix pty kill: SIGHUP failed:\n%s" % traceback.format_exc())
             try:
                 os.waitpid(self.pid, os.WNOHANG)
             except OSError:
-                pass
+                print("[ai_terminal] posix pty kill: waitpid failed:\n%s" % traceback.format_exc())
         if self._fd >= 0:
             try:
                 os.close(self._fd)
             except OSError:
-                pass
+                print("[ai_terminal] posix pty kill: close fd failed:\n%s" % traceback.format_exc())
             self._fd = -1
 
 
@@ -1463,6 +1496,8 @@ def _repair_scheme_rules(scheme_data):
         try:
             fg_id, bg_id = int(parts[2]), int(parts[3])
         except ValueError:
+            print("[ai_terminal] color scheme rule scope parse failed for %r:\n%s"
+                  % (sc, traceback.format_exc()))
             continue
         want_fg, want_bg = _scheme_colors_for(fg_id, bg_id)
         changed = False
@@ -1563,8 +1598,9 @@ def _scheme_disk_paths():
         )
         if gs_path not in paths:
             paths.append(gs_path)
-    except Exception:
-        pass
+    except (TypeError, AttributeError):
+        print("[ai_terminal] scheme disk paths: packages_path lookup failed:\n%s"
+              % traceback.format_exc())
     return paths
 
 
@@ -1612,8 +1648,8 @@ def _durable_scheme_backup(scheme_data):
         for old in bak[1:]:
             try:
                 os.remove(old)
-            except Exception:
-                pass
+            except OSError:
+                _color_scheme_log(f"[backup] could not remove old backup {old}:\n{traceback.format_exc()}")
         _color_scheme_log(f"[backup] Wrote {path} ({n} rules)")
     except Exception as e:
         _color_scheme_log(f"[backup] ERROR: {e}")
@@ -1658,8 +1694,9 @@ def _save_color_scheme(scheme_data):
                             f"[save] REFUSED shrink {p}: {prev_n} -> {new_n}"
                         )
                         continue
-                except Exception:
-                    pass
+                except (OSError, ValueError, AttributeError):
+                    print("[ai_terminal] scheme save: shrink-guard read failed for %s:\n%s"
+                          % (p, traceback.format_exc()))
             os.makedirs(os.path.dirname(p), exist_ok=True)
             temp_path = p + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -1734,8 +1771,9 @@ def _flush_pending_rules():
         _SCHEME_PATH = os.path.join(
             sublime.packages_path(), "GhostShell", "ai_terminal.sublime-color-scheme"
         )
-    except Exception:
-        pass
+    except TypeError:
+        print("[ai_terminal] flush pending rules: resolve scheme path failed:\n%s"
+              % traceback.format_exc())
 
     scheme_data = _load_scheme_from_disk()
 
@@ -1807,6 +1845,8 @@ def _scope_for(attr):
         fg, bg = int(parts[2]), int(parts[3])
         style_id = int(parts[4][1:]) if len(parts) > 4 else 0
     except (IndexError, ValueError):
+        print("[ai_terminal] scope name fg/bg parse failed for %r:\n%s"
+              % (scope, traceback.format_exc()))
         return scope
     if scope not in _REGISTERED_SCOPES:
         _register_scope_async(fg, bg, style_id)
@@ -1944,6 +1984,8 @@ def _setting_number(key, default, cast=int, profile_name=None, settings=None):
             return cast(profile[key])
         return cast(s.get(key, default))
     except (TypeError, ValueError):
+        print("[ai_terminal] numeric setting %r cast failed, using default:\n%s"
+              % (key, traceback.format_exc()))
         return default
 
 
@@ -2083,18 +2125,13 @@ def _wheel_to_pty_enabled(term):
 def _page_keys_to_pty(term):
     """Whether PageUp/PageDown should reach the PTY instead of paging the
     Sublime view.
-
-    Default matches today's steal path: native ST page-scroll unless the
-    session is `_tui_like` (real alt-screen -- vim/less/htop own pagination).
-    `force_main_screen` keeps `screen.alt_screen` false even when the child
-    sent DECSET 1049 (ghostty strips those sequences), so a Grok-style TUI
-    is classified as a shell. Native page then moves a one-frame buffer and
-    the key looks dead. Profiles that paint in place and handle their own
-    scrollback (Grok Build) set "page_keys_to_pty": true.
     """
+    val = _profile_bool(_term_profile_name(term), "page_keys_to_pty", None)
+    if val is not None:
+        return val
     if _tui_like(term):
         return True
-    return _profile_bool(_term_profile_name(term), "page_keys_to_pty", False)
+    return False
 
 
 def _home_end_native_enabled(term):
@@ -2136,11 +2173,25 @@ def _tui_like(term):
         return False
     if term.screen.alt_screen:
         return True
-    return (
+    if (
         bool(term.screen.mouse_tracking)
         and _mouse_handling_enabled(term)
         and _pin_viewport_enabled(term)
-    )
+    ):
+        return True
+    # Neither alt-screen nor mouse-tracking DECSET is a real signal -- an
+    # inline app can still fully clear-and-redraw a bounded frame every
+    # keystroke (real \x1b[2J, no DECSET at all: confirmed live for
+    # Continue/cn 2026-09-05, cast ai_2026-09-05_100905_174369 -- host
+    # scroll-to-bottom churn on every printable key raced its own redraw,
+    # duplicating its startup banner in scrollback; a real terminal, which
+    # never autonomously repositions the viewport under an app the way
+    # _scroll_to_bottom does, does not have this failure mode). No DECSET
+    # exists for a profile to opt into automatically, so this is an
+    # explicit escape hatch a profile sets when its own redraw model
+    # (full clear + redraw from a fixed top-left) needs the same
+    # pin-viewport treatment as a real alt-screen/mouse-tracking app.
+    return _profile_bool(_term_profile_name(term), "force_tui_like", False)
 _DEFAULT_LAUNCH_COMMAND = ["cmd.exe"] if os.name == "nt" else [
     os.environ.get("SHELL") or "/bin/bash"
 ]
@@ -2285,6 +2336,8 @@ def _refresh_path_env(env):
     try:
         import winreg
     except ImportError:
+        print("[ai_terminal] refresh PATH from registry: winreg unavailable:\n%s"
+              % traceback.format_exc())
         return env
 
     parts = []
@@ -2299,6 +2352,8 @@ def _refresh_path_env(env):
             with winreg.OpenKey(root, subkey) as key:
                 raw, typ = winreg.QueryValueEx(key, "Path")
         except OSError:
+            print("[ai_terminal] refresh PATH from registry: read %s\\%s failed:\n%s"
+                  % (root, subkey, traceback.format_exc()))
             continue
         if typ == getattr(winreg, "REG_EXPAND_SZ", 2):
             raw = os.path.expandvars(raw)
@@ -2346,7 +2401,8 @@ def _is_wsl_bash_stub(path):
         if os.path.isfile(path) and os.path.getsize(path) == 0:
             return "windowsapps" in low
     except OSError:
-        pass
+        print("[ai_terminal] WSL bash stub check: stat %s failed:\n%s"
+              % (path, traceback.format_exc()))
     return False
 
 
@@ -2582,8 +2638,9 @@ def _stop_usage_refresh():
     if _usage_refresh_token:
         try:
             sublime.cancel_timeout(_usage_refresh_token)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] cancel usage-refresh timer failed:\n%s"
+                  % traceback.format_exc())
         _usage_refresh_token = None
 
 
@@ -2730,7 +2787,7 @@ def _resolve_secret_refs(env):
 
     try:
         store = sublime.load_settings(_SECRETS_SETTINGS_NAME)
-    except Exception:
+    except (RuntimeError, OSError):
         # Without the store every reference below resolves to nothing, which
         # looks exactly like an unconfigured key — say which it was.
         store = None
@@ -3047,14 +3104,15 @@ class _Terminal:
             log_on = _setting_bool(
                 "record_asciicast", True, profile_name=self.profile_name
             )
-        except Exception:
+        except (AttributeError, TypeError):
             log_on = True
         log_on = log_on or _LOG_LINES
         if not log_on:
             try:
                 log_on = bool((self._spawn_env or {}).get("AI_TERMINAL_LOG_LINES"))
-            except Exception:
-                pass
+            except (AttributeError, TypeError):
+                print("[ai_terminal] spawn_env log-lines check failed:\n%s"
+                      % traceback.format_exc())
         if log_on:
             try:
                 argv = self.pty.argv if hasattr(self.pty, "argv") else []
@@ -3071,7 +3129,7 @@ class _Terminal:
                     self.screen.cols, self.screen.rows, argv,
                     filename_stamp=stamp,
                 )
-            except Exception:
+            except (OSError, AttributeError):
                 print("[ai_terminal] cast open failed:\n%s" % traceback.format_exc())
                 self._cast_recorder = CastRecorder(notify=self._notify)
                 self._notify("recording disabled: could not open the .cast file")
@@ -3085,7 +3143,7 @@ class _Terminal:
                         "_reattach" if reattach else "",
                     )
                 self._text_log.open(stamp)
-            except Exception:
+            except (OSError, AttributeError):
                 print("[ai_terminal] text log open failed:\n%s" % traceback.format_exc())
                 self._text_log = SessionTextLog()
                 self._notify("tab text logging disabled: could not open the log file")
@@ -3416,7 +3474,7 @@ class _Terminal:
         vid = self.view.id()
         try:
             _mouse_force_release(self, vid)
-        except Exception:
+        except (KeyError, AttributeError):
             _MOUSE_HOLD.pop(vid, None)
         _MOUSE_LAST_CLICK.pop(vid, None)
         _hover_last_cell.pop(vid, None)
@@ -3553,6 +3611,8 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
                 views = window.views_in_group(int(args["group"]))
                 return views[int(args["index"])]
             except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+                print("[ai_terminal] tab-close target view lookup failed for args %r:\n%s"
+                      % (args, traceback.format_exc()))
                 return None
         return window.active_view()
 
@@ -3660,8 +3720,9 @@ class _LayoutWatcher:
                 mine = own_panel and window.active_panel() == "output." + own_panel
                 if not mine:
                     return
-        except Exception:
-            pass
+        except AttributeError:
+            print("[ai_terminal] layout watcher: active-panel check failed:\n%s"
+                  % traceback.format_exc())
         try:
             size = _measure(view, profile_name=getattr(self.term, "profile_name", None))
         except Exception as e:
@@ -3717,8 +3778,9 @@ class _LayoutWatcher:
         if self._token is not None:
             try:
                 sublime.cancel_timeout(self._token)
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] layout watcher: cancel timer failed:\n%s"
+                      % traceback.format_exc())
             self._token = None
         self._pending = False
 
@@ -3757,8 +3819,9 @@ def _stop_layout_watcher():
     if _WATCHER_TOKEN is not None:
         try:
             sublime.cancel_timeout(_WATCHER_TOKEN)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] stop layout watcher: cancel timer failed:\n%s"
+                  % traceback.format_exc())
         _WATCHER_TOKEN = None
 
 
@@ -3859,7 +3922,7 @@ def _apply_terminal_view_settings(v, profile_name=None):
         else:
             v.settings().set("color_scheme",
                              "Packages/GhostShell/ai_terminal.sublime-color-scheme")
-    except Exception:
+    except (RuntimeError, AttributeError):
         v.settings().set("color_scheme",
                          "Packages/GhostShell/ai_terminal.sublime-color-scheme")
     # Per-profile font override, global fallback, then ST's own current font.
@@ -4134,8 +4197,8 @@ def _clear_view_selection(view, term=None):
         sel = view.sel()
         sel.clear()
         sel.add(sublime.Region(0))
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] clear view selection failed:\n%s" % traceback.format_exc())
     finally:
         if term is not None:
             term._in_render = prev
@@ -4171,7 +4234,9 @@ def _selection_is_spurious(view, term):
     """
     try:
         sels = list(view.sel())
-    except Exception:
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] selection-spurious check: view.sel() failed:\n%s"
+              % traceback.format_exc())
         return False
     if not sels or all(s.empty() for s in sels):
         return False
@@ -4189,7 +4254,9 @@ def _selection_is_spurious(view, term):
         return True
     try:
         text = view.substr(sublime.Region(0, size))
-    except Exception:
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] selection-spurious check: view.substr() failed:\n%s"
+              % traceback.format_exc())
         return True
     return _text_is_pad_only(text)
 
@@ -4216,7 +4283,7 @@ def _selection_paint_blocked(view, term):
         try:
             if any(not s.empty() for s in view.sel()):
                 _clear_view_selection(view, term)
-        except Exception:
+        except (RuntimeError, AttributeError):
             _clear_view_selection(view, term)
         term._st_select_guard_until = 0.0
         term._paint_block_since = None
@@ -4230,7 +4297,7 @@ def _selection_paint_blocked(view, term):
 
     try:
         has_sel = any(not s.empty() for s in view.sel())
-    except Exception:
+    except (RuntimeError, AttributeError):
         has_sel = False
     if has_sel:
         now = time.monotonic()
@@ -4322,8 +4389,8 @@ def _update_debug_status(term):
             "ai_terminal_debug",
             f"ai_terminal: follow={follow} tui={tui} cols×rows={cols}×{rows} vp_y={vp_y:.0f}",
         )
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] update debug status failed:\n%s" % traceback.format_exc())
 
 
 def _do_render(term):
@@ -4512,8 +4579,8 @@ _HOST_CURSOR_PHANTOM = "ai_term_host_cursor"
 def _clear_host_cursor_phantom(view):
     try:
         view.erase_phantoms(_HOST_CURSOR_PHANTOM)
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] clear host-cursor phantom failed:\n%s" % traceback.format_exc())
 
 
 def _apply_color_regions(view, regs):
@@ -4593,7 +4660,9 @@ def _command_line_row_range(term):
     try:
         with term._lock:
             rows, cy, cx = term.screen.render_cells()
-    except Exception:
+    except (AttributeError, RuntimeError):
+        print("[ai_terminal] command-line row range: render_cells failed:\n%s"
+              % traceback.format_exc())
         return None
     n = len(rows)
     if not (0 <= cy < n):
@@ -4633,7 +4702,8 @@ def _live_cursor_row(term):
         with term._lock:
             hist = 0 if term.screen.alt_screen else len(term.screen.history)
             return hist + int(term.screen.y)
-    except Exception:
+    except (AttributeError, TypeError):
+        print("[ai_terminal] live cursor row lookup failed:\n%s" % traceback.format_exc())
         return None
 
 
@@ -4724,7 +4794,9 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             return
         try:
             command, args, _ = view.command_history(0)
-        except Exception:
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] on_modified: command_history() failed:\n%s"
+                  % traceback.format_exc())
             return
         if not command:
             return
@@ -4887,8 +4959,8 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             lh = v.line_height() or 12.0
             if le[1] - ve[1] <= lh and (vp[0] != 0.0 or vp[1] != 0.0):
                 _set_viewport(v, (0.0, 0.0), False)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError, TypeError):
+            print("[ai_terminal] preclamp viewport failed:\n%s" % traceback.format_exc())
 
     def on_hover(self, point, hover_zone):
         self._preclamp_vp()
@@ -4930,7 +5002,8 @@ def _event_to_pty_cell(view, term, event):
     try:
         pt = view.window_to_text((event["x"], event["y"]))
         row, col = view.rowcol(pt)
-    except Exception:
+    except (RuntimeError, AttributeError, TypeError):
+        print("[ai_terminal] mouse event->cell mapping failed:\n%s" % traceback.format_exc())
         return None
     return _view_point_to_cell(
         row,
@@ -5028,8 +5101,8 @@ def _mouse_force_release(term, view_id):
             _encode_mouse(btn, col, row, press=False, sgr=sgr)
         )
         _MOUSE_LAST_CLICK[view_id] = (col, row, time.time())
-    except Exception:
-        pass
+    except (AttributeError, OSError):
+        print("[ai_terminal] mouse force-release failed:\n%s" % traceback.format_exc())
 
 
 def _schedule_mouse_release(view, gen, delay_ms):
@@ -5066,8 +5139,8 @@ def _cancel_copyfirst_tap(term):
         return
     try:
         term._cf_tap = None
-    except Exception:
-        pass
+    except AttributeError:
+        print("[ai_terminal] cancel copy-first tap failed:\n%s" % traceback.format_exc())
 
 
 def _arm_or_cancel_copyfirst_tap(view, term, event):
@@ -5299,7 +5372,7 @@ def _route_mouse_wheel(view, term, amount):
     else:
         try:
             arrow = _get_key_code("up" if see_older else "down")
-        except Exception:
+        except (KeyError, AttributeError):
             arrow = "\x1b[A" if see_older else "\x1b[B"
     parts.append(arrow * n)
     if term.screen.mouse_tracking:
@@ -5316,7 +5389,7 @@ def _route_mouse_wheel(view, term, amount):
         else:
             try:
                 page = _get_key_code("pageup" if see_older else "pagedown")
-            except Exception:
+            except (KeyError, AttributeError):
                 page = "\x1b[5~" if see_older else "\x1b[6~"
         parts.append(page)
     term.send_string("".join(parts))
@@ -5344,8 +5417,8 @@ def _pin_terminal_viewport(view, term):
             _set_viewport(view, (0.0, _host_rest_y(view)), False)
         elif term is not None and getattr(term, "_auto_follow", False):
             _scroll_to_bottom(view)
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] pin terminal viewport failed:\n%s" % traceback.format_exc())
 
 
 class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
@@ -5627,6 +5700,8 @@ def _child_project_dirs(folder, limit=80):
     try:
         names = sorted(os.listdir(folder), key=str.lower)
     except OSError:
+        print("[ai_terminal] child project dirs: listdir %s failed:\n%s"
+              % (folder, traceback.format_exc()))
         return []
     for name in names:
         if name.startswith("."):
@@ -6067,8 +6142,9 @@ def _spawn(window, path, profile=None):
         print("[ai_terminal] PTY start failed:\n%s" % traceback.format_exc())
         try:
             term.kill()
-        except Exception:
-            pass
+        except (OSError, AttributeError, RuntimeError):
+            print("[ai_terminal] cleanup kill after failed PTY start also failed:\n%s"
+                  % traceback.format_exc())
         sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
         view.close()
         return
@@ -6151,13 +6227,14 @@ def _maybe_reattach_broker(view, _confirm=False):
         _BROKER_REATTACH_PENDING.discard(vid)
         _BROKER_REATTACH_CANDIDATE.pop(vid, None)
         _reattach_broker_view(view, pipe_name)
-    except Exception:
+    except (AttributeError, RuntimeError, OSError, KeyError, TypeError):
         try:
             vid = view.id()
             _BROKER_REATTACH_PENDING.discard(vid)
             _BROKER_REATTACH_CANDIDATE.pop(vid, None)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] reattach check: pending-set cleanup failed:\n%s"
+                  % traceback.format_exc())
         print("[ai_terminal] reattach check failed:\n%s" % traceback.format_exc())
 
 
@@ -6228,7 +6305,7 @@ def _reattach_broker_view(view, pipe_name):
         # supplies the active grid; historical colours need not be rebuilt.
         restored_rows_seeded = _seed_restored_history(screen, restored_text)
         parser = _make_parser(screen, _force_main_screen(profile_name))
-    except Exception:
+    except (ValueError, TypeError, IndexError, MemoryError):
         _BROKER_CONNECTING.discard(vid)
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
@@ -6245,7 +6322,7 @@ def _reattach_broker_view(view, pipe_name):
         _BROKER_CONNECTING.discard(vid)
         try:
             usable = bool(view.is_valid() and view.window())
-        except Exception:
+        except (RuntimeError, AttributeError):
             usable = False
         if not usable:
             # The user closed the restored view while the worker connected.
@@ -6280,8 +6357,9 @@ def _reattach_broker_view(view, pipe_name):
             view.settings().set(_VIEW_SETTING, False)
             view.settings().set("ai_terminal_orphaned", True)
             view.set_read_only(False)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] reattach: mark view orphaned failed:\n%s"
+                  % traceback.format_exc())
         print("[ai_terminal] reattach: broker connect failed:\n%s" % trace)
         sublime.status_message(f"Ai terminal: could not reattach ({message})")
 
@@ -6414,7 +6492,7 @@ def _usage_annotation(name, s):
     """
     try:
         label = (_profile_availability_label(name, s) or "").strip()
-    except Exception:
+    except (TypeError, KeyError, AttributeError):
         label = ""
     at = getattr(sys, "_stext_ai_profile_scan_at", None)
     if at:
@@ -6846,8 +6924,8 @@ def _pin_viewport_rest(view, rest=None, term=None):
         if term is not None:
             term._last_vp_y = rest
             term._live_anchor_y = rest
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] pin viewport rest failed:\n%s" % traceback.format_exc())
 
 
 def _real_content_height(view):
@@ -6875,6 +6953,8 @@ def _follow_ignore_trailing_lines(term):
     try:
         return int(n or 0)
     except (TypeError, ValueError):
+        print("[ai_terminal] follow_ignore_trailing_lines cast failed:\n%s"
+              % traceback.format_exc())
         return 0
 
 
@@ -6967,17 +7047,37 @@ def _scroll_to_bottom(view):
     scrolling up to read scrollback. No-op when real content fits the viewport.
     A profile may set follow_ignore_trailing_lines to leave the last N
     rows out of the snap target.
+
+    Root-caused 2026-09-06 (see project_text_jiggling_bug_reported memory):
+    this used to target layout_extent()[1] (via _follow_content_height /
+    _real_content_height), but on a view with scroll_past_end enabled --
+    the default here -- layout_extent() is inflated by that virtual
+    scroll-past-end padding, measured live as exactly one full
+    line_height() taller than the buffer's real last-character position.
+    Comparison against Terminus (a similar ST terminal plugin) confirmed
+    it instead derives its target from view.text_to_layout(view.size()),
+    never from layout_extent() -- avoiding that padding entirely. Same fix
+    applied here, plus Terminus's own deadband (skip re-snapping if
+    already within one line_height of the target): widening
+    _pin_viewport_rest's unrelated 1px/3px tolerance earlier the same day
+    did not help, because that function is for TUI/alt-screen apps only
+    and was never in this code path to begin with.
     """
     ve = view.viewport_extent()
     lh = view.line_height() or 12.0
     top = _host_rest_y(view)
     term = _Terminal.from_id(view.id()) if view is not None else None
-    real_h = _follow_content_height(view, _follow_ignore_trailing_lines(term))
+    drop = _follow_ignore_trailing_lines(term) * lh
+    real_h = max(0.0, view.text_to_layout(view.size())[1] - drop)
     if real_h > ve[1]:
         # Bottom of real content = top pad + real_h
-        _set_viewport(view, (0.0, top + real_h - ve[1]), False)
+        target = top + real_h - ve[1]
     else:
-        _set_viewport(view, (0.0, top), False)
+        target = top
+    cur = view.viewport_position()[1]
+    if abs(cur - target) < lh:
+        return
+    _set_viewport(view, (0.0, target), False)
 
 
 def _place_auto_caret(view, term, pos):
@@ -7024,8 +7124,8 @@ def _post_render_follow(term):
         _scroll_to_bottom(view)
         term._last_vp_y = view.viewport_position()[1]
         term._live_anchor_y = term._last_vp_y
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] post-render follow failed:\n%s" % traceback.format_exc())
 
 
 class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
@@ -7075,8 +7175,10 @@ class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
     """Move the live terminal between a normal tab and the bottom output
     panel (like Sublime's own Find/Console), keeping the same PTY running.
 
-    Bound to ctrl+alt+p inside an Ai terminal view. No menu/palette entry --
-    the command only makes sense from inside the terminal it targets.
+    Bound to ctrl+alt+m inside an Ai terminal view. Also in the command
+    palette ("Ai Terminal: Toggle Tab ⇄ Panel") -- is_enabled() below greys
+    it out when the active view isn't a live terminal, same as any other
+    context-dependent palette entry.
     """
 
     def is_enabled(self):
@@ -7256,6 +7358,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                     f"close it and open a new terminal"
                 )
             return
+
         if not term.pty.is_alive():
             print(
                 f"[ai_terminal] keypress dropped: PTY dead for "
@@ -7431,7 +7534,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         ghostty_result = parser.encode_key(
                             key, ctrl=ctrl, alt=alt, shift=shift
                         )
-                    except Exception:
+                    except (RuntimeError, ValueError, TypeError, OSError):
                         ghostty_result = None
 
                 if ghostty_result is not None:
@@ -7516,8 +7619,9 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                             _set_viewport(self.view, (0.0, rest), False)
                         term._last_vp_y = rest
                         term._live_anchor_y = rest
-                    except Exception:
-                        pass
+                    except (RuntimeError, AttributeError):
+                        print("[ai_terminal] keypress re-pin viewport failed:\n%s"
+                              % traceback.format_exc())
                 elif not was_following:
                     _scroll_to_bottom(self.view)
                     term._last_vp_y = self.view.viewport_position()[1]
@@ -7602,13 +7706,15 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         if term is not None and _selection_paint_blocked(view, term):
             try:
                 term.screen.dirty = True
-            except Exception:
-                pass
+            except AttributeError:
+                print("[ai_terminal] render: mark screen dirty failed:\n%s"
+                      % traceback.format_exc())
             try:
                 term._render_pending = False
                 _schedule_render(term)
-            except Exception:
-                pass
+            except (AttributeError, RuntimeError):
+                print("[ai_terminal] render: re-arm after blocked paint failed:\n%s"
+                      % traceback.format_exc())
             return
 
         patched = False
@@ -7643,8 +7749,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
 
         try:
             _record_render_history(view.id(), patched, diffs if patched else [], cur, text)
-        except Exception:
-            pass
+        except (TypeError, IndexError, RuntimeError, AttributeError):
+            print("[ai_terminal] record render history failed:\n%s" % traceback.format_exc())
 
         vp = _compensate_trim_scroll(view, term, vp)
 
@@ -7745,7 +7851,7 @@ def _revive_terminal_client(term, window):
         view_is_usable = bool(old_view and old_view.is_valid() and old_view.window())
         if view_is_usable:
             view_name = old_view.name()
-    except Exception:
+    except (RuntimeError, AttributeError):
         view_is_usable = False
 
     with _term_lock():
@@ -7802,23 +7908,10 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
         if term is None or not _is_broker_pty(term.pty):
             sublime.status_message("Ai terminal: this tab has no detachable session")
             return
-        pty = term.pty
-        pipe_name = pty.pipe_name
 
-        wt_exe = _windows_terminal_exe()
-        if not wt_exe:
-            sublime.error_message(
-                "Ai Terminal: Windows Terminal (wt.exe) was not found on PATH. "
-                "Set the 'windows_terminal_exe' setting if it is installed "
-                "somewhere auto-detect cannot see."
-            )
-            return
-        python_exe = _broker_python_exe()
-        if not python_exe:
-            sublime.error_message(
-                "Ai Terminal: no python.exe found on PATH to run the relay "
-                "script. Set the 'broker_python' setting."
-            )
+        wt_exe, python_exe, error = _wt_handoff_prereqs()
+        if error:
+            sublime.error_message(error)
             return
 
         if not sublime.ok_cancel_dialog(
@@ -7830,23 +7923,10 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
         ):
             return
 
-        try:
-            subprocess.Popen(
-                [wt_exe, python_exe, _recover_console_script_path(),
-                 "--pipe-name", pipe_name],
-            )
-        except OSError as exc:
-            sublime.error_message(
-                f"Ai Terminal: failed to launch Windows Terminal: {exc}"
-            )
+        pipe_name, error = _handoff_term_to_windows_terminal(term, wt_exe, python_exe)
+        if error:
+            sublime.error_message(error)
             return
-
-        # Must be set before kill(): kill() closes this tab's read handle
-        # via CancelIoEx, which makes the reader thread's read() return
-        # exactly the way a real child death does -- this is the only thing
-        # that tells _read_loop and on_close this wasn't one.
-        term._expected_termination_reason = "handoff"
-        pty.kill()
         sublime.status_message(
             f"Ai terminal: handed off {pipe_name} to Windows Terminal"
         )
@@ -7857,6 +7937,113 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
 
     def is_visible(self):
         return self.is_enabled()
+
+
+def _wt_handoff_prereqs():
+    """Resolve (wt_exe, python_exe, error_message_or_None) once, shared by
+    the single-tab and detach-all-to-Windows-Terminal commands."""
+    wt_exe = _windows_terminal_exe()
+    if not wt_exe:
+        return None, None, (
+            "Ai Terminal: Windows Terminal (wt.exe) was not found on PATH. "
+            "Set the 'windows_terminal_exe' setting if it is installed "
+            "somewhere auto-detect cannot see."
+        )
+    python_exe = _broker_python_exe()
+    if not python_exe:
+        return None, None, (
+            "Ai Terminal: no python.exe found on PATH to run the relay "
+            "script. Set the 'broker_python' setting."
+        )
+    return wt_exe, python_exe, None
+
+
+def _handoff_term_to_windows_terminal(term, wt_exe, python_exe):
+    """Launch a WT window relaying `term`'s broker pipe, then detach this
+    tab from it. Returns (pipe_name, error_message_or_None).
+
+    Only one client (this tab, or WT's relay) can hold a broker's pipe at
+    a time, so this is a handoff, not a second view -- the tab detaches
+    (same state as a frozen tab) the moment Windows Terminal connects.
+    """
+    pty = term.pty
+    pipe_name = pty.pipe_name
+    try:
+        subprocess.Popen(
+            [wt_exe, python_exe, _recover_console_script_path(),
+             "--pipe-name", pipe_name],
+        )
+    except OSError as exc:
+        print("[ai_terminal] Windows Terminal handoff launch failed:\n%s"
+              % traceback.format_exc())
+        return pipe_name, f"Ai Terminal: failed to launch Windows Terminal: {exc}"
+
+    # Must be set before kill(): kill() closes this tab's read handle via
+    # CancelIoEx, which makes the reader thread's read() return exactly the
+    # way a real child death does -- this is the only thing that tells
+    # _read_loop and on_close this wasn't one.
+    term._expected_termination_reason = "handoff"
+    pty.kill()
+    return pipe_name, None
+
+
+class AiTerminalDetachAllToWindowsTerminalCommand(sublime_plugin.ApplicationCommand):
+    """Hand off every detachable session, in every window, to its own
+    Windows Terminal window in one shot.
+
+    A precaution for before an intentionally risky edit -- e.g. saving
+    changes to sublime-mcp's own plugin package, which can trigger
+    Sublime's plugin auto-reload and, in the worst case seen live
+    (2026-09-05), wedge Sublime Text itself with no in-app recovery
+    possible at all. Getting every live agent session out to a real OS
+    window *before* that happens means a hung/killed Sublime costs you
+    nothing -- the sessions were never inside it to begin with. Bring each
+    one back into Sublime afterward with 'Recover Session...' (one at a
+    time; a broker's pipe accepts only one connected client, so a session
+    still held by its WT window can't also be reattached in Sublime).
+    """
+
+    def run(self):
+        with _term_lock():
+            terms = list(_term_registry().values())
+        terms = [t for t in terms if _is_broker_pty(t.pty)]
+        if not terms:
+            sublime.status_message("Ai terminal: no detachable sessions to hand off")
+            return
+
+        wt_exe, python_exe, error = _wt_handoff_prereqs()
+        if error:
+            sublime.error_message(error)
+            return
+
+        noun = "session" if len(terms) == 1 else "sessions"
+        if not sublime.ok_cancel_dialog(
+            f"This will open {len(terms)} Windows Terminal {noun}, one per "
+            "live tab, and detach all of them from Sublime. Each agent "
+            "keeps running either way; use 'Recover Session...' on each "
+            "tab afterward to bring it back into Sublime.",
+            "Detach All to Windows Terminal",
+        ):
+            return
+
+        handed_off, failed = 0, []
+        for term in terms:
+            pipe_name, error = _handoff_term_to_windows_terminal(term, wt_exe, python_exe)
+            if error:
+                failed.append(pipe_name)
+                print(f"[ai_terminal] detach-all: {error}")
+            else:
+                handed_off += 1
+
+        if failed:
+            sublime.error_message(
+                f"Ai Terminal: handed off {handed_off} session(s); failed to "
+                f"launch Windows Terminal for {len(failed)}: {', '.join(failed)}"
+            )
+        else:
+            sublime.status_message(
+                f"Ai terminal: handed off {handed_off} session(s) to Windows Terminal"
+            )
 
 
 def _tab_menu_term(window, group, index):
@@ -8011,29 +8198,29 @@ def _sublime_view_info_lines(view):
     lines = []
     try:
         lines.append("View ID: %s" % view.id())
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] view info: view.id() failed:\n%s" % traceback.format_exc())
     try:
         lines.append("Buffer ID: %s" % view.buffer_id())
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] view info: buffer_id() failed:\n%s" % traceback.format_exc())
     try:
         sheet = view.sheet()
         if sheet is not None:
             lines.append("Sheet ID: %s" % sheet.id())
-    except Exception:
-        pass
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] view info: sheet() failed:\n%s" % traceback.format_exc())
     window = view.window()
     if window is not None:
         try:
             lines.append("Window ID: %s" % window.id())
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] view info: window.id() failed:\n%s" % traceback.format_exc())
         try:
             group, index = window.get_view_index(view)
             lines.append("Group/Index: %d/%d" % (group, index))
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError, TypeError):
+            print("[ai_terminal] view info: get_view_index() failed:\n%s" % traceback.format_exc())
     return lines
 
 
@@ -8195,7 +8382,9 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                 ):
                     terms.append(obj)
                     seen.add(id(obj))
-            except Exception:
+            except (AttributeError, RuntimeError, ReferenceError):
+                print("[ai_terminal] gc scan for stale terminals: skipped one object:\n%s"
+                      % traceback.format_exc())
                 continue
         return terms
 
@@ -8256,6 +8445,13 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             except Exception as exc:
                 if error is None:
                     error = str(exc)
+        # Off the main thread (WaitNamedPipeW can block up to ~150ms each):
+        # a broker being alive doesn't mean its pipe is free -- something
+        # else (a WT hand-off) may already hold the one connection slot.
+        # Confirmed live 2026-09-06: this command listed such a session as
+        # a plain "orphaned broker" with no indication it was still busy.
+        for broker in brokers:
+            broker["pipe_free"] = _pipe_instance_free(broker["pipe_name"])
         sublime.set_timeout(
             lambda: self._show_choices(terms, brokers, error), 0
         )
@@ -8267,7 +8463,9 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             view = getattr(term, "view", None)
             try:
                 return bool(view and view.is_valid() and view.window())
-            except Exception:
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] recover session: view usability check failed:\n%s"
+                      % traceback.format_exc())
                 return False
 
         terms_by_pipe = {
@@ -8312,10 +8510,13 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             view = getattr(term, "view", None) if term is not None else None
             try:
                 name = view.name() if view is not None and view.is_valid() else None
-            except Exception:
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] recover session: view.name() failed:\n%s"
+                      % traceback.format_exc())
                 name = None
+            pipe_free = broker.get("pipe_free", True) if broker else True
             if term is None:
-                state = "orphaned broker"
+                state = "orphaned broker" if pipe_free else "busy — close its other window first"
             elif view is active:
                 state = "active tab"
             else:
@@ -8336,8 +8537,15 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             pipe_name, term, broker = sessions[index]
             if term is not None:
                 self._reattach(term)
-            else:
-                self._attach_orphan(pipe_name, broker or {})
+                return
+            if broker and not broker.get("pipe_free", True):
+                sublime.error_message(
+                    "Ai Terminal: {} is still held by another client "
+                    "(e.g. a Windows Terminal hand-off) -- close that "
+                    "window first, then Recover Session again.".format(pipe_name)
+                )
+                return
+            self._attach_orphan(pipe_name, broker or {})
 
         self.window.show_quick_panel(rows, _picked)
 
@@ -8499,7 +8707,9 @@ def _hover_st_hwnd():
         if buf.value != "PX_WINDOW_CLASS":
             return None
         return hwnd
-    except Exception:
+    except (OSError, AttributeError):
+        print("[ai_terminal] hover: foreground-window lookup failed:\n%s"
+              % traceback.format_exc())
         return None
 
 
@@ -8529,7 +8739,9 @@ def _hover_poll_tick():
     try:
         text_pt = view.window_to_text((client.x, client.y))
         row, col = view.rowcol(text_pt)
-    except Exception:
+    except (RuntimeError, AttributeError, TypeError):
+        print("[ai_terminal] hover: point-to-text lookup failed:\n%s"
+              % traceback.format_exc())
         return
     cell = _view_point_to_cell(
         row, col,
@@ -8631,14 +8843,17 @@ def _clamp_vp_loop():
             # pure pan with no PTY traffic — matches empty wheel casts.)
             try:
                 v.settings().set("scroll_past_end", True)
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] clamp-vp: scroll_past_end set failed:\n%s"
+                      % traceback.format_exc())
             try:
                 vp = v.viewport_position()
                 rest = _host_rest_y(v)
                 dy_rest = float(vp[1]) - rest
                 dx = float(vp[0])
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
+                print("[ai_terminal] clamp-vp: viewport read failed:\n%s"
+                      % traceback.format_exc())
                 continue
 
             tui_like = _tui_like(term)
@@ -8648,7 +8863,9 @@ def _clamp_vp_loop():
                 lh = v.line_height() or 12.0
                 # Near-fit relative to real content (pads always add height).
                 near_fit = _real_content_height(v) <= ve[1] + lh * 2
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
+                print("[ai_terminal] clamp-vp: layout measurement failed:\n%s"
+                      % traceback.format_exc())
                 near_fit = False
                 lh = 12.0
 
@@ -8769,15 +8986,17 @@ def plugin_loaded():
     if _clamp_token:
         try:
             sublime.cancel_timeout(_clamp_token)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] plugin_loaded: cancel clamp timer failed:\n%s"
+                  % traceback.format_exc())
     _clamp_token = sublime.set_timeout(_clamp_vp_loop, 8)
     global _hover_poll_token
     if _hover_poll_token:
         try:
             sublime.cancel_timeout(_hover_poll_token)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] plugin_loaded: cancel hover timer failed:\n%s"
+                  % traceback.format_exc())
     _hover_poll_token = sublime.set_timeout(_hover_poll_loop, _HOVER_POLL_MS)
     _start_layout_watcher()
     _ensure_usage_scanner()
@@ -8804,19 +9023,22 @@ def plugin_unloaded():
     if _settings is not None:
         try:
             _settings.clear_on_change("ai_terminal")
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] plugin_unloaded: clear_on_change failed:\n%s"
+                  % traceback.format_exc())
     if _clamp_token:
         try:
             sublime.cancel_timeout(_clamp_token)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] plugin_unloaded: cancel clamp timer failed:\n%s"
+                  % traceback.format_exc())
         _clamp_token = None
     if _hover_poll_token:
         try:
             sublime.cancel_timeout(_hover_poll_token)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError):
+            print("[ai_terminal] plugin_unloaded: cancel hover timer failed:\n%s"
+                  % traceback.format_exc())
         _hover_poll_token = None
     _stop_layout_watcher()
     _stop_usage_refresh()

@@ -6,6 +6,7 @@ where the parser/decoder pipeline itself is under suspicion.
 """
 import os
 import threading
+import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private
 
@@ -19,5 +20,5 @@ def debug_log(data):
         with open_private(os.path.join(DEBUG_PATH, "raw.log"), "ab") as f:
             with _debug_lock:
                 f.write(data)
-    except Exception:
-        pass
+    except OSError:
+        print("[ai_terminal] raw debug_log write failed:\n%s" % traceback.format_exc())

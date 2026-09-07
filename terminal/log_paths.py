@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+import traceback
 
 LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))
 DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
@@ -38,8 +39,10 @@ def append_log_line(filename, message):
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
             t_name = threading.current_thread().name
             f.write(f"[{ts}] [{t_name}] {message}\n")
-    except Exception:
-        pass
+    except OSError:
+        # Can't write to our own log file -- fall back to stdout so the
+        # failure is still visible instead of silently vanishing.
+        print("[ai_terminal] append_log_line failed:\n%s" % traceback.format_exc())
 
 
 _SECRET_NAME = r"[A-Za-z0-9_\-]*(?:key|token|secret|password)[A-Za-z0-9_\-]*"

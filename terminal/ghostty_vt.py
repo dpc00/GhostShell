@@ -21,6 +21,7 @@ import ctypes
 import hashlib
 import os
 import tempfile
+import traceback
 import urllib.error
 import urllib.request
 
@@ -53,6 +54,8 @@ def libghostty_version(lib):
     try:
         build_info = lib.ghostty_build_info
     except AttributeError:
+        print("[ghostty_vt] libghostty_version: ghostty_build_info missing:\n%s"
+              % traceback.format_exc())
         return None
     build_info.argtypes = [ctypes.c_int, ctypes.c_void_p]
     build_info.restype = ctypes.c_int
@@ -83,6 +86,8 @@ def dll_fingerprint(path):
             "mtime": st.st_mtime,
         }
     except OSError:
+        print("[ghostty_vt] dll_fingerprint: could not read %s:\n%s"
+              % (path, traceback.format_exc()))
         return None
 
 
@@ -108,7 +113,8 @@ def ensure_dll(path=DEFAULT_DLL_PATH, url=RELEASE_DLL_URL, expected_sha256=EXPEC
             if _sha256_file(path) == expected_sha256:
                 return path
         except OSError:
-            pass
+            print("[ghostty_vt] ensure_dll: checksum check of existing %s failed:\n%s"
+                  % (path, traceback.format_exc()))
     dest_dir = os.path.dirname(path)
     os.makedirs(dest_dir, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=dest_dir, suffix=".dll.download")
@@ -130,7 +136,8 @@ def ensure_dll(path=DEFAULT_DLL_PATH, url=RELEASE_DLL_URL, expected_sha256=EXPEC
         try:
             os.remove(tmp_path)
         except OSError:
-            pass
+            print("[ghostty_vt] ensure_dll: could not remove temp download %s:\n%s"
+                  % (tmp_path, traceback.format_exc()))
         raise
     return path
 

@@ -11,6 +11,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private, redact_secrets
 
@@ -74,17 +75,20 @@ class CastRecorder:
             # replay event; otherwise an external observer can briefly see a
             # zero-byte reattach file while that first event is being encoded.
             os.fsync(handle.fileno())
-        except Exception:
+        except (OSError, TypeError, ValueError):
+            print("[ai_terminal] cast open failed:\n%s" % traceback.format_exc())
             if handle is not None:
                 try:
                     handle.close()
-                except Exception:
-                    pass
+                except OSError:
+                    print("[ai_terminal] cast open cleanup: close failed:\n%s"
+                          % traceback.format_exc())
             try:
                 if os.path.exists(path) and os.path.getsize(path) == 0:
                     os.remove(path)
-            except Exception:
-                pass
+            except OSError:
+                print("[ai_terminal] cast open cleanup: remove failed:\n%s"
+                      % traceback.format_exc())
             raise
         work_queue = queue.Queue()
         writer = threading.Thread(
@@ -128,8 +132,9 @@ class CastRecorder:
                 print(f"[ai_terminal] cast write failed, recording stopped: {failed}")
                 try:
                     handle.close()
-                except Exception:
-                    pass
+                except OSError:
+                    print("[ai_terminal] cast write-loop cleanup: close failed:\n%s"
+                          % traceback.format_exc())
                 with self._lock:
                     if self.file is handle:
                         self.file = None
@@ -173,8 +178,9 @@ class CastRecorder:
             try:
                 if self.file is handle:
                     handle.close()
-            except Exception:
-                pass
+            except OSError:
+                print("[ai_terminal] cast close: handle.close() failed:\n%s"
+                      % traceback.format_exc())
             if self.file is handle:
                 self.file = None
             self._writer = None

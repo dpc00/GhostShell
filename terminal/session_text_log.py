@@ -7,6 +7,7 @@ spinner frame, and status-line redraw that the user only saw temporarily.
 """
 import os
 import threading
+import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private
 
@@ -96,29 +97,35 @@ class SessionTextLog:
                     self.file = open_private(
                         path, "a", encoding="utf-8", newline="\n"
                     )
-            except Exception:
+            except OSError:
+                print("[ai_terminal] session text log: snapshot write failed:\n%s"
+                      % traceback.format_exc())
                 if replacement is not None:
                     try:
                         replacement.close()
-                    except Exception:
-                        pass
+                    except OSError:
+                        print("[ai_terminal] session text log cleanup: "
+                              "replacement.close() failed:\n%s" % traceback.format_exc())
                 if fallback is not None:
                     try:
                         fallback.close()
-                    except Exception:
-                        pass
+                    except OSError:
+                        print("[ai_terminal] session text log cleanup: "
+                              "fallback.close() failed:\n%s" % traceback.format_exc())
                 try:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                except Exception:
-                    pass
+                except OSError:
+                    print("[ai_terminal] session text log cleanup: "
+                          "remove temp_path failed:\n%s" % traceback.format_exc())
                 if self.file is None:
                     try:
                         self.file = open_private(
                             path, "a", encoding="utf-8", newline="\n"
                         )
-                    except Exception:
-                        pass
+                    except OSError:
+                        print("[ai_terminal] session text log: reopen after "
+                              "failure also failed:\n%s" % traceback.format_exc())
                 raise
             self._prev = present
             self._prev_trailing_newline = trailing_newline
@@ -136,8 +143,9 @@ class SessionTextLog:
                 return
             try:
                 self.file.close()
-            except Exception:
-                pass
+            except OSError:
+                print("[ai_terminal] session text log: close failed:\n%s"
+                      % traceback.format_exc())
             self.file = None
             self._path = None
             self._prev = []

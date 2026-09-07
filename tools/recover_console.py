@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from ctypes import POINTER, Structure, byref, c_char, c_void_p
 from ctypes.wintypes import BOOL, DWORD, FILETIME, HANDLE, LPCWSTR, SHORT, WORD
 
@@ -44,6 +45,7 @@ _STD_OUTPUT_HANDLE = -11
 _ENABLE_PROCESSED_INPUT = 0x0001
 _ENABLE_LINE_INPUT = 0x0002
 _ENABLE_ECHO_INPUT = 0x0004
+_ENABLE_MOUSE_INPUT = 0x0010
 _ENABLE_EXTENDED_FLAGS = 0x0080
 _ENABLE_QUICK_EDIT_MODE = 0x0040
 _ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
@@ -117,6 +119,8 @@ def _pid_is_alive(pid):
             _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
         )
     except (TypeError, ValueError):
+        print("[attach] pid liveness check: OpenProcess failed:\n%s" % traceback.format_exc(),
+              file=sys.stderr)
         return False
     if not handle:
         return False
@@ -153,6 +157,8 @@ def _broker_process_matches(pid, created_at):
     try:
         handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     except (TypeError, ValueError):
+        print("[attach] broker process match: OpenProcess failed:\n%s" % traceback.format_exc(),
+              file=sys.stderr)
         return False
     if not handle:
         return False
@@ -191,6 +197,8 @@ def find_sessions():
     try:
         names = os.listdir(folder)
     except OSError:
+        print("[attach] find_sessions: listdir %s failed:\n%s" % (folder, traceback.format_exc()),
+              file=sys.stderr)
         return []
     sessions = []
     for name in names:
@@ -201,6 +209,8 @@ def find_sessions():
             with open(path, "r", encoding="utf-8") as handle:
                 record = json.load(handle)
         except (OSError, ValueError):
+            print("[attach] find_sessions: record %s unreadable:\n%s"
+                  % (name, traceback.format_exc()), file=sys.stderr)
             continue
         pipe_name = record.get("pipe_name")
         if not pipe_name or pipe_name != name[:-5]:
@@ -301,13 +311,22 @@ def _enable_raw_vt(h_in, h_out):
     # golang.org/x/term makeRaw on Windows, plus Microsoft's VT pairing:
     # disable line/echo/processed so ReadFile returns keys immediately and
     # Ctrl+C is a byte, not a console abort. ENABLE_ECHO_INPUT is what drew
-    # the dark-gray local echo on top of Grok's TUI.
+    # the dark-gray local echo on top of Grok's TUI. ENABLE_MOUSE_INPUT must
+    # also be cleared here -- disabling ENABLE_QUICK_EDIT_MODE (required
+    # above) without also disabling this turns on real mouse-move event
+    # reporting; with ENABLE_VIRTUAL_TERMINAL_INPUT set, conhost/Windows
+    # Terminal encodes every mouse move as a VT escape sequence and this
+    # relay forwards it straight to the child's stdin as if typed. Confirmed
+    # live 2026-09-05: Continue (cn), which never requested DECSET mouse
+    # tracking and doesn't parse it, received raw mouse-move escapes as
+    # literal keystrokes in its own command line.
     new_in = in_mode.value
     new_in &= ~(
         _ENABLE_LINE_INPUT
         | _ENABLE_ECHO_INPUT
         | _ENABLE_PROCESSED_INPUT
         | _ENABLE_QUICK_EDIT_MODE
+        | _ENABLE_MOUSE_INPUT
     )
     new_in |= _ENABLE_EXTENDED_FLAGS | _ENABLE_VIRTUAL_TERMINAL_INPUT
     new_out = (

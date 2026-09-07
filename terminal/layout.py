@@ -1,5 +1,7 @@
 """Viewport-measure helpers. Pure Python — no Sublime imports."""
 
+import traceback
+
 
 def accepted_cols(last_cols, measured_cols):
     """Return the column count the PTY should use.
@@ -51,6 +53,8 @@ def follow_line_count(total_lines, ignore_trailing=0):
         n = int(total_lines)
         drop = int(ignore_trailing)
     except (TypeError, ValueError):
+        print("[layout] follow_line_count cast failed (total_lines=%r, ignore_trailing=%r):\n%s"
+              % (total_lines, ignore_trailing, traceback.format_exc()))
         return 0
     if drop <= 0:
         return max(0, n)
