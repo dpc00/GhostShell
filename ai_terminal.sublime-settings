@@ -54,13 +54,17 @@
     // color-scheme logging entirely. Changes take effect after plugin reload.
     "color_scheme_log_path": "~/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log",
     // Files whose content is appended to the system prompt on every bridge
-    // startup (each read and prepended with its basename as a markdown
-    // header, then joined with '---'). Not read by anything in this repo --
-    // consumed by an external "bridge" process some users run alongside
-    // GhostShell. Add your own file paths here if you use one; safe to leave
-    // empty otherwise. Example shape:
-    //   "context_files": ["C:\\path\\to\\agents.md", "C:\\path\\to\\router.md"]
-    "context_files": [],
+    // startup. Each is read and prepended with its basename as a markdown
+    // header, then joined with '---'. This is how the AI gets its working
+    // context: agents.md (the lobby), router.md (project map), and the
+    // project's CLAUDE.md (project-specific rules). Edit this list to add
+    // or remove context. Restart the bridge to pick up changes.
+    "context_files": [
+        // "C:\\Users\\donal\\agents.md",
+        // "C:\\Users\\donal\\router.md",
+        // "C:\\Users\\donal\\projects\\SText\\agents.md",
+        // "C:\\Users\\donal\\projects\\SText\\CLAUDE.md"
+    ],
     // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
     // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
     // Off by default (extra text in every terminal tab's status bar
@@ -68,6 +72,19 @@
     "debug_status_bar_enabled": false,
     // The default profile to run if no profile name is explicitly requested
     "default_profile": "Claude",
+    // Every terminal survives independently of Sublime (see
+    // docs/DETACHABLE_SESSIONS.md) and is reachable through Recover Session
+    // and Open in Windows Terminal -- not just profiles that opt in by hand.
+    // A profile can set "detachable": false to opt a specific one out (e.g. a
+    // throwaway shell not worth a background broker process for). RESTORED
+    // 2026-09-06: this key was missing from the last live copy of this file,
+    // which silently made every profile without its own explicit
+    // "detachable": true non-detachable (ai_terminal.py defaults false when
+    // this top-level key is absent) -- affected Antigravity, Bash, Claude
+    // --chrome, Claude → Cloud, Claude →⇢⇨ Ollama, Claude →⇢⇨ Ollama --chrome,
+    // Cody, Codex →⇢⇨ Ollama, Dos Console, dsh, Pybackup Go TUI. See
+    // docs/DETACHABLE_SESSIONS.md.
+    "detachable": true,
     // Mouse drag vs text selection when a TUI enables xterm mouse tracking:
     //   true  = mouse-first: plain drag → PTY (Grok scrollbar/UI); Shift/Ctrl-drag → ST select
     //   false = copy-first: drags → ST select (copy between agent tabs). Short *taps* and
@@ -147,13 +164,6 @@
     // instead of flipping this globally. Live: takes effect on the next
     // title change, no reload needed.
     "osc_title_updates_tab": false,
-    // Every terminal survives independently of Sublime (see
-    // docs/DETACHABLE_SESSIONS.md) and is reachable through Recover Session
-    // and Open in Windows Terminal -- not just profiles that opt in by hand.
-    // A profile can set "detachable": false to
-    // opt a specific one out (e.g. a throwaway shell not worth a background
-    // broker process for). See docs/DETACHABLE_SESSIONS.md.
-    "detachable": true,
     // Every configured profile is eligible when its launch executable exists.
     // ai_terminal learns current quota state from real terminal output and grays
     // a profile after a provider reports exhaustion. It never probes a provider,
@@ -161,29 +171,75 @@
     // Configured terminal/shell profiles for SText.
     // This allows SText to work as a multi-console terminal launcher.
     "profiles": {
+        "Amp": {
+            // Sourcegraph's Amp CLI. Requires login before showing any
+            // interactive session -- declining exits the process entirely
+            // (confirmed live 2026-09-04, cast
+            // ai_2026-09-04_171108_819080: "Login cancelled..." then
+            // \x1b[?9001l\x1b[?1004l and exit). Mouse/page-key behavior
+            // unconfirmed without authenticating -- safe defaults only.
+            //
+            // NO_ANIMATION=1: Amp's idle splash is a continuously-redrawing
+            // dot-shaded logo (confirmed 2026-09-06, cast
+            // ai_2026-09-06_030330_004578.cast: 8193 events / 4.37M chars
+            // over ~3 minutes of pure idle animation before any real work
+            // happened). Disabling it keeps a session's .cast from
+            // ballooning to multiple MB before the agent does anything.
+            "detachable": true,
+            "launch_command": [
+                "amp"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1",
+                "NO_ANIMATION": "1"
+            }
+        },
         "Antigravity": {
-            // Google Antigravity CLI. Its shim is often not on PATH until
-            // the shell that launches ST is restarted (same reasoning as
-            // the Junie profile below) -- if launches fail right after
-            // installing it, override launch_command in your own
-            // Packages/User/ai_terminal.sublime-settings with the full
-            // shim path (e.g. %LOCALAPPDATA%\agy\bin\agy.exe on Windows).
+            // Google Antigravity CLI. Shim installed to
+            // C:\Users\donal\AppData\Local\agy\bin\agy.exe -- not on PATH
+            // until the shell that launches ST is restarted, so use the
+            // full path (same reasoning as the Junie profile below).
             // Mouse tracking: never enables DEC ?1000/1002/1003 (checked all
             // 5 recorded asciicast sessions, 2026-08-11) -- no PTY-side
             // receiver for a forwarded click; mouse_handling would be a no-op.
             // page_keys_to_pty: its own `?` shortcuts panel explicitly lists
             // "pgdown, shift+down  Page down" / "pgup, shift+up  Page up"
-            // (confirmed live 2026-08-13). Runs in Inline rendering mode
-            // inside ai_terminal (zero DECSET 1049 observed), so this isn't
-            // the force_main_screen masking bug -- it's the same category
-            // jcode's source code confirmed: an inline-rendered TUI can
-            // still bind PageUp/PageDown for its own scroll regardless of
-            // alt-screen use, and ST's default steal-for-native-page
-            // behavior breaks that just the same.
+            // (confirmed live 2026-08-13).
+            // CORRECTION 2026-09-05: the "zero DECSET 1049 observed" claim
+            // below is now contradicted -- a fresh sweep of 6 real sessions
+            // shows Antigravity DOES enter/exit real alt-screen (6/6). So
+            // this may actually be the ordinary force_main_screen-masking
+            // category (same as Grok/Qwen/OpenCode) rather than "inline TUI
+            // owns page keys regardless of alt-screen." Either way
+            // page_keys_to_pty stays true -- the `?` panel's own documented
+            // binding is reason enough on its own. No mouse tracking in any
+            // of the 6 fresh sessions either, so mouse_handling stays off.
+            // Kept below for history, not as fact: Runs in Inline rendering
+            // mode inside ai_terminal (zero DECSET 1049 observed), so this
+            // isn't the force_main_screen masking bug -- it's the same
+            // category jcode's source code confirmed: an inline-rendered
+            // TUI can still bind PageUp/PageDown for its own scroll
+            // regardless of alt-screen use, and ST's default
+            // steal-for-native-page behavior breaks that just the same.
             "launch_command": [
-                "agy"
+                "C:\\Users\\donal\\AppData\\Local\\agy\\bin\\agy.exe"
             ],
             "page_keys_to_pty": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
+        "Auggie": {
+            // Augment Code's Auggie CLI. Requires OAuth login (opens a
+            // browser) before showing any interactive session. Confirmed
+            // live 2026-09-04 (cast ai_2026-09-04_171042_555380): only an
+            // ASCII-art startup banner + win32-input-mode handshake
+            // (?9001h) captured before the login prompt -- no DEC mouse
+            // tracking, no alt-screen seen. Safe defaults only.
+            "detachable": true,
+            "launch_command": [
+                "auggie"
+            ],
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             }
@@ -220,11 +276,6 @@
             "launch_command": [
                 "claude"
             ],
-            // Example per-profile font override (see the top-level
-            // "font_face"/"font_size" comment above) -- uncomment to give
-            // this profile's tabs a distinct look from other agents:
-            // "font_face": "Cascadia Code",
-            // "font_size": 11,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1",
                 "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
@@ -314,6 +365,38 @@
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
             }
         },
+        "Cline": {
+            // Cline CLI (npm, bare 'cline' package). Mouse tracking: the
+            // unauthenticated welcome/sign-in screen (4 provider buttons)
+            // alone enables full DEC mouse tracking -- ?1000h/?1002h/?1003h/
+            // ?1006h (click+drag+any-motion, SGR coords) plus a real
+            // alt-screen enter/exit (?1049h/l) -- confirmed live 2026-09-04
+            // (cast ai_2026-09-04_052029_940021). Enabled here from real
+            // DECSET codes, not a guess; behavior past actual sign-in
+            // (kanban/hub/dashboard views) is still unconfirmed -- revisit
+            // page_keys_to_pty once a logged-in session is captured.
+            "detachable": true,
+            "launch_command": [
+                "cline"
+            ],
+            "mouse_handling": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
+        "Cody": {
+            // Sourcegraph's Cody CLI. NOT a chat-TUI agent -- confirmed live
+            // 2026-09-04 (cast ai_2026-09-04_171354_311699): bare `cody`
+            // just prints `Usage: cody [options] [command]` help text and
+            // exits, no alt-screen, no mouse tracking. Real usage is
+            // `cody chat -m "message"` as a single command, or the api/
+            // internal JSON-RPC subcommands -- type it yourself once this
+            // profile's shell opens.
+            "launch_command": [
+                "cody"
+            ],
+            "spawn_env": {}
+        },
         "Codex": {
             "detachable": true,
             // Mouse tracking: never enables DEC ?1000/1002/1003 (34 recorded
@@ -350,6 +433,46 @@
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
             }
         },
+        "Continue": {
+            // @continuedev/cli -- real binary is `cn`, NOT "continue" or
+            // "continue-cli". Confirmed live 2026-09-04 (cast
+            // ai_2026-09-04_171512_290214): on first launch it directly
+            // prints "Enter your Anthropic API key:" as a plain text prompt
+            // and exits after ~4 lines -- no alt-screen, no mouse tracking.
+            // Type the key yourself once the tab opens.
+            // CORRECTED 2026-09-05: bare "cn" resolves to the npm-installed
+            // cn.cmd shim. Windows' CreateProcess cannot execute .bat/.cmd
+            // files directly (they are not PE executables -- only cmd.exe's
+            // built-in interpreter can run them), and this plugin's PTY
+            // spawn path calls CreateProcess directly on the argv, so the
+            // bare form failed unpredictably inside ai_terminal specifically
+            // (worked fine launched directly in a real terminal, where the
+            // shell's own PATHEXT/.cmd handling kicks in). Fixed by calling
+            // node directly on cn.cmd's actual entry script (inspected the
+            // shim itself: it falls back to plain "node" on PATH since no
+            // bundled node.exe sits next to it, then runs
+            // node_modules\@continuedev\cli\dist\cn.js) -- same fix pattern
+            // as the "Qwen (repo)" profile below (direct node + script path,
+            // no shell wrapper needed).
+            "detachable": true,
+            "launch_command": [
+                "node",
+                "C:\\Users\\donal\\AppData\\Roaming\\npm\\node_modules\\@continuedev\\cli\\dist\\cn.js"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+            // force_tui_like: true was tried 2026-09-05 to fix the startup-
+            // banner-duplication bug (cast ai_2026-09-05_100905_174369) but
+            // made things worse -- pinning the viewport assumes the app's
+            // whole frame always fits the terminal's row count (true for
+            // real alt-screen apps like vim/htop, false for Continue, which
+            // clear-and-redraws from the top but can overflow the terminal
+            // height). With the viewport pinned, overflow content pushed the
+            // prompt line off-screen and normal scroll couldn't reach it --
+            // confirmed live, reverted. Do not re-enable force_tui_like for
+            // this profile without a different fix for the overflow case.
+        },
         "Dos Console": {
             "launch_command": [
                 "cmd.exe"
@@ -368,6 +491,34 @@
                 "AI_TERMINAL_LOG_LINES": "1"
             }
         },
+        "GitHub Copilot": {
+            // GitHub Copilot CLI (@github/copilot). Confirmed live across 3
+            // asciicast sessions 2026-09-04/05 (e.g.
+            // ai_2026-09-05_005057_662533): enables DEC mouse tracking
+            // (?1003h any-motion + ?1006h SGR coords -- real PTY-side
+            // receiver for its top tab bar: Current/Sessions/Issues/Pull
+            // requests/Gists) plus win32-input-mode (?9001h) and a real
+            // alt-screen enter (?1049h, never exited within the captured
+            // sessions). This profile did not exist here before 2026-09-05
+            // -- only a bare auto-generated one in
+            // ai_terminal_agents.sublime-settings, with no mouse_handling --
+            // so tab-bar clicks were silently swallowed by ST instead of
+            // reaching the PTY. That was the reported bug.
+            // page_keys_to_pty: inferred by the same pattern as every other
+            // alt-screen + force_main_screen agent below (Grok/OpenCode/
+            // Mimo/Qwen/jcode/Antigravity) -- NOT yet directly confirmed for
+            // Copilot specifically. Flip to false if native ST paging turns
+            // out to already work fine for it.
+            "detachable": true,
+            "launch_command": [
+                "copilot"
+            ],
+            "mouse_handling": true,
+            "page_keys_to_pty": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
         "Grok Build": {
             "detachable": true,
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords,
@@ -381,13 +532,20 @@
             // buffer and look dead. Forward them like alt-screen apps;
             // Claude stays on the default (native ST page) because it
             // actually fills scrollback under CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN.
-            // user note:  in Grok tab key switches to scrollback manuevering, cursor 
+            // user note:  in Grok tab key switches to scrollback manuevering, cursor
             // and page keys work then and manuever back into conversation, tab gets one back to command line
             // it is actually an elegant design hard to under/over estimate it without lots of experience
             // I wonder how many other CLI TUIs have this simple switch going on.
+            // mouse_handling: the comment above has documented confirmed
+            // mouse tracking since 2026-08-11 and the design doc
+            // (ai/TODO-archive.md:401-407) explicitly called for enabling
+            // it here, but the actual flag was never set (or got lost) --
+            // re-added 2026-09-05 after a full mouse_handling audit across
+            // every profile turned up the gap.
             "launch_command": [
                 "grok"
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -405,10 +563,21 @@
             // that actually changes that model. Tradeoff (Grok's own docs):
             // ignores the theme setting and draws with the terminal's plain
             // 16-color ANSI palette instead of the full TUI's richer colors.
+            // mouse_handling: NOT independently confirmed for --minimal
+            // specifically -- no asciicast exists with this exact launch
+            // command (checked 2026-09-05: 6 files mention the string
+            // "--minimal" somewhere in their content, but none of them are
+            // actually a `grok --minimal` launch per the cast header). Set
+            // to true here only by inference from "Grok Build" above (same
+            // binary, --minimal only changes the color-rendering path per
+            // this profile's own comment, not the mouse-tracking protocol
+            // layer) -- flip off if a real --minimal session shows
+            // otherwise.
             "launch_command": [
                 "grok",
                 "--minimal"
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -417,22 +586,38 @@
         "jcode": {
             "detachable": true,
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords)
-            // -- confirmed across 18+ recorded asciicast sessions (2026-08-11).
+            // -- confirmed across 18+ recorded asciicast sessions (2026-08-11),
+            // reconfirmed across 13 fresh sessions 2026-09-05 -- but the
+            // "mouse_handling" flag itself was missing this whole time
+            // despite the confirmation and the design doc
+            // (ai/TODO-archive.md:401-407) explicitly calling for it here.
+            // Added 2026-09-05.
             // page_keys_to_pty: confirmed directly in source (not docs --
             // the docs page didn't mention PageUp/PageDown at all and were
             // misleading). github.com/1jehuang/jcode
             // crates/jcode-tui/src/tui/app/input.rs:2725 -- the main input
             // handler's default key match binds
             // `KeyCode::Up | KeyCode::PageUp => app.scroll_up(10)` and the
-            // PageDown equivalent, unconditionally. jcode never enters
-            // alt-screen (zero DECSET 1049 confirmed live even mid-session),
-            // so this was never the force_main_screen masking bug -- it's a
-            // plain inline TUI that still owns PageUp/PageDown for its own
-            // transcript scroll, and ST's default steal-for-native-page
-            // behavior breaks that.
+            // PageDown equivalent, unconditionally.
+            // CORRECTION 2026-09-05: the claim below that jcode "never
+            // enters alt-screen" is now contradicted by fresh evidence --
+            // 13 of 13 fresh sessions show a real ?1049h alt-screen enter
+            // (only 4 matching exits, i.e. it stays in alt-screen across
+            // multiple relaunches within a session). Doesn't change
+            // page_keys_to_pty (the source-level PageUp/PageDown binding
+            // above is the real reason it's needed either way), but the
+            // "never enters alt-screen" reasoning is stale -- jcode may
+            // have changed rendering modes since 2026-08-11, or this was
+            // never fully true. Kept below for history, not as fact:
+            // jcode never enters alt-screen (zero DECSET 1049 confirmed live
+            // even mid-session), so this was never the force_main_screen
+            // masking bug -- it's a plain inline TUI that still owns
+            // PageUp/PageDown for its own transcript scroll, and ST's
+            // default steal-for-native-page behavior breaks that.
             "launch_command": [
                 "jcode"
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -440,17 +625,55 @@
         },
         "Junie": {
             "detachable": true,
-            // JetBrains Junie CLI. Interactive TUI in the project cwd — not
-            // the PyCharm plugin panel. Its shim (e.g. ~/.local/bin/junie.bat)
-            // is often installed after ST's process already cached PATH; if
-            // launches fail right after installing it, override
-            // launch_command in your own
-            // Packages/User/ai_terminal.sublime-settings with the full path.
-            // Mouse tracking: never enables DEC ?1000/1002/1003 (6 recorded
-            // asciicast sessions checked, 2026-08-11).
+            // JetBrains Junie CLI (shim: ~/.local/bin/junie.bat). Interactive TUI
+            // in the project cwd — not the PyCharm plugin panel. Prefer full
+            // path so a long-lived ST process still finds the shim.
+            // Mouse tracking: the 2026-08-11 audit found none (6 sessions
+            // checked), but a fresh sweep 2026-09-05 across 9 real sessions
+            // shows 6 of them now emitting real DEC mouse tracking
+            // (?1003;1006h) plus alt-screen enter -- Junie's CLI appears to
+            // have changed behavior since the original audit. Enabling
+            // mouse_handling on that fresh evidence. page_keys_to_pty forced
+            // true (2026-09-05): this is the live Packages/User copy of the
+            // profiles table, which fully shadows the repo's own "profiles"
+            // key (sublime.load_settings does a shallow top-level merge, so
+            // whichever file defines "profiles" wins outright, no per-key
+            // deep merge) -- every prior repo-side page_keys_to_pty edit for
+            // this profile had zero effect at runtime because this file, not
+            // the repo one, is what's actually loaded. Without this, the
+            // /model picker's PageUp/PageDown fell through to native ST
+            // "move by pages", which -- in a short picker buffer -- clamps
+            // straight to the top/bottom of the tab instead of moving the
+            // picker's selection.
             "launch_command": [
-                "junie"
+                "C:\\Users\\donal\\.local\\bin\\junie.bat"
             ],
+            "mouse_handling": true,
+            "page_keys_to_pty": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
+        "Kilo Code": {
+            // @kilocode/cli (binary shimmed as `kilocode`; opencode-engine
+            // fork, same ASCII-banner/subcommand shape as OpenCode/Crush
+            // forks). Live-launched successfully via ai_terminal 2026-09-04
+            // (real full-screen TUI, no auth gate): a 457-line asciicast
+            // (ai_2026-09-04_052905_856353) confirms full DEC mouse tracking
+            // (?1000h/?1002h/?1003h/?1006h) plus a real alt-screen enter
+            // (?1049h) and win32-input-mode (?9001h). Same page_keys_to_pty
+            // reasoning as OpenCode/Mimo (opencode-derived engine):
+            // force_main_screen would mask the alt-screen signal and let
+            // native PageUp/PageDown steal the key instead of reaching the
+            // PTY. Footer hints confirmed live: ctrl+t variants, tab
+            // switches agents, ctrl+p opens the command palette (already
+            // forwarded generically by the base keymap).
+            "detachable": true,
+            "launch_command": [
+                "kilocode"
+            ],
+            "mouse_handling": true,
+            "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             }
@@ -492,9 +715,13 @@
             // (opencode.ai/docs/keybinds). force_main_screen masks the
             // alt-screen signal so native PageUp/PageDown would steal the
             // key instead of reaching the PTY.
+            // mouse_handling: confirmed but the flag itself was missing --
+            // design doc (ai/TODO-archive.md:401-407) called for it; added
+            // 2026-09-05 after a full audit found the gap.
             "launch_command": [
                 "mimo"
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -515,9 +742,14 @@
             // Official docs confirm pageup/pagedown are bound to
             // messages_page_up/messages_page_down (opencode.ai/docs/keybinds).
             // Same fix applied to all variants below (same binary).
+            // mouse_handling: confirmed but the flag itself was missing --
+            // design doc (ai/TODO-archive.md:401-407) called for it; added
+            // 2026-09-05 (and to all variants below, same binary) after a
+            // full audit found the gap.
             "launch_command": [
                 "opencode",
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -528,6 +760,14 @@
         },
         "OpenCode --mini": {
             "detachable": true,
+            // mouse_handling: REVERTED 2026-09-05. Unlike the base OpenCode
+            // profile above (5 real sessions, all confirmed), the one real
+            // `opencode --mini` session on record
+            // (ai_2026-08-31_152747_201669) shows ZERO mouse-tracking or
+            // alt-screen codes at all -- --mini genuinely looks like a
+            // different, plainer rendering mode, not just a color-palette
+            // difference. Don't inherit the base profile's flag here without
+            // more sessions confirming it either way.
             "launch_command": [
                 "opencode",
                 "--mini"
@@ -542,11 +782,19 @@
         },
         "OpenCode →⇢⇨ Ollama": {
             "detachable": true,
+            // mouse_handling: NOT independently confirmed -- no asciicast
+            // exists launched via `ollama launch opencode` specifically
+            // (checked 2026-09-05: zero matches). Set true here only by
+            // inference from the base "OpenCode" profile (5 real sessions,
+            // solidly confirmed) -- the Ollama wrapper shouldn't change
+            // opencode's own DECSET behavior, but this hasn't been directly
+            // observed. Flip off if a real session shows otherwise.
             "launch_command": [
                 "ollama",
                 "launch",
                 "opencode"
             ],
+            "mouse_handling": true,
             "page_keys_to_pty": true,
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
                 "AI_TERMINAL_LOG_LINES": "1"
@@ -564,6 +812,11 @@
         },
         "OpenCode →⇢⇨ Ollama --mini": {
             "detachable": true,
+            // mouse_handling: REVERTED 2026-09-05 -- compounds two
+            // unconfirmed things: no direct evidence for the Ollama-wrapper
+            // launch form, AND the real (non-wrapped) `opencode --mini`
+            // session on record shows zero mouse-tracking/alt-screen codes
+            // (see "OpenCode --mini" above). Left off pending real evidence.
             "launch_command": [
                 "ollama",
                 "launch",
@@ -579,6 +832,25 @@
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
             }
         },
+        "Pi": {
+            // @earendil-works/pi-coding-agent. Confirmed across multiple
+            // real sessions 2026-09-01/02, including two 400+KB long-usage
+            // casts (ai_2026-09-01_225229_751998,
+            // ai_2026-09-01_230057_330714): only win32-input-mode
+            // enable/disable (?9001h/l) appears -- zero DEC mouse-tracking
+            // codes and zero alt-screen (?1049) in any captured session,
+            // even the long ones. No PTY-side mouse receiver; inline-
+            // rendered like Antigravity/jcode. page_keys_to_pty left unset
+            // (default off) -- unlike jcode, no source-level confirmation
+            // that Pi's own scroll binds PageUp/PageDown.
+            "detachable": true,
+            "launch_command": [
+                "pi"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
         "PowerShell": {
             // Keep the PowerShell process outside Sublime's lifetime so the
             // terminal can reconnect to it after an ST restart.
@@ -588,20 +860,75 @@
             ],
             "spawn_env": {}
         },
+        "Pybackup Go TUI": {
+            "force_main_screen": true,
+            "home_end_native": true,
+            // gotui.exe spawns `python ui/app.py` itself and talks to it over
+            // HTTP -- see ui/gotui/backend.go.
+            "launch_command": [
+                "C:\\Users\\donal\\projects\\pybackup\\ui\\gotui\\gotui.exe"
+            ],
+            // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
+            // SGR coords; no bare 1000) -- confirmed across 32+ recorded
+            // asciicast sessions (2026-08-11).
+            // 2026-08-12: mouse_handling turned on. gotui's own click math
+            // (handleTableMouse) was fixed to anchor to the viewport bottom
+            // instead of assuming msg.Y was frame-relative -- see
+            // pybackup ui/gotui/update.go. This host doesn't need to tell
+            // gotui's clickable rows apart from scrollback log rows itself:
+            // gotui does its own hit-testing once raw SGR click coords reach
+            // it, same as any real terminal.
+            // pin_viewport:false -- gotui streams real scrollback (tea.Println)
+            // instead of owning a fixed scroll region, so the hard-pin the
+            // mouse_tracking heuristic normally applies (for altscreen-style
+            // apps like Qwen/Vibe) must stay off; see _pin_viewport_enabled.
+            // wheel_to_pty:false -- keep the mouse wheel scrolling real ST
+            // scrollback (the shipped feature of the no-alt-screen redesign)
+            // rather than moving gotui's table cursor.
+            // drag_forwards_by_default stays at its global default (false,
+            // copy-first): drags still go to ST text-select; only taps/clicks
+            // forward to the PTY.
+            // home_end_native opts in separately (see _home_end_native_enabled
+            // in ai_terminal.py) since it's no longer tied to mouse_handling.
+            "mouse_handling": true,
+            "pin_viewport": false,
+            // pybackup's own run logging routinely exceeds the global 300-line
+            // default (real GitPush/rclone output across many repos/folders),
+            // truncating the start of a run's log out of scrollback.
+            "scrollback_history_size": 2000,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            },
+            "wheel_to_pty": false
+        },
         "Qwen": {
             "detachable": true,
-            // Mouse tracking: enables ?1002/1003/1006h (drag + any-motion,
-            // SGR coords; no bare 1000) -- confirmed across 25+ recorded
-            // asciicast sessions (2026-08-11). Same for the →⇢⇨ Ollama
-            // variant below (same binary).
-            // page_keys_to_pty: sends real DECSET 1049h on boot (confirmed
-            // live 2026-08-13 via GhosttyParser._strip_alt_screen
-            // instrumentation). Official docs confirm PgUp/PgDn page the
-            // conversation viewport and Virtualized History
-            // (ui.useTerminalBuffer) is enabled by default
-            // (qwenlm.github.io/qwen-code-docs -- keyboard-shortcuts).
-            // force_main_screen masks the alt-screen signal so native
-            // PageUp/PageDown would steal the key instead of the PTY.
+            // Mouse tracking: original comment claimed "enables
+            // ?1002/1003/1006h... confirmed across 25+ recorded asciicast
+            // sessions (2026-08-11)" and page_keys_to_pty claimed "sends
+            // real DECSET 1049h on boot (confirmed live 2026-08-13)".
+            // CORRECTION 2026-09-05: re-verified against every cast whose
+            // header command is literally this profile's real launch
+            // target (qwen.CMD, the bare `qwen` shim) -- 7 real sessions,
+            // up to 9.1MB, ZERO mouse-tracking codes and ZERO alt-screen
+            // (?1049) in any of them. All the mouse/alt-screen evidence
+            // this file previously cited actually comes from a DIFFERENT
+            // profile, "Qwen (repo)" (the patched clone launched via
+            // node.exe .../qwen-code/.../index.js) -- the two got
+            // conflated at some point, likely because both are named
+            // "Qwen*" and both showed up under loose text searches of the
+            // asciicast corpus. mouse_handling NOT added here (would repeat
+            // that same conflation). page_keys_to_pty below is left as-is
+            // since it predates this session and changing a already-tuned,
+            // possibly-load-bearing setting isn't this audit's call to make
+            // unilaterally -- but be aware it rests on the same now-suspect
+            // 2026-08-13 evidence and deserves its own re-verification
+            // pass. Separately: Vibe's profile comment elsewhere in this
+            // file says the old global mouse-handling kill switch exists
+            // "because it broke Qwen" -- with zero DEC mouse tracking
+            // observed in the real Qwen profile now, that old incident may
+            // also trace back to the same "Qwen (repo)" clone rather than
+            // this profile.
             "launch_command": [
                 "qwen"
             ],
@@ -621,6 +948,52 @@
             "spawn_env": {
                 "AI_TERMINAL_LOG_LINES": "1"
             }
+        },
+        // Patched clone at ~/src/qwen-code-ctrlc-pr (Ctrl-C exit-warning
+        // overflow: keep the status-line row budget so Ink does not
+        // full-clear at PTY rows and scroll the banner off the tab).
+        // Leave the plain "Qwen" profile on the installed 0.21.12
+        // standalone until this build is confirmed. Requires a local
+        // `npm run build` in that clone before the dist path exists.
+        "Qwen (repo)": {
+            "detachable": true,
+            "launch_command": [
+                "C:\\Program Files\\nodejs\\node.exe",
+                "--expose-gc",
+                "C:\\Users\\donal\\src\\qwen-code-ctrlc-pr\\packages\\cli\\dist\\index.js"
+            ],
+            "page_keys_to_pty": true,
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            }
+        },
+        "Testing Agent": {
+            // 2026-08-21: per-profile bisection-gate override, isolated to
+            // this profile only (ai_terminal.py's five _setting_bool call
+            // sites now pass profile_name=_term_profile_name(term), profile
+            // override wins over the global key of the same name -- see
+            // TODO.md). All five false = raw Terminus baseline, safe to
+            // test here without touching any other live tab/profile.
+            "caret_footer_pinning_enabled": false,
+            "click_to_cursor_fallback_enabled": false,
+            "detachable": true,
+            "fast_caret_patch_enabled": false,
+            "host_cursor_paint_enabled": false,
+            // Default mock_agent_cli mode is Codex replay: each Enter
+            // dumps the whole transcript after ESC[H inside CSI ?2026.
+            // Search the tab for TURN-00. One hit = clean scrollback.
+            "launch_command": [
+                "python",
+                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py"
+            ],
+            "spawn_env": {
+                "AI_TERMINAL_LOG_LINES": "1"
+            },
+            // Experimental tab-X lifecycle: the close is swallowed, this
+            // input asks the mock process to exit, and normal PTY EOF closes
+            // the tab afterward. Isolated here until live-tested.
+            "tab_close_input": "q",
+            "user_owns_caret_enabled": false
         },
         "Vibe": {
             "detachable": true,
@@ -723,11 +1096,8 @@
     // Path to a markdown file whose contents are prepended to the system
     // prompt (above the context files). Edit the file directly to change
     // the wrapper text — the file is plain markdown, no JSON escaping.
-    // Not read by anything in this repo -- same external "bridge" process
-    // as context_files, above. Default location is ai_sdk_prompt.md
-    // alongside this settings file; set your own path here if it lives
-    // elsewhere.
-    // "system_prompt_wrapper_file": "C:\\path\\to\\ai_sdk_prompt.md",
+    // Default location is ai_sdk_prompt.md alongside this settings file.
+    "system_prompt_wrapper_file": "C:\\Users\\donal\\projects\\SText\\ai_sdk_prompt.md",
     // Host ST caret is ALWAYS off for terminal views (see _terminal_view).
     // Claude/OpenCode paint the cursor with reverse fg/bg (SGR 7) in the cell
     // stream — same model as Terminus. Do not turn on block_caret; a visible
@@ -736,21 +1106,23 @@
     // "block_caret": false,
     // "caret_style": "solid",
     // "caret_extra_width": 0,
-    // Font for ai_terminal tabs/panels only -- never touches the user's
-    // global font_face/font_size (a dedicated view setting, scoped the same
-    // way as color_scheme above). Leave both null/absent (the default) and a
-    // terminal view just inherits whatever ST is already using. Set either
-    // here to change every profile's default, or set the same key inside a
-    // single profile (see "profiles" below) to override just that one --
-    // e.g. give one agent a distinct font so its tabs are visually
-    // recognizable at a glance among several open at once. A profile's value
-    // always wins over these top-level ones. Must be a monospace font with
-    // full box-drawing (U+2500-U+257F), block-element (U+2580-U+259F), and
-    // miscellaneous TUI symbol coverage (U+23BF, U+23F8, U+2733, U+273B,
-    // U+2802, U+2B1D). "Cascadia Code" ships with Windows 10+ and has all of
-    // these.
-    // "font_face": null,
-    // "font_size": null,
+    // DEAD KEY, kept only so this comment isn't lost: "terminal_font" was
+    // never actually read by ai_terminal.py -- the plugin reads "font_face"/
+    // "font_size" (see _term_render / lines ~3866-3880), which were never
+    // set anywhere in this file. So every terminal tab, including agents
+    // whose TUIs paint block-element glyphs (Copilot's startup mascot, box-
+    // drawing borders, etc.), has been running on whatever ST's *global*
+    // font_face is, not Cascadia Code -- confirmed 2026-09-05 after a
+    // garbled-character report on GitHub Copilot's tab turned out to be a
+    // font coverage gap. Real key below.
+    "terminal_font": "Cascadia Code",
+    // Font for ai_terminal tabs only (this is the key the plugin actually
+    // reads). Must be a monospace font with full box-drawing (U+2500-
+    // U+257F), block-element (U+2580-U+259F), and misc TUI symbol coverage
+    // (U+23BF, U+23F8, U+2733, U+273B, U+2802, U+2B1D). Cascadia Code ships
+    // with Windows 10+ and has all of these. A profile can override this
+    // with its own "font_face"/"font_size".
+    "font_face": "Cascadia Code",
     // How often (minutes) to re-poll each provider's usage/quota endpoint so
     // the figures in the launcher and menus do not go stale mid-session. The
     // sweep uses the OAuth tokens the CLIs already persisted and spends no
