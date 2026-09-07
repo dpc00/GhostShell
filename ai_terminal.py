@@ -5417,11 +5417,16 @@ def _pin_terminal_viewport(view, term):
             rest = _host_rest_y(view)
             _set_viewport(view, (0.0, rest), False)
             return
-        le = view.layout_extent()
         ve = view.viewport_extent()
         lh = view.line_height() or 12.0
-        # Near-fit including pads: still use rest position
-        if le[1] - ve[1] <= lh * (2 * _HOST_SCROLL_PAD_LINES + 1):
+        # Near-fit including pads: still use rest position. Uses
+        # _real_content_height, not view.layout_extent() directly -- the
+        # latter is inflated by one line_height() on a scroll_past_end view
+        # (see _real_content_height's docstring), which made this near-fit
+        # threshold one line stricter than the identical check in the main
+        # render loop (content_fits) and could pin/follow inconsistently
+        # between the two.
+        if _real_content_height(view) - ve[1] <= lh * (2 * _HOST_SCROLL_PAD_LINES + 1):
             _set_viewport(view, (0.0, _host_rest_y(view)), False)
         elif term is not None and getattr(term, "_auto_follow", False):
             _scroll_to_bottom(view)
@@ -6937,10 +6942,21 @@ def _pin_viewport_rest(view, rest=None, term=None):
 
 
 def _real_content_height(view):
-    """layout height of real terminal content (excludes both host pads)."""
-    le = view.layout_extent()
+    """layout height of real terminal content (excludes both host pads).
+
+    Derived from view.text_to_layout(view.size()) + line_height(), not
+    view.layout_extent() -- the latter is inflated by exactly one
+    line_height() on a view with scroll_past_end enabled (the default
+    here; see _scroll_to_bottom, which was fixed for the same reason).
+    Sharing this helper keeps content_fits/near_bottom/near_fit checks
+    in agreement with _scroll_to_bottom's own follow target -- the two
+    disagreeing by one line height was root-caused as a "jiggles up a
+    line" symptom on certain keystrokes (content right at the fit
+    boundary flips content_fits/near_bottom one frame and not the next).
+    """
     lh = view.line_height() or 12.0
-    return max(0.0, float(le[1]) - 2 * _HOST_SCROLL_PAD_LINES * lh)
+    bottom = float(view.text_to_layout(view.size())[1]) + lh
+    return max(0.0, bottom - 2 * _HOST_SCROLL_PAD_LINES * lh)
 
 
 def _follow_ignore_trailing_lines(term):
@@ -7076,13 +7092,16 @@ def _scroll_to_bottom(view):
     top = _host_rest_y(view)
     term = _Terminal.from_id(view.id()) if view is not None else None
     drop = _follow_ignore_trailing_lines(term) * lh
-    # text_to_layout(size()) gives the TOP of the row containing the last
-    # character, not its bottom -- confirmed live as the recurring root
-    # cause of every "last line half/fully hidden" report in this session
-    # (211/212, 341/342, 343/344, ...): every prior fix here damped or eased
-    # the approach to a target that was itself one full line height short.
-    # +lh puts the target at the bottom edge of that last real line instead.
-    real_h = max(0.0, view.text_to_layout(view.size())[1] + lh - drop)
+    # _real_content_height already applies the +lh top-of-row -> bottom-of-
+    # row correction (text_to_layout(size()) gives the TOP of the row
+    # containing the last character, not its bottom -- confirmed live as
+    # the recurring root cause of every "last line half/fully hidden"
+    # report in this session: 211/212, 341/342, 343/344, ...). Routed
+    # through the shared helper, not inlined here a second time, so this
+    # and content_fits/near_bottom can never drift apart again the way
+    # they did when only this function got the fix (see
+    # _real_content_height's own docstring).
+    real_h = max(0.0, _real_content_height(view) - drop)
     if real_h > ve[1]:
         # Bottom of real content = top pad + real_h
         target = top + real_h - ve[1]
@@ -7106,6 +7125,72 @@ def _scroll_to_bottom(view):
     # fixed above via the `+ lh` term, independent of whether the
     # correction here is eased or instant.
     _set_viewport(view, (0.0, target), False)
+
+
+def _page_scroll(view, term, forward):
+    """Move the viewport by one page, independent of caret position.
+
+    PageUp/PageDown used to page via ST's native "move" command ("by":
+    "pages"), which moves relative to the current CARET, not the current
+    viewport position. The render loop unconditionally re-pins the sole
+    caret to the live PTY cursor row (bottom of the buffer) on every frame
+    -- keep_selection only skips this when both term._user_owns_caret and
+    the (default-off) user_owns_caret_enabled setting are true, see
+    AiTerminalRenderCommand -- so the caret sits at the bottom of the
+    buffer regardless of where the user has scrolled to with the mouse
+    wheel. "move by pages, forward=False" (PageUp) then pages backward
+    from THAT caret position; if the user had scrolled up more than one
+    page, the resulting caret position can still land BELOW their current
+    scroll position, and Sublime auto-scrolls the viewport DOWN to reveal
+    it -- PageUp visibly moves the view the wrong way. Confirmed live: mouse
+    wheel up (scrolling well into scrollback), then PageUp, moves the view
+    down instead of up. Computing and setting the target viewport position
+    directly sidesteps the caret entirely, so it can never depend on
+    caret/viewport having drifted apart.
+    """
+    lh = view.line_height() or 12.0
+    ve = view.viewport_extent()
+    cur = view.viewport_position()
+    page = max(ve[1] - lh, lh)
+    top = _host_rest_y(view)
+    max_y = top + max(0.0, _real_content_height(view) - ve[1])
+    new_y = min(max_y, cur[1] + page) if forward else max(top, cur[1] - page)
+    _set_viewport(view, (cur[0], new_y), False)
+
+
+def _resync_viewport_after_height_change(view, term):
+    """Re-clamp/follow after this view's viewport_extent() height changes
+    for any reason other than a PTY resize.
+
+    Called from _clamp_vp_loop's own height-change detector, not from any
+    specific command -- opening/closing a panel (console, find, ...), a
+    window resize, a sidebar/minimap toggle, a tab-group sash drag all
+    shrink or grow every view's viewport_extent(), and none of them is a
+    keystroke or new PTY output -- the two things that normally drive the
+    render loop's follow/pin logic (_settle_viewport, _post_render_follow).
+    Enumerating specific window commands (an earlier version of this fix
+    hooked on_post_window_command for "show_panel"/"hide_panel" only) misses
+    every other cause; detecting the height change itself, generically,
+    covers all of them. Left unhandled, a view that was scrolled/pinned to
+    the tail at the OLD height keeps that same viewport y against the NEW
+    height, so the most recently written lines end up below the visible
+    area. Reported live: open the Sublime Python console, the last several
+    lines of an ai_terminal tab go hidden below it. Re-running the same
+    follow/pin decision the render loop already makes elsewhere fixes it
+    without waiting for the next PTY byte or keypress.
+    """
+    if term is None or view is None or not term.pty.is_alive():
+        return
+    try:
+        if term._auto_follow:
+            _scroll_to_bottom(view)
+            term._last_vp_y = view.viewport_position()[1]
+            term._live_anchor_y = term._last_vp_y
+        elif _tui_like(term):
+            _pin_viewport_rest(view, None, term)
+    except (RuntimeError, AttributeError):
+        print("[ai_terminal] viewport height-change resync failed:\n%s"
+              % traceback.format_exc())
 
 
 def _place_auto_caret(view, term, pos):
@@ -7498,7 +7583,18 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # (vim, less, htop) via `_tui_like`, or a profile that paints in
         # place with no ST history (Grok) via `page_keys_to_pty`.
         if not alt and key in ("pageup", "pagedown") and not _page_keys_to_pty(term):
-            self.view.run_command("move", {"by": "pages", "forward": key == "pagedown", "extend": shift})
+            if shift:
+                # Shift+PageUp/Down extends a selection -- that has to move
+                # the caret, so it keeps the old caret-relative native
+                # command. Plain (no-shift) paging below does not need the
+                # caret at all, so it no longer goes through this -- see
+                # _page_scroll's docstring for why caret-relative paging is
+                # wrong once the viewport has scrolled away from the caret.
+                self.view.run_command(
+                    "move", {"by": "pages", "forward": key == "pagedown", "extend": True}
+                )
+            else:
+                _page_scroll(self.view, term, key == "pagedown")
             # 2026-08-27: this early return used to skip _set_auto_follow
             # entirely -- the *other* PageUp/PageDown branch below (reached
             # only by page_keys_to_pty profiles like Codex) already disengages
@@ -7796,8 +7892,25 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # engine itself last actively placed the viewport at.
             if vp[1] < term._live_anchor_y - lh * 1.5:
                 _set_auto_follow(term, False)
-            if near_bottom:
-                _set_auto_follow(term, True)
+            # Deliberately no near_bottom-triggered re-engage call here
+            # anymore. This render loop runs on every redraw, including
+            # an idle spinner/timer redraw that changes no content and that
+            # the user did nothing to trigger (Claude Code keeps redrawing
+            # its footer roughly every half-second even while just sitting
+            # at a permission prompt waiting for input). near_bottom was
+            # being re-evaluated on every one of those redraws regardless of
+            # whether the viewport had actually moved since the last check,
+            # so scrolling up to review a prompt in full was fine outside a
+            # ~2-line-tall zone near the true bottom, but landing inside
+            # that zone got pulled the rest of the way down by the very
+            # next idle redraw, with no further action from the user.
+            # Reported live and confirmed explicitly unwanted: resting
+            # anywhere the user chooses, including just above the tail,
+            # must never auto-resume on its own. Typing already
+            # unconditionally re-engages follow (see the printable-key
+            # branch in AiTerminalKeypressCommand.run and the on_modified/
+            # on_text_command "insert" handlers) -- that remains the way to
+            # resume; proximity alone no longer does.
         do_follow = (
             (term is not None and term._auto_follow)
             if term is not None
@@ -8874,6 +8987,58 @@ def _clamp_vp_loop():
             except (RuntimeError, AttributeError):
                 print("[ai_terminal] clamp-vp: scroll_past_end set failed:\n%s"
                       % traceback.format_exc())
+            # Viewport HEIGHT change detector: catches show_panel/hide_panel
+            # (console, find, ...), a window resize, sidebar/minimap toggle,
+            # a tab-group sash drag -- anything that shrinks or grows this
+            # view's viewport_extent(), not just an enumerable list of
+            # commands. Nothing else in this plugin polls for this, and none
+            # of it is a keystroke or new PTY output (the two things that
+            # normally trigger the render loop's follow/pin recompute), so a
+            # view that was scrolled/pinned to the tail at the OLD height
+            # keeps that same viewport y against the new height -- reported
+            # live as the console panel hiding the last several lines of a
+            # tab that was following. Already-running 8ms loop, so this adds
+            # no new timer.
+            try:
+                ve_now_h = float(v.viewport_extent()[1])
+            except (RuntimeError, AttributeError, TypeError):
+                ve_now_h = None
+            if ve_now_h is not None:
+                last_ve_h = getattr(term, "_last_ve_h", None)
+                if last_ve_h is None:
+                    term._last_ve_h = ve_now_h
+                elif abs(ve_now_h - last_ve_h) <= 0.5:
+                    # Matches the confirmed height -- also resets a candidate
+                    # that didn't pan out (one noisy tick, not a real change).
+                    term._ve_h_candidate = None
+                    term._ve_h_candidate_count = 0
+                else:
+                    # Differs from the confirmed height. Requires the SAME
+                    # new value on 2 consecutive ticks (16ms) before acting --
+                    # mirrors _LayoutWatcher's own debounce/confirm pattern
+                    # for the identical class of bug (that one guards PTY
+                    # resize against transient content-width/scrollbar
+                    # jitter; this guards a viewport write against the same
+                    # kind of single-tick noise on the height axis). Without
+                    # this, a real single-frame layout jitter during active
+                    # typing/streaming was misread as a genuine panel/layout
+                    # change on every such frame, each one forcing a
+                    # _scroll_to_bottom viewport write -- reported live as
+                    # jiggling and slow key response while typing.
+                    candidate = getattr(term, "_ve_h_candidate", None)
+                    if candidate is not None and abs(ve_now_h - candidate) <= 0.5:
+                        term._ve_h_candidate_count = (
+                            int(getattr(term, "_ve_h_candidate_count", 0)) + 1
+                        )
+                    else:
+                        term._ve_h_candidate = ve_now_h
+                        term._ve_h_candidate_count = 1
+                    if term._ve_h_candidate_count >= 2:
+                        term._last_ve_h = ve_now_h
+                        term._ve_h_candidate = None
+                        term._ve_h_candidate_count = 0
+                        _resync_viewport_after_height_change(v, term)
+                        continue
             try:
                 vp = v.viewport_position()
                 rest = _host_rest_y(v)
