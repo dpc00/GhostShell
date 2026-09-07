@@ -173,13 +173,26 @@ def provider_for_profile(profile):
 
 # ─── humanization ────────────────────────────────────────────────────────────
 
-def humanize_epoch(epoch, now=None):
-    """Compact human description of a future epoch: "in 3d 4h" / "in 25m"."""
+def humanize_epoch(epoch, now=None, label=""):
+    """Compact human description of a future epoch: "in 3d 4h" / "in 25m".
+
+    `label` identifies the caller (provider/window) purely for the console
+    trace below -- it has no effect on the return value. Every call is
+    logged so a usage sweep's actual data flow is visible in the ST
+    console instead of only the final summarized string.
+    """
+    print("[usage_scan] humanize_epoch(%s): epoch=%r now=%r"
+          % (label or "?", epoch, now))
+    if epoch is None:
+        # A window with no reset time reported (e.g. "nimbus quill", "extra
+        # usage") resolves to None here -- that's "no reset info available",
+        # not a cast failure, so don't run it through cast()/log a traceback.
+        return None
     try:
         delta = int(epoch) - int(now if now is not None else time.time())
     except (TypeError, ValueError):
-        print("[usage_scan] humanize_epoch cast failed (epoch=%r):\n%s"
-              % (epoch, traceback.format_exc()))
+        print("[usage_scan] humanize_epoch(%s) cast failed (epoch=%r):\n%s"
+              % (label or "?", epoch, traceback.format_exc()))
         return None
     if delta <= 0:
         return "now"
@@ -266,7 +279,7 @@ def scan_codex_usage(codex_home, now=None, max_files=4):
                 remaining, resets_at = parsed
                 return {
                     "remaining": remaining,
-                    "reset": humanize_epoch(resets_at, now=now),
+                    "reset": humanize_epoch(resets_at, now=now, label="codex:rollout-tail"),
                     "observed_at": mtime,
                 }
     return None
@@ -436,7 +449,7 @@ def parse_codex_wham_usage(payload, now=None):
         windows.append({
             "label": window_label(secondary.get("limit_window_seconds")) or "5h",
             "remaining": max(0.0, 100.0 - float(secondary.get("used_percent") or 0)),
-            "reset": humanize_epoch(secondary.get("reset_at"), now=now),
+            "reset": humanize_epoch(secondary.get("reset_at"), now=now, label="codex:secondary-5h"),
         })
     else:
         # Codex reports the 5h window as null while it is empty.
@@ -446,7 +459,7 @@ def parse_codex_wham_usage(payload, now=None):
         windows.append({
             "label": window_label(primary.get("limit_window_seconds")) or "weekly",
             "remaining": max(0.0, 100.0 - float(primary.get("used_percent") or 0)),
-            "reset": humanize_epoch(primary.get("reset_at"), now=now),
+            "reset": humanize_epoch(primary.get("reset_at"), now=now, label="codex:primary-weekly"),
         })
     remaining_values = [
         w["remaining"] for w in windows if isinstance(w.get("remaining"), (int, float))
@@ -520,7 +533,8 @@ def parse_claude_oauth_usage(payload, now=None):
         windows.append({
             "label": _CLAUDE_WINDOW_LABELS.get(key, key.replace("_", " ")),
             "remaining": round(max(0.0, min(100.0, 100.0 - float(used))), 1),
-            "reset": humanize_epoch(_iso_to_epoch(value.get("resets_at")), now=now),
+            "reset": humanize_epoch(_iso_to_epoch(value.get("resets_at")), now=now,
+                                     label="claude:%s" % key),
         })
     if not windows:
         return None
