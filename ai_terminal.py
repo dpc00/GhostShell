@@ -9116,13 +9116,30 @@ def _clamp_vp_loop():
                 # Short picker/command menus are usually keyboard-driven. Keep
                 # them pinned, but do not reinterpret their tiny viewport drift
                 # as PTY arrow input.
-                if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
+                #
+                # dy_rest < 0 only: this branch exists to kill the specific
+                # NEGATIVE-overshoot glitch documented at the top of this
+                # section (view.show() briefly parking vp[1] below rest, e.g.
+                # -20, when content fits the viewport) -- never a deliberate
+                # user scroll, since content that fits has nothing below rest
+                # to legitimately scroll INTO. dy_rest > 0 is the opposite
+                # direction: the user scrolled the OTHER way, past rest,
+                # toward/past the tail -- e.g. pushing a short conversation's
+                # permission prompt up to read all of it. Correcting that too
+                # (the old `abs(dy_rest) >= 0.5` here) undid that scroll on
+                # the very next 8ms tick regardless of typing, reported live
+                # as "pushing the text up during a permission prompt gets
+                # overridden." Only the true glitch direction is corrected now.
+                if dy_rest < -0.5 or abs(dx) >= 0.5:
                     _set_viewport(v, (0.0, rest), False)
                 continue
 
             # Tall scrollback shell: only kill tiny overflow dips, don't steal
-            # real user scrollback browsing.
-            if le[1] - ve[1] <= lh and (dx != 0.0 or abs(dy_rest) >= 0.5):
+            # real user scrollback browsing. Same dy_rest < 0 reasoning as
+            # the near_fit branch above -- a positive drift here is the user
+            # scrolling toward the tail within a shell whose content is only
+            # marginally taller than the viewport, not the overshoot glitch.
+            if le[1] - ve[1] <= lh and (dx != 0.0 or dy_rest < -0.5):
                 _set_viewport(v, (0.0, rest), False)
     except Exception as e:
         print(f"[ai_terminal] clamp loop error: {e}")
