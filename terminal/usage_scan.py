@@ -176,13 +176,9 @@ def provider_for_profile(profile):
 def humanize_epoch(epoch, now=None, label=""):
     """Compact human description of a future epoch: "in 3d 4h" / "in 25m".
 
-    `label` identifies the caller (provider/window) purely for the console
-    trace below -- it has no effect on the return value. Every call is
-    logged so a usage sweep's actual data flow is visible in the ST
-    console instead of only the final summarized string.
+    `label` identifies the caller (provider/window) in the cast-failure
+    print below -- it has no effect on the return value otherwise.
     """
-    print("[usage_scan] humanize_epoch(%s): epoch=%r now=%r"
-          % (label or "?", epoch, now))
     if epoch is None:
         # A window with no reset time reported (e.g. "nimbus quill", "extra
         # usage") resolves to None here -- that's "no reset info available",
