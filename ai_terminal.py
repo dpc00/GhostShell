@@ -1979,10 +1979,17 @@ def _setting_number(key, default, cast=int, profile_name=None, settings=None):
     """
     s = _settings_obj(settings)
     profile = _profile_settings(profile_name, s)
+    if profile is not None and key in profile:
+        raw = profile[key]
+    else:
+        raw = s.get(key, default)
+    if raw is None:
+        # A settings key explicitly set to null (e.g. "no cap") resolves to
+        # None here, same as a missing key -- that's the intended default,
+        # not a cast failure, so don't run it through cast()/log a traceback.
+        return default
     try:
-        if profile is not None and key in profile:
-            return cast(profile[key])
-        return cast(s.get(key, default))
+        return cast(raw)
     except (TypeError, ValueError):
         print("[ai_terminal] numeric setting %r cast failed, using default:\n%s"
               % (key, traceback.format_exc()))
@@ -7068,16 +7075,99 @@ def _scroll_to_bottom(view):
     top = _host_rest_y(view)
     term = _Terminal.from_id(view.id()) if view is not None else None
     drop = _follow_ignore_trailing_lines(term) * lh
-    real_h = max(0.0, view.text_to_layout(view.size())[1] - drop)
+    # text_to_layout(size()) gives the TOP of the row containing the last
+    # character, not its bottom -- confirmed live as the recurring root
+    # cause of every "last line half/fully hidden" report in this session
+    # (211/212, 341/342, 343/344, ...): every prior fix here damped or eased
+    # the approach to a target that was itself one full line height short.
+    # +lh puts the target at the bottom edge of that last real line instead.
+    real_h = max(0.0, view.text_to_layout(view.size())[1] + lh - drop)
     if real_h > ve[1]:
         # Bottom of real content = top pad + real_h
         target = top + real_h - ve[1]
     else:
         target = top
     cur = view.viewport_position()[1]
-    if abs(cur - target) < lh:
+    gap = target - cur
+    if abs(gap) < 1.0:
         return
-    _set_viewport(view, (0.0, target), False)
+    # Only ease BACKWARD corrections (gap < 0: target moved up, above where
+    # the view already sits). text_to_layout() can read stale layout right
+    # after a full-buffer replace (see _post_render_follow), so a hard snap
+    # can slam the viewport to a wrong, too-short target for one frame, then
+    # yank it back next frame once the real value arrives -- that reversal
+    # is the jarring case (confirmed live: line 212 shown, then hidden).
+    #
+    # Forward movement (gap > 0: new output legitimately extends real
+    # content below the current view) must stay instant/unanimated. A
+    # hand-rolled exponential blend on every gap direction (tried first)
+    # made active streaming permanently lag one-plus lines behind --
+    # confirmed live, the tail crept 341/342 instead of showing the newest
+    # line -- because exponential decay never fully closes and has an
+    # abrupt onset besides.
+    #
+    # ST's own animate=True was tried next, but its built-in curve/duration
+    # aren't exposed to the API and read as not-smooth live -- so this
+    # hand-rolls a fixed-duration smoothstep (3t^2-2t^3) tween instead,
+    # which gives a real ease-in/ease-out with a known, bounded end.
+    if gap > 0 or abs(gap) < lh:
+        # Cancel any in-flight tween first: otherwise its next scheduled
+        # tick still fires and drags the viewport back toward its now-stale
+        # target, right after this instant snap -- confirmed live as an
+        # instant jump immediately undone by a slow crawl in the opposite
+        # direction.
+        if term is not None:
+            term._vp_anim_gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
+        _set_viewport(view, (0.0, target), False)
+    else:
+        _animate_viewport_scurve(view, term, target)
+
+
+_VP_ANIM_LINES_PER_SEC = 1.0  # glide speed target. What this corrects is
+                               # incidental content below the live command
+                               # (statusline/trailing rows), not something a
+                               # user is reading in real time -- per user
+                               # 2026-09-07, several seconds to restore is
+                               # fine, so bias slow over snappy here.
+_VP_ANIM_MIN_MS = 400
+_VP_ANIM_MAX_MS = 4000
+
+
+def _animate_viewport_scurve(view, term, target):
+    """Ease the viewport to `target` via smoothstep, duration scaled to
+    distance so a multi-line correction glides proportionally longer
+    instead of covering the same ground in a fixed, too-short window (a
+    fixed short duration still reads as a blur/slam over a large gap,
+    confirmed live).
+
+    Cancels any in-flight tween on this terminal first so overlapping
+    corrections don't fight each other and produce jitter.
+    """
+    if term is None:
+        _set_viewport(view, (0.0, target), False)
+        return
+    gen = int(getattr(term, "_vp_anim_gen", 0) or 0) + 1
+    term._vp_anim_gen = gen
+    start_y = view.viewport_position()[1]
+    start_t = time.time()
+    lh = view.line_height() or 12.0
+    lines = abs(target - start_y) / lh
+    duration_ms = max(_VP_ANIM_MIN_MS,
+                       min(_VP_ANIM_MAX_MS, lines / _VP_ANIM_LINES_PER_SEC * 1000.0))
+
+    def _tick():
+        if term is not None and getattr(term, "_vp_anim_gen", None) != gen:
+            return  # superseded by a newer tween
+        if view is None or not view.is_valid():
+            return
+        frac = min(1.0, (time.time() - start_t) * 1000.0 / duration_ms)
+        eased = frac * frac * (3.0 - 2.0 * frac)
+        y = round(start_y + (target - start_y) * eased)
+        _set_viewport(view, (0.0, y), False)
+        if frac < 1.0:
+            sublime.set_timeout(_tick, 16)
+
+    _tick()
 
 
 def _place_auto_caret(view, term, pos):
