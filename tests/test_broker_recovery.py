@@ -249,7 +249,7 @@ def test_broker_reattach_never_connects_named_pipes_on_sublime_main_thread():
     assert worker < pipe_start < thread_start
     assert "if vid in _BROKER_CONNECTING:" in reattach_source
     assert "_BROKER_CONNECTING.add(vid)" in reattach_source
-    assert "_apply_terminal_view_settings(view)" in reattach_source
+    assert "_apply_terminal_view_settings(view, profile_name=profile_name)" in reattach_source
 
 
 def test_broker_reattach_prepares_logs_only_after_connection_and_registry_win():

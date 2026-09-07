@@ -32,6 +32,9 @@ class Settings(dict):
     def set(self, k, v):
         self[k] = v
 
+    def erase(self, k):
+        self.pop(k, None)
+
     def add_on_change(self, *a, **k):
         pass
 
