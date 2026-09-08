@@ -55,7 +55,7 @@ class NearBottomAutoFollowTests(unittest.TestCase):
         block = source[start:end]
 
         self.assertIn(
-            'if vp[1] < term._live_anchor_y - lh * 1.5:', block,
+            'if vp[1] < term._live_anchor_y - 2.0:', block,
             "disengage-on-scroll-away must still run",
         )
         self.assertIn('_set_auto_follow(term, False)', block)
