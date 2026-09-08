@@ -7925,7 +7925,24 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # different meaning (rest=0.0), which corrupted this drift
             # check. _live_anchor_y has exactly one meaning: the y this
             # engine itself last actively placed the viewport at.
-            if vp[1] < term._live_anchor_y - lh * 1.5:
+            # 1.5 line-heights of tolerance (instead of a couple pixels) used
+            # to let a single scroll gesture accumulate before disengaging --
+            # but during active generation this render loop fires very
+            # frequently (Claude Code redraws its spinner/footer roughly
+            # every half-second, faster during real output), and
+            # _scroll_to_bottom below runs THIS SAME render whenever
+            # do_follow is still true. A slow/gradual scroll (trackpad pan,
+            # or several small wheel ticks) whose PER-RENDER delta never
+            # individually exceeds 1.5 line-heights never got the chance to
+            # accumulate: each tick's small movement was erased by
+            # _scroll_to_bottom before the next tick could add to it, so the
+            # user's scroll never won the race against the render clock.
+            # Reported live as snapping back "during thinking" and even
+            # during a permission prompt (frequent idle redraws are enough
+            # on their own). A couple of pixels of tolerance still absorbs
+            # sub-pixel float noise without requiring a whole gesture's worth
+            # of accumulated movement to register as real.
+            if vp[1] < term._live_anchor_y - 2.0:
                 _set_auto_follow(term, False)
             # Deliberately no near_bottom-triggered re-engage call here
             # anymore. This render loop runs on every redraw, including
