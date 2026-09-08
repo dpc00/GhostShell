@@ -7940,24 +7940,30 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # different meaning (rest=0.0), which corrupted this drift
             # check. _live_anchor_y has exactly one meaning: the y this
             # engine itself last actively placed the viewport at.
-            # 1.5 line-heights of tolerance (instead of a couple pixels) used
-            # to let a single scroll gesture accumulate before disengaging --
-            # but during active generation this render loop fires very
-            # frequently (Claude Code redraws its spinner/footer roughly
-            # every half-second, faster during real output), and
-            # _scroll_to_bottom below runs THIS SAME render whenever
-            # do_follow is still true. A slow/gradual scroll (trackpad pan,
-            # or several small wheel ticks) whose PER-RENDER delta never
-            # individually exceeds 1.5 line-heights never got the chance to
-            # accumulate: each tick's small movement was erased by
-            # _scroll_to_bottom before the next tick could add to it, so the
-            # user's scroll never won the race against the render clock.
-            # Reported live as snapping back "during thinking" and even
-            # during a permission prompt (frequent idle redraws are enough
-            # on their own). A couple of pixels of tolerance still absorbs
-            # sub-pixel float noise without requiring a whole gesture's worth
-            # of accumulated movement to register as real.
-            if vp[1] < term._live_anchor_y - 2.0:
+            # REVERTED 2026-09-07 (same day): shrank this to 2px, reasoning
+            # that during active generation this render loop fires often
+            # enough for _scroll_to_bottom to erase a gradual scroll's
+            # per-render delta before it could accumulate past 1.5 line
+            # -heights, so slow scrolling never won the race against the
+            # render clock. That diagnosis was real, but the fix was wrong:
+            # 2px is well within ordinary render-to-render layout jitter
+            # during active typing/streaming (a few px of residual offset is
+            # documented elsewhere in this file as normal ST behavior), so
+            # it now misread that jitter as a deliberate scroll-away on
+            # nearly every keystroke -- confirmed live as "worse jiggle
+            # during typing," the exact hop-up-and-back symptom the
+            # was_following check in AiTerminalKeypressCommand.run was
+            # written to prevent (its own comment: "the command line
+            # visibly hops up and back on every key"), because was_following
+            # now read False almost every time even with no real scroll.
+            # The actual race-condition fix belongs in _scroll_to_bottom
+            # itself (see its range-check docstring, 2026-09-07): once it
+            # tolerates the tail being visible ANYWHERE in the viewport
+            # rather than forcing one exact pixel row, do_follow staying
+            # true a little longer during a slow scroll no longer forces a
+            # snap back on every render -- so this threshold does not need
+            # to be hair-triggered to fix the race; back to 1.5 line-heights.
+            if vp[1] < term._live_anchor_y - lh * 1.5:
                 _set_auto_follow(term, False)
             # Deliberately no near_bottom-triggered re-engage call here
             # anymore. This render loop runs on every redraw, including
