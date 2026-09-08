@@ -231,9 +231,17 @@ def test_recover_session_discovers_orphaned_broker_processes():
     assert "def _attach_orphan(" in command_source
     assert 'state = "orphaned broker"' in command_source
     assert "threading.Thread(target=self._discover" in command_source
-    assert "_BROKER_PROFILE_SETTING" in command_source
+    assert "_attach_recovered_session(" in command_source
     assert 'name="Recovered Codex"' not in command_source
     assert "timeout=" in command_source[command_source.index("def _running_brokers("):]
+
+    # Shared by AiTerminalRecoverSessionCommand and
+    # AiTerminalReattachAllFromWindowsTerminalCommand -- both delegate the
+    # actual tab-building to this one helper (see _attach_recovered_session).
+    helper_start = source.index("def _attach_recovered_session(")
+    helper_source = source[helper_start:source.index("\n\n\n", helper_start)]
+    assert "_BROKER_PROFILE_SETTING" in helper_source
+    assert "_reattach_broker_view" in helper_source
 
 
 def test_broker_reattach_never_connects_named_pipes_on_sublime_main_thread():

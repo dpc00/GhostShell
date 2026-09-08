@@ -46,6 +46,7 @@ _ERROR_BROKEN_PIPE = 109
 _ERROR_PIPE_CONNECTED = 535
 _ERROR_NO_DATA = 232
 _ERROR_PIPE_NOT_CONNECTED = 233
+_ERROR_OPERATION_ABORTED = 995
 
 _PIPE_ACCESS_DUPLEX = 0x00000003
 _PIPE_ACCESS_OUTBOUND = 0x00000002
@@ -54,6 +55,7 @@ _PIPE_TYPE_BYTE = 0x00000000
 _PIPE_READMODE_BYTE = 0x00000000
 _PIPE_WAIT = 0x00000000
 _PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
+_PIPE_UNLIMITED_INSTANCES = 255
 _INVALID_HANDLE_VALUE = HANDLE(-1).value
 # Private OSC marker between the broker's buffered snapshot and live output.
 # Older GhostShell clients safely pass this unknown OSC to their VT parser;
@@ -139,6 +141,8 @@ _k32.DisconnectNamedPipe.argtypes = [HANDLE]
 _k32.DisconnectNamedPipe.restype = BOOL
 _k32.FlushFileBuffers.argtypes = [HANDLE]
 _k32.FlushFileBuffers.restype = BOOL
+_k32.CancelIoEx.argtypes = [HANDLE, c_void_p]
+_k32.CancelIoEx.restype = BOOL
 _k32.GetCurrentProcess.restype = HANDLE
 _k32.IsProcessInJob.argtypes = [HANDLE, HANDLE, POINTER(BOOL)]
 _k32.IsProcessInJob.restype = BOOL
@@ -541,6 +545,12 @@ class _InputServer:
         self._name = name + "-in"
         self._pty = pty
         self._on_disconnect = on_disconnect
+        # Tracks the currently-connected client's handle so force_disconnect()
+        # (called from the control server's thread) can kick it off. Guarded
+        # by a lock since it's written from run_forever's thread and read
+        # from whichever thread calls force_disconnect().
+        self._handle_lock = threading.Lock()
+        self._current_handle = None
 
     def run_forever(self):
         while self._pty.is_alive():
@@ -560,13 +570,34 @@ class _InputServer:
             if not ok and ctypes.get_last_error() != _ERROR_PIPE_CONNECTED:
                 _k32.CloseHandle(handle)
                 continue
+            with self._handle_lock:
+                self._current_handle = handle
             try:
                 self._serve_client(handle)
             finally:
+                with self._handle_lock:
+                    self._current_handle = None
                 _k32.DisconnectNamedPipe(handle)
                 _k32.CloseHandle(handle)
                 if self._on_disconnect is not None:
                     self._on_disconnect()
+
+    def force_disconnect(self):
+        """Kick the currently-connected client off, without touching the
+        child process. Used to hand a session back from a Windows Terminal
+        relay to Sublime without the user having to close that window first
+        -- see _ControlServer's DISCONNECT command.
+
+        CancelIoEx on another thread unblocks _serve_client's blocking
+        ReadFile (same technique ai_terminal.py's _BrokerPty.kill() uses on
+        its own reader thread); run_forever's own finally block then does
+        the real DisconnectNamedPipe/CloseHandle and fires on_disconnect,
+        which releases the output side too -- no separate call needed there.
+        """
+        with self._handle_lock:
+            handle = self._current_handle
+        if handle is not None:
+            _k32.CancelIoEx(handle, None)
 
     def _serve_client(self, handle):
         buf = (c_char * 4096)()
@@ -576,7 +607,8 @@ class _InputServer:
             if not ok:
                 err = ctypes.get_last_error()
                 if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
-                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_HANDLE_EOF):
+                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_HANDLE_EOF,
+                           _ERROR_OPERATION_ABORTED):
                     return
                 print("[agent_broker] ReadFile on input pipe failed (GetLastError %d)" % err)
                 return
@@ -595,17 +627,29 @@ class _ControlServer:
     command can never collide with literal bytes typed into the child
     (arrow keys, escape sequences, pasted text, etc)."""
 
-    def __init__(self, name, pty):
+    def __init__(self, name, pty, input_server=None):
         self._name = name + "-ctl"
         self._pty = pty
+        self._input_server = input_server
 
     def run_forever(self):
+        # nMaxInstances used to be 1, served synchronously in this same loop
+        # iteration -- fine while the only ctl client was a long-lived
+        # resize-watcher (ai_terminal.py's _BrokerPty, or recover_console.py's
+        # _watch_resize thread) holding the pipe open for the session's whole
+        # lifetime. DISCONNECT changed that: a second, short-lived ctl
+        # connection now needs to get in *while* that long-lived one is still
+        # connected (to kick it off in the first place) -- impossible with a
+        # single instance served one-at-a-time. PIPE_UNLIMITED_INSTANCES plus
+        # dispatching each connection to its own thread lets this loop go
+        # straight back to accepting the next connection instead of blocking
+        # in _serve_client for as long as the current client stays attached.
         while self._pty.is_alive():
             handle = _k32.CreateNamedPipeW(
                 _pipe_path(self._name),
                 _PIPE_ACCESS_DUPLEX,
                 _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT | _PIPE_REJECT_REMOTE_CLIENTS,
-                1,
+                _PIPE_UNLIMITED_INSTANCES,
                 4096, 4096, 0, None,
             )
             if handle == _INVALID_HANDLE_VALUE:
@@ -615,11 +659,16 @@ class _ControlServer:
             if not ok and ctypes.get_last_error() != _ERROR_PIPE_CONNECTED:
                 _k32.CloseHandle(handle)
                 continue
-            try:
-                self._serve_client(handle)
-            finally:
-                _k32.DisconnectNamedPipe(handle)
-                _k32.CloseHandle(handle)
+            threading.Thread(
+                target=self._run_client, args=(handle,), daemon=True
+            ).start()
+
+    def _run_client(self, handle):
+        try:
+            self._serve_client(handle)
+        finally:
+            _k32.DisconnectNamedPipe(handle)
+            _k32.CloseHandle(handle)
 
     def _serve_client(self, handle):
         buf = (c_char * 256)()
@@ -652,6 +701,16 @@ class _ControlServer:
             # `while self._pty.is_alive()` loops both stop on their own once
             # this returns; main()'s `finally: pty.kill()` is then a no-op.
             self._pty.kill()
+        elif parts[0] == "DISCONNECT":
+            # Hand the session back from whatever currently holds it (e.g. a
+            # Windows Terminal relay) without touching the child process --
+            # see _InputServer.force_disconnect. A caller with nothing
+            # attached to disconnect (input_server not wired, or no client
+            # currently connected) is a silent no-op, not an error: the
+            # requester (ai_terminal.py's reattach command) treats "pipe
+            # already free" the same as "just freed it."
+            if self._input_server is not None:
+                self._input_server.force_disconnect()
 
 
 def _parse_env_overrides(pairs):
@@ -783,7 +842,7 @@ def main():
 
     threading.Thread(target=in_server.run_forever, daemon=True).start()
 
-    ctl = _ControlServer(args.pipe_name, pty)
+    ctl = _ControlServer(args.pipe_name, pty, input_server=in_server)
     threading.Thread(target=ctl.run_forever, daemon=True).start()
 
     _publish_registry(
