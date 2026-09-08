@@ -7,11 +7,27 @@ spinner frame, and status-line redraw that the user only saw temporarily.
 """
 import os
 import threading
+import time
 import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private
 
 TEXT_LOG_DIR = os.path.join(LOG_ROOT, "ai_terminal_session_text_logs")
+
+# Instrumentation only -- observe() does a full temp-file write + os.replace()
+# + close + reopen on every changed paint (not every render tick, but every
+# tick where the painted content actually differs from last time), which is
+# real disk I/O on ST's main thread. These counters answer "how often, how
+# expensive" without needing external stack sampling. Read via
+# session_text_log_stats(); process-lifetime, not per-instance, since a
+# terminal's SessionTextLog is recreated per session.
+_stats_lock = threading.Lock()
+_stats = {"observe_calls": 0, "observe_writes": 0, "write_seconds_total": 0.0, "write_seconds_max": 0.0}
+
+
+def session_text_log_stats():
+    with _stats_lock:
+        return dict(_stats)
 
 
 class SessionTextLog:
@@ -52,6 +68,8 @@ class SessionTextLog:
         Blank lines and horizontal spacing are significant parts of the paint.
         """
         present = ["" if line is None else str(line) for line in (lines or ())]
+        with _stats_lock:
+            _stats["observe_calls"] += 1
         with self._lock:
             if (
                 self.file is None
@@ -61,6 +79,7 @@ class SessionTextLog:
                 )
             ):
                 return
+            write_started = time.monotonic()
             path = self._path
             temp_path = path + ".tmp"
             snapshot = "\n".join(present)
@@ -127,6 +146,12 @@ class SessionTextLog:
                         print("[ai_terminal] session text log: reopen after "
                               "failure also failed:\n%s" % traceback.format_exc())
                 raise
+            elapsed = time.monotonic() - write_started
+            with _stats_lock:
+                _stats["observe_writes"] += 1
+                _stats["write_seconds_total"] += elapsed
+                if elapsed > _stats["write_seconds_max"]:
+                    _stats["write_seconds_max"] = elapsed
             self._prev = present
             self._prev_trailing_newline = trailing_newline
             self._last_written = present[-1] if present else None
