@@ -7143,8 +7143,23 @@ def _scroll_to_bottom(view):
     else:
         target = top
     cur = view.viewport_position()[1]
-    gap = target - cur
-    if abs(gap) < 1.0:
+    # Only reposition when the tail would otherwise be genuinely hidden --
+    # below the visible range (needs a forward scroll to reveal it) or
+    # above it (scrolled too far past the end, needs a backward scroll) --
+    # never just to force the exact bottom-pixel position when the tail is
+    # already visible somewhere in the viewport. `target` is the MINIMUM
+    # cur that puts the tail at the very bottom edge; `target + ve[1]` is
+    # the MAXIMUM cur before the tail scrolls above the top edge. Anywhere
+    # between, the tail sits visible somewhere in the middle/upper part of
+    # the viewport with blank space below -- exactly what deliberately
+    # pushing the tail up produces, and it must be left alone. Reported
+    # live as "unnecessary snapping ... the command line is in full view
+    # already": the old check (`abs(target - cur) < 1.0`) only tolerated
+    # being within 1px of the one exact canonical position, not "visible
+    # anywhere in the viewport" -- so every typed character / render
+    # forced it back to that exact pixel row even though nothing was
+    # actually hidden.
+    if target - 1.0 <= cur <= target + ve[1] + 1.0:
         return
     # 2026-09-07: backward corrections (content legitimately shrinking, e.g.
     # Claude Code's own status footer redrawing shorter) were eased via a

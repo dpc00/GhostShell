@@ -121,6 +121,32 @@ class ScrollToBottomAgreementTests(unittest.TestCase):
         ai_terminal._scroll_to_bottom(view)
         self.assertEqual(view.vp_writes, [])
 
+    def test_tail_pushed_up_but_still_visible_is_left_alone(self):
+        # true bottom = 200; ve height 150 -> target (tail at exact bottom
+        # edge) = 50. Pushing the tail up (scrolling further, e.g. cur=100)
+        # still shows the tail somewhere in the upper part of the viewport
+        # (with blank space below) -- nothing is hidden, so this must be a
+        # no-op. Reported live: "unnecessary snapping ... the command line
+        # is in full view already."
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 150.0), vp=(0.0, 100.0))
+        ai_terminal._scroll_to_bottom(view)
+        self.assertEqual(view.vp_writes, [])
+
+    def test_tail_scrolled_below_view_is_corrected(self):
+        # cur well below target -- the tail is hidden below the visible
+        # range and a forward scroll is genuinely needed.
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 150.0), vp=(0.0, 0.0))
+        ai_terminal._scroll_to_bottom(view)
+        self.assertEqual(view.vp_writes, [((0.0, 50.0), False)])
+
+    def test_scrolled_past_the_tail_into_padding_is_corrected(self):
+        # cur beyond target + viewport height -- the tail has scrolled
+        # above the top edge entirely (scroll_past_end let the user go too
+        # far forward), so a backward correction is still needed.
+        view = _FakeView(lines=10, lh=20.0, ve=(800.0, 150.0), vp=(0.0, 500.0))
+        ai_terminal._scroll_to_bottom(view)
+        self.assertEqual(view.vp_writes, [((0.0, 50.0), False)])
+
 
 class PageScrollTests(unittest.TestCase):
     """_page_scroll: PageUp/PageDown moving the viewport directly.
