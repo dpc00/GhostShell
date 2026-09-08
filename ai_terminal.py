@@ -656,6 +656,44 @@ def _pipe_instance_free(pipe_name, timeout_ms=150):
     return ctypes.get_last_error() == _ERROR_FILE_NOT_FOUND
 
 
+def _send_broker_ctl_line(pipe_name, line, timeout_s=2.0):
+    """Send one line to a broker's control pipe by name alone, with no live
+    _BrokerPty object required.
+
+    Used by the reattach-from-Windows-Terminal flow: the session may be
+    orphaned (no ST view/Terminal at all right now) or held by a WT relay,
+    neither of which has a _BrokerPty instance to call explicit_kill()'s
+    connect-and-write pattern on -- this is that same pattern, standalone.
+    Returns True only if the full line was actually written.
+    """
+    if not _PTY_OK or os.name != "nt":
+        return False
+    path = _broker_pipe_path(pipe_name + "-ctl")
+    deadline = time.time() + timeout_s
+    while True:
+        h = _k32.CreateFileW(path, _GENERIC_WRITE, 0, None, _OPEN_EXISTING, 0, None)
+        if h != _INVALID_HANDLE_VALUE:
+            break
+        err = ctypes.get_last_error()
+        if time.time() > deadline:
+            return False
+        if err == _ERROR_PIPE_BUSY:
+            _k32.WaitNamedPipeW(path, 500)
+        elif err == _ERROR_FILE_NOT_FOUND:
+            time.sleep(0.1)
+        else:
+            return False
+    try:
+        data = line if isinstance(line, bytes) else line.encode("utf-8")
+        written = DWORD(0)
+        return bool(
+            _k32.WriteFile(h, data, len(data), byref(written), None)
+            and written.value == len(data)
+        )
+    finally:
+        _k32.CloseHandle(h)
+
+
 def _broker_script_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "agent_broker.py")
 
@@ -8213,10 +8251,9 @@ class AiTerminalDetachAllToWindowsTerminalCommand(sublime_plugin.ApplicationComm
     (2026-09-05), wedge Sublime Text itself with no in-app recovery
     possible at all. Getting every live agent session out to a real OS
     window *before* that happens means a hung/killed Sublime costs you
-    nothing -- the sessions were never inside it to begin with. Bring each
-    one back into Sublime afterward with 'Recover Session...' (one at a
-    time; a broker's pipe accepts only one connected client, so a session
-    still held by its WT window can't also be reattached in Sublime).
+    nothing -- the sessions were never inside it to begin with. Bring them
+    all back with 'Reattach All from Windows Terminal' once Sublime is
+    healthy again.
     """
 
     def run(self):
@@ -8236,8 +8273,8 @@ class AiTerminalDetachAllToWindowsTerminalCommand(sublime_plugin.ApplicationComm
         if not sublime.ok_cancel_dialog(
             f"This will open {len(terms)} Windows Terminal {noun}, one per "
             "live tab, and detach all of them from Sublime. Each agent "
-            "keeps running either way; use 'Recover Session...' on each "
-            "tab afterward to bring it back into Sublime.",
+            "keeps running either way; use 'Reattach All from Windows "
+            "Terminal' afterward to bring them all back.",
             "Detach All to Windows Terminal",
         ):
             return
@@ -8546,6 +8583,27 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
+def _attach_recovered_session(window, pipe_name, broker):
+    """Build a new terminal tab bound to an already-running broker session.
+
+    Shared by AiTerminalRecoverSessionCommand (one session, user-picked from
+    a quick panel) and AiTerminalReattachAllFromWindowsTerminalCommand (every
+    WT-held/orphaned session at once) -- both just need "make a tab for this
+    pipe_name," nothing else differs between them.
+    """
+    # Use the normal terminal-view constructor so recovered tabs receive
+    # the dedicated ANSI colour scheme and every input/layout setting.
+    profile = broker.get("profile_name") or "Recovered"
+    target = _terminal_view(window, name=profile, profile_name=profile)
+    target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
+    target.settings().set(_BROKER_PROFILE_SETTING, profile)
+    cwd = broker.get("cwd")
+    if cwd:
+        target.settings().set(_BROKER_CWD_SETTING, cwd)
+    sublime.status_message(f"Ai terminal: reconnecting {pipe_name}")
+    _reattach_broker_view(target, pipe_name)
+
+
 class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
     """Recover a detachable session -- one command instead of the two this
     replaces (Revive Frozen Tab / Recover Orphaned Session), which required
@@ -8766,20 +8824,127 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
         self.window.show_quick_panel(rows, _picked)
 
     def _attach_orphan(self, pipe_name, broker):
-        # Use the normal terminal-view constructor so recovered tabs receive
-        # the dedicated ANSI colour scheme and every input/layout setting.
-        profile = broker.get("profile_name") or "Recovered"
-        target = _terminal_view(self.window, name=profile, profile_name=profile)
-        target.settings().set(_BROKER_PIPE_SETTING, pipe_name)
-        target.settings().set(_BROKER_PROFILE_SETTING, profile)
-        cwd = broker.get("cwd")
-        if cwd:
-            target.settings().set(_BROKER_CWD_SETTING, cwd)
-        sublime.status_message(f"Ai terminal: reconnecting {pipe_name}")
-        _reattach_broker_view(target, pipe_name)
+        _attach_recovered_session(self.window, pipe_name, broker)
 
     def _reattach(self, term):
         _revive_terminal_client(term, self.window)
+
+
+class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.ApplicationCommand):
+    """Pull every detachable session not currently in an ST tab back into
+    this window, in one shot -- the mirror of 'Detach All to Windows
+    Terminal'.
+
+    Deliberately a separate command from 'Recover Session...' rather than a
+    branch inside it: that command's job is picking ONE named session off a
+    quick panel when the two of them are genuinely ambiguous (a frozen tab
+    vs. a fully orphaned broker). This command's job is different -- there is
+    nothing to pick, just "get everything back" -- and unlike Recover
+    Session it also does not give up when a session is still held by a WT
+    window: it sends that window's relay a DISCONNECT over the broker's
+    control pipe first (see _ControlServer/_InputServer.force_disconnect in
+    agent_broker.py), which both frees the pipe and makes the relay process
+    exit on its own (closing that WT window/tab), then attaches here --
+    no more close-the-window-then-find-Recover-Session two-step.
+    """
+
+    def run(self):
+        threading.Thread(target=self._discover_and_reattach, daemon=True).start()
+
+    def _discover_and_reattach(self):
+        with _term_lock():
+            terms = list(_term_registry().values())
+        attached_pipes = set()
+        # Frozen local terms (view still open, pty already dead -- the state
+        # a WT hand-off or a crash both leave behind) get reused in place by
+        # _finish instead of building a second, duplicate tab.
+        frozen_terms_by_pipe = {}
+        for term in terms:
+            pty = getattr(term, "pty", None)
+            pipe_name = getattr(pty, "pipe_name", None)
+            if not pipe_name:
+                continue
+            # A view staying open after a WT hand-off (pty.kill() detaches
+            # without closing the tab -- same "frozen tab" state as a crash)
+            # must NOT count as "still attached", or a just-detached session
+            # is silently excluded from targets and this command no-ops.
+            try:
+                if pty is not None and not pty.is_alive():
+                    frozen_terms_by_pipe[pipe_name] = term
+                    continue
+            except (RuntimeError, AttributeError):
+                pass
+            view = getattr(term, "view", None)
+            try:
+                if view is not None and view.is_valid() and view.window():
+                    attached_pipes.add(pipe_name)
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] reattach-all: view usability check failed:\n%s"
+                      % traceback.format_exc())
+
+        try:
+            brokers = _registered_brokers()
+        except Exception:
+            print("[ai_terminal] reattach-all: registry read failed:\n%s"
+                  % traceback.format_exc())
+            brokers = []
+
+        targets = [b for b in brokers if b.get("pipe_name") not in attached_pipes]
+        if not targets:
+            sublime.set_timeout(
+                lambda: sublime.status_message(
+                    "Ai terminal: no sessions outside Sublime to reattach"
+                ), 0,
+            )
+            return
+
+        reattached, still_busy = [], []
+        for broker in targets:
+            pipe_name = broker.get("pipe_name")
+            if not pipe_name:
+                continue
+            if not _pipe_instance_free(pipe_name):
+                _send_broker_ctl_line(pipe_name, b"DISCONNECT\n")
+                # DISCONNECT only requests the cancel; the relay's own
+                # ReadFile has to actually fail and its process exit before
+                # the pipe instance is truly free again -- poll briefly
+                # rather than assuming it happened synchronously.
+                freed = False
+                for _ in range(20):
+                    time.sleep(0.1)
+                    if _pipe_instance_free(pipe_name):
+                        freed = True
+                        break
+                if not freed:
+                    still_busy.append(pipe_name)
+                    continue
+            reattached.append(broker)
+
+        sublime.set_timeout(
+            lambda: self._finish(reattached, still_busy, frozen_terms_by_pipe), 0
+        )
+
+    def _finish(self, reattached, still_busy, frozen_terms_by_pipe):
+        window = sublime.active_window()
+        for broker in reattached:
+            pipe_name = broker.get("pipe_name")
+            term = frozen_terms_by_pipe.get(pipe_name)
+            if term is not None:
+                _revive_terminal_client(term, window)
+            else:
+                _attach_recovered_session(window, pipe_name, broker)
+        noun = "session" if len(reattached) == 1 else "sessions"
+        if still_busy:
+            sublime.error_message(
+                "Ai Terminal: reattached {} {}; still busy after asking to "
+                "disconnect: {}".format(
+                    len(reattached), noun, ", ".join(still_busy)
+                )
+            )
+        elif reattached:
+            sublime.status_message(
+                f"Ai terminal: reattached {len(reattached)} {noun} from Windows Terminal"
+            )
 
 
 class AiTerminalNukeCommand(sublime_plugin.TextCommand):
