@@ -399,6 +399,61 @@ CATALOG = {
             "alt-screen quirks."
         ),
     },
+    # ---- vercel-labs/skills-cli supported-agents cross-check ---------------
+    # That tool's documented "Supported Agents" list (41 names) overlapped
+    # heavily with CATALOG already; these 7 are the names confirmed as real,
+    # installable local CLIs that weren't covered. Same convention as the
+    # broad-discovery block above: bare command name, no quirk overrides,
+    # honestly marked unverified.
+    "openhands": {
+        "display_name": "OpenHands",
+        "launch_command": ["openhands"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "codebuddy": {
+        "display_name": "CodeBuddy",
+        "launch_command": ["codebuddy"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "iflow": {
+        "display_name": "iFlow CLI",
+        "launch_command": ["iflow"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "mux": {
+        "display_name": "Mux",
+        "launch_command": ["mux"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "trae": {
+        "display_name": "Trae",
+        "launch_command": ["trae"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "trae-cn": {
+        "display_name": "Trae CN",
+        "launch_command": ["trae-cn"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "zencoder": {
+        "display_name": "Zencoder",
+        "launch_command": ["zencoder"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
 }
 
 
