@@ -28,6 +28,12 @@
 				"caption": "End Session (Kill + Close)",
 				"command": "ai_terminal_end_session",
 				"args": { "group": -1, "index": -1 }
+			},
+			{ "caption": "-" },
+			{
+				"caption": "New Session (Relaunch)",
+				"command": "ai_terminal_relaunch",
+				"args": { "group": -1, "index": -1 }
 			}
 		]
 	}

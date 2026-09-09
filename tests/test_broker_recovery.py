@@ -283,23 +283,36 @@ def test_plugin_load_reapplies_terminal_view_styling_before_reattach():
     assert style < reattach
 
 
-def test_open_in_windows_terminal_does_not_auto_close_or_kill_the_handoff_tab():
-    # kill() on a deliberate hand-off closes this tab's own read handle via
-    # CancelIoEx -- indistinguishable, to the reader thread, from the child
-    # actually dying. Without _expected_termination_reason, that
-    # self-inflicted "death" both auto-closes the tab (~1.5s later,
-    # close_tab_on_exit) AND that close sends a real KILL to the still-live
-    # broker WT is now attached to -- reproduced live: the tab really did
-    # vanish, not just look frozen. This checks the three places that must
-    # agree on the flag.
+def test_open_in_windows_terminal_closes_the_tab_without_killing_the_handoff_session():
+    # This used to deliberately leave the tab open, frozen -- confirmed live
+    # (2026-09-09) that reads as broken (a dead-looking tab that never goes
+    # away) once the command is framed as "Move to Windows Terminal", so it
+    # now closes the tab once handoff succeeds. That's only safe because
+    # on_close (AiTerminalViewListener) never calls explicit_kill for any
+    # reason anymore -- a real kill only ever happens via the dedicated Kill
+    # Session/End Session commands -- so this close can't race a real KILL
+    # against the still-live broker WT is now attached to, the way it could
+    # before that fix (reproduced live back then: the tab really did vanish
+    # under a self-inflicted "death", not just look frozen).
     source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
 
-    cmd_start = source.index("class AiTerminalOpenInWindowsTerminalCommand")
-    cmd_end = source.index("class AiTerminalKillSessionCommand", cmd_start)
-    cmd_source = source[cmd_start:cmd_end]
-    set_flag = cmd_source.index('term._expected_termination_reason = "handoff"')
-    kill_call = cmd_source.index("pty.kill()")
+    handoff_start = source.index("def _handoff_term_to_windows_terminal(")
+    handoff_end = source.index(
+        "class AiTerminalDetachAllToWindowsTerminalCommand", handoff_start
+    )
+    handoff_source = source[handoff_start:handoff_end]
+    set_flag = handoff_source.index('term._expected_termination_reason = "handoff"')
+    kill_call = handoff_source.index("pty.kill()")
+    close_call = handoff_source.index("view.close()")
     assert set_flag < kill_call, "flag must be set before kill() races the reader thread"
+    assert kill_call < close_call, "must detach the pty before closing the tab"
+    # Deferred via set_timeout, not a synchronous call in the same breath as
+    # the running command -- confirmed live (2026-09-09) that a same-command
+    # synchronous view.close() here is silently ignored, since this runs
+    # from inside AiTerminalOpenInWindowsTerminalCommand's own
+    # run(self, edit) while that TextCommand is still executing against
+    # this exact view.
+    assert "sublime.set_timeout(lambda: view.close()" in handoff_source
 
     read_loop_start = source.index("def _read_loop(self):")
     read_loop_end = source.index("def _maybe_close_dead_view(self):", read_loop_start)
@@ -457,6 +470,65 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     for name in ("ai_terminal_end_session", "ai_terminal_session_info"):
         assert name in by_command
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_relaunch_kills_then_respawns_into_the_same_view():
+    # New Session (Relaunch): end this tab's current agent/shell for real,
+    # then start a fresh one of the same profile/cwd in the same view --
+    # unlike End Session, the tab itself must never close.
+    source = (ROOT / "ai_terminal.py").read_text(encoding="utf-8")
+    import json
+
+    commands = json.loads(
+        (ROOT / "Default.sublime-commands").read_text(encoding="utf-8")
+    )
+    assert any(c.get("command") == "ai_terminal_relaunch" for c in commands)
+
+    relaunch_start = source.index("class AiTerminalRelaunchCommand")
+    relaunch_end = source.index(
+        "def _sublime_view_info_lines(view):", relaunch_start
+    )
+    relaunch_source = source[relaunch_start:relaunch_end]
+    assert "sublime_plugin.WindowCommand" in relaunch_source.split("\n")[0]
+    assert "_tab_menu_target_view(self.window, group, index)" in relaunch_source
+    assert 'term._expected_termination_reason = "killed"' in relaunch_source
+    kill_call = relaunch_source.index("pty.explicit_kill()")
+    respawn_call = relaunch_source.index("_spawn_into_view(")
+    assert kill_call < respawn_call, "must kill the old session before spawning a new one"
+    # Deliberately never closes the tab -- that's the whole point versus
+    # End Session.
+    assert "view.close()" not in relaunch_source
+    # Old registry entry, watcher, and toolbar phantom must be torn down
+    # before the new _Terminal is registered for the same view id, or the
+    # new session would collide with (or be shadowed by) the dead one.
+    assert "_term_registry().pop(view.id(), None)" in relaunch_source
+    assert "term._watcher.dispose()" in relaunch_source
+    assert "view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)" in relaunch_source
+    assert "threading.Thread(target=_do_relaunch" in relaunch_source
+
+    tab_menu = json.loads(
+        (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
+    )
+
+    def _flatten(items):
+        for item in items:
+            yield item
+            yield from _flatten(item.get("children") or [])
+
+    by_command = {
+        item.get("command"): item
+        for item in _flatten(tab_menu)
+        if item.get("command")
+    }
+    assert "ai_terminal_relaunch" in by_command
+    assert by_command["ai_terminal_relaunch"].get("args") == {"group": -1, "index": -1}
+
+    # Wired into the toolbar phantom too, not just the menu/palette.
+    toolbar_start = source.index("def _add_close_toolbar(term):")
+    toolbar_end = source.index("def _ensure_host_cursor_rule(", toolbar_start)
+    toolbar_source = source[toolbar_start:toolbar_end]
+    assert '"relaunch"' in toolbar_source
+    assert "ai_terminal_relaunch" in toolbar_source
 
 
 def test_sublime_view_info_lines_reports_ids_and_group_index():

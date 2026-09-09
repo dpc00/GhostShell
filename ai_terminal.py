@@ -1101,10 +1101,10 @@ def _is_broker_pty(pty):
 
 
 def _add_close_toolbar(term):
-    """(Re-)anchor the persistent Kill/Detach/Windows-Terminal toolbar to
-    term's view, at the buffer's current end. See _CLOSE_TOOLBAR_PHANTOM_KEY.
-    No-op for non-broker sessions (nothing to detach-vs-kill) or an already-
-    invalid view.
+    """(Re-)anchor the persistent Close Tab/Relaunch/Windows-Terminal toolbar
+    to term's view, at the buffer's current end. See
+    _CLOSE_TOOLBAR_PHANTOM_KEY. No-op for non-broker sessions (nothing to
+    detach or relaunch) or an already-invalid view.
 
     Called from _do_render after every applied frame (outside term._lock),
     not just once at spawn/reattach/migrate. A short-lived test (2026-09-09)
@@ -1130,18 +1130,70 @@ def _add_close_toolbar(term):
             v.run_command("ai_terminal_open_in_windows_terminal")
             return
         group, index = w.get_view_index(v)
-        if href == "kill":
-            w.run_command("ai_terminal_kill_session", {"group": group, "index": index})
-        elif href == "detach":
+        if href == "detach":
             w.run_command("ai_terminal_close_keep_alive", {"group": group, "index": index})
+        elif href == "relaunch":
+            w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
 
+    # Plain text, no leading symbol: every dingbat/emoji tried (⏹ ⏏ ↗ ↻ 🔄)
+    # had some glyph-support quirk in minihtml -- a tofu box, dim/inconsistent
+    # weight, or a swallowed space before the following word. Confirmed live
+    # (2026-09-09).
+    #
+    # Hard-wrapped ourselves at the view's known column count, the same way
+    # the PTY apps this hosts wrap their own output -- their wrapping is real
+    # newline characters written for a known terminal width, not Sublime
+    # soft-wrap (word_wrap is off on this view, required so the PTY grid
+    # itself doesn't reflow). A phantom is not buffer text, so it gets none
+    # of that hard-wrapping for free; confirmed live (2026-09-09) that a
+    # single unwrapped row just overflows sideways instead, with later items
+    # clipped off-screen and reachable only by horizontal scroll.
+    # No standalone Kill Session button: a real kill is already reachable via
+    # '/exit' inside the agent itself, or by closing the tab (which detaches,
+    # not kills, by default -- see AiTerminalViewListener.on_close). Kill
+    # Session/End Session still exist as explicit commands (Tab Context menu,
+    # Command Palette) for when the process is genuinely stuck and won't
+    # respond to '/exit'; they just don't need a toolbar shortcut too.
+    #
+    # (href, display text, html text) -- kept separate in case a future label
+    # needs HTML entities again; none of these currently do.
+    items = [
+        ("detach", "Close Tab", "Close Tab"),
+        ("relaunch", "Relaunch Agent", "Relaunch Agent"),
+        ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
+    ]
+    sep = "   |   "
+    try:
+        cols, _rows = _measure(view, profile_name=term.profile_name)
+    except Exception:
+        cols = 80
+    # Small safety margin: the phantom's own padding, and any rounding
+    # difference between minihtml's monospace metrics and the terminal
+    # font's, both eat into the raw column count.
+    cols = max(20, cols - 4)
+    lines, cur, cur_len = [], [], 0
+    for href, display, markup in items:
+        add_len = len(display) + (len(sep) if cur else 0)
+        if cur and cur_len + add_len > cols:
+            lines.append(cur)
+            cur, cur_len, add_len = [], 0, len(display)
+        cur.append((href, markup))
+        cur_len += add_len
+    if cur:
+        lines.append(cur)
+    row_html = [
+        sep.join('<a href="%s">%s</a>' % (href, markup) for href, markup in line)
+        for line in lines
+    ]
+    # font-family: monospace so a character actually is the width _measure's
+    # cols count assumed -- minihtml's default UI font isn't monospace, and
+    # the cols-based line-wrap above is only valid if characters here are the
+    # same width as the terminal grid's.
     html = (
-        '<body style="padding:2px 8px;">'
-        '<style>a{margin-right:18px;text-decoration:none;}</style>'
-        '<a href="kill">⏹ Kill Session</a>'
-        '<a href="detach">⏏ Keep Alive &amp; Close Tab</a>'
-        '<a href="wt">↗ Open in Windows Terminal</a>'
-        '</body>'
+        '<body style="padding:2px 8px; font-family:monospace;">'
+        '<style>a{text-decoration:none;}</style>'
+        + "<br>".join(row_html)
+        + "</body>"
     )
     size = view.size()
     view.add_phantom(
@@ -3625,13 +3677,14 @@ _VIEW_NAME = "Ai"
 _VIEW_SETTING = "ai_terminal_view"
 _TAG_SETTING = "ai_logger"  # so panic_dialog / ClaudeSendTab still find this view
 
-# Persistent bottom-of-tab Kill/Detach/Windows-Terminal toolbar for detachable
-# sessions -- see _add_close_toolbar. Mouse-driven tab close never dispatches
-# a plugin-visible command (sublimehq/sublime_text#1922), so a close-time
-# confirmation dialog can't be relied on; these are always-available buttons
-# instead. Added once at spawn/reattach -- the phantom's anchor region tracks
-# the buffer's growing end through every render frame's full-buffer replace
-# on its own (confirmed live), no per-frame re-add needed.
+# Persistent bottom-of-tab Close Tab/Relaunch/Windows-Terminal toolbar for
+# detachable sessions -- see _add_close_toolbar. Mouse-driven tab close never
+# dispatches a plugin-visible command (sublimehq/sublime_text#1922), so a
+# close-time confirmation dialog can't be relied on; these are always-
+# available buttons instead. Re-anchored on every render frame, not just
+# once at spawn/reattach -- a phantom's anchor region does not reliably track
+# a growing buffer's end through repeated full-buffer view.replace() calls
+# over a long session (confirmed live).
 _CLOSE_TOOLBAR_PHANTOM_KEY = "ai_terminal_close_toolbar"
 
 # Persisted (view.settings() survives an ST restart via the workspace session
@@ -4998,9 +5051,11 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         # Closing a tab -- by any method (mouse-X, Ctrl+W, whole-window
         # close, a script's view.close()) -- only ever detaches now, never
         # ends the session. Real termination is deliberately opt-in only:
-        # the toolbar's Kill Session / End Session commands (see
-        # _add_close_toolbar), which set _expected_termination_reason
-        # themselves before anything closes. A bare close can't tell mouse-X
+        # '/exit' inside the agent itself, or the explicit Kill Session/End
+        # Session commands (Tab Context menu, Command Palette -- no toolbar
+        # shortcut, see _add_close_toolbar), which set
+        # _expected_termination_reason themselves before anything closes.
+        # A bare close can't tell mouse-X
         # apart from a real command anyway (sublimehq/sublime_text#1922), so
         # there is no signal here to decide a kill on -- see conversation
         # 2026-09-09 for the confirmation-dialog approach this replaced.
@@ -6094,13 +6149,12 @@ class AiTerminalClearWorkingDirectoryCommand(sublime_plugin.WindowCommand):
         return _get_working_dir(self.window) is not None
 
 
-def _spawn(window, path, profile=None):
-    if not _PTY_OK:
-        sublime.error_message("ai_terminal: no PTY backend available (ConPTY ctypes binding failed).")
-        return
-
-    s = _settings_obj()
-    profile_name = profile or s.get("default_profile")
+def _resolve_profile_launch(profile_name, s=None):
+    """Resolve a profile name into (profile_name, argv, extra_env) -- the
+    launch_command/spawn_env half of _spawn's old body, split out so
+    AiTerminalRelaunchCommand can redo this resolution (profile settings may
+    have changed since the tab was first spawned) without duplicating it."""
+    s = s or _settings_obj()
     profile_data = _profile_settings(profile_name, s)
 
     if profile_data:
@@ -6117,6 +6171,16 @@ def _spawn(window, path, profile=None):
         argv = _launch_command()
         extra_env = _spawn_env()
         profile_name = "Legacy" if profile_name else None
+    return profile_name, argv, extra_env
+
+
+def _spawn(window, path, profile=None):
+    if not _PTY_OK:
+        sublime.error_message("ai_terminal: no PTY backend available (ConPTY ctypes binding failed).")
+        return
+
+    s = _settings_obj()
+    profile_name, argv, extra_env = _resolve_profile_launch(profile or s.get("default_profile"), s)
 
     # Determine unique tab name
     pfx = "Ai"
@@ -6131,8 +6195,17 @@ def _spawn(window, path, profile=None):
 
     view = _terminal_view(window, name=tab_name, profile_name=profile_name)
     window.focus_view(view)
+    _spawn_into_view(view, path, profile_name, argv, extra_env)
+
+
+def _spawn_into_view(view, path, profile_name, argv, extra_env):
+    """Start a fresh PTY/Screen/_Terminal and attach it to an already-
+    created, already-focused terminal view -- the tail end of _spawn's old
+    body, factored out so AiTerminalRelaunchCommand can reuse it against an
+    *existing* tab (kill the old session, reset the view, spawn a new
+    process into it) instead of duplicating this bring-up sequence."""
     cols, rows = _measure(view, profile_name=profile_name)
-    
+
     # Host (ST plugin host / agent shells) often has NO_COLOR=1, FORCE_COLOR=0,
     # TERM=dumb — Grok doctor then reports color=none. Sanitize before spawn;
     # profile spawn_env still wins for any key it sets.
@@ -8169,16 +8242,15 @@ def _revive_terminal_client(term, window):
 
 
 class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
-    """Hand this tab's live broker session to a real Windows Terminal window.
+    """Move this tab's live broker session to a real Windows Terminal window.
 
     tools/recover_console.py is a raw VT relay over the same named pipes
     _BrokerPty itself uses -- not a new agent process, the same running one.
     The broker accepts only one connected client at a time, so this is a
-    handoff, not a second view: this tab detaches (same state as a frozen
-    tab) the moment Windows Terminal's relay client connects.
-    'Recover Session...', run with this same tab focused, brings the
-    session back into Sublime later; the agent process itself is untouched
-    either way.
+    move, not a copy: this tab closes once Windows Terminal's relay client
+    connects. 'Recover Session...' (Command Palette or Tab Context on any
+    other tab) brings the session back into Sublime into a fresh tab later;
+    the agent process itself is untouched either way.
     """
 
     def run(self, edit):
@@ -8193,11 +8265,11 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
             return
 
         if not sublime.ok_cancel_dialog(
-            "This tab will detach as soon as Windows Terminal connects -- "
+            "This tab will close as soon as Windows Terminal connects -- "
             "only one client can hold the session at a time. The agent "
-            "keeps running either way; use 'Recover Session...' on this "
-            "same tab to bring it back into Sublime later.",
-            "Open in Windows Terminal",
+            "keeps running either way; use 'Recover Session...' to bring "
+            "it back into Sublime later.",
+            "Move to Windows Terminal",
         ):
             return
 
@@ -8237,12 +8309,19 @@ def _wt_handoff_prereqs():
 
 
 def _handoff_term_to_windows_terminal(term, wt_exe, python_exe):
-    """Launch a WT window relaying `term`'s broker pipe, then detach this
-    tab from it. Returns (pipe_name, error_message_or_None).
+    """Launch a WT window relaying `term`'s broker pipe, then close this tab.
+    Returns (pipe_name, error_message_or_None).
 
-    Only one client (this tab, or WT's relay) can hold a broker's pipe at
-    a time, so this is a handoff, not a second view -- the tab detaches
-    (same state as a frozen tab) the moment Windows Terminal connects.
+    Only one client (this tab, or WT's relay) can hold a broker's pipe at a
+    time, so this is a move, not a copy: closing the tab is the point, not
+    an afterthought -- confirmed live (2026-09-09) that leaving it open as a
+    frozen, unreadable husk (its old "detach = leave a frozen tab" behavior)
+    just reads as broken, especially once the command itself says "Move".
+    Safe to actually close now that on_close (AiTerminalViewListener) never
+    calls explicit_kill for any reason -- a real kill can only happen via
+    the dedicated Kill Session/End Session commands, so this close can never
+    race a real KILL against the still-live session WT is attached to (see
+    test_open_in_windows_terminal_closes_the_tab_without_killing_the_handoff_session).
     """
     pty = term.pty
     pipe_name = pty.pipe_name
@@ -8262,6 +8341,14 @@ def _handoff_term_to_windows_terminal(term, wt_exe, python_exe):
     # _read_loop and on_close this wasn't one.
     term._expected_termination_reason = "handoff"
     pty.kill()
+    # Deferred, not synchronous: this is called from
+    # AiTerminalOpenInWindowsTerminalCommand's own run(self, edit) while that
+    # TextCommand is still executing against this same view -- confirmed
+    # live (2026-09-09) that a same-command, synchronous view.close() here
+    # is silently ignored, same reason AiTerminalEndSessionCommand already
+    # defers its own view.close() through set_timeout.
+    view = term.view
+    sublime.set_timeout(lambda: view.close() if view.is_valid() else None, 0)
     return pipe_name, None
 
 
@@ -8296,7 +8383,7 @@ class AiTerminalDetachAllToWindowsTerminalCommand(sublime_plugin.ApplicationComm
         noun = "session" if len(terms) == 1 else "sessions"
         if not sublime.ok_cancel_dialog(
             f"This will open {len(terms)} Windows Terminal {noun}, one per "
-            "live tab, and detach all of them from Sublime. Each agent "
+            "live tab, and close all of those tabs in Sublime. Each agent "
             "keeps running either way; use 'Reattach All from Windows "
             "Terminal' afterward to bring them all back.",
             "Detach All to Windows Terminal",
@@ -8460,6 +8547,78 @@ class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)
         return term is not None and _is_broker_pty(term.pty)
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
+class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
+    """New Session: end this tab's current agent/shell for real, then
+    launch a fresh one of the same profile in the same working directory --
+    reusing this tab rather than opening a new one. The toolbar's escape
+    hatch for "this session is stuck/confused, start clean" without losing
+    the tab's place in the window or its group/index.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        if term is None:
+            sublime.status_message("Ai terminal: this tab has no session to relaunch")
+            return
+        profile_name = getattr(term, "profile_name", None)
+        path = (
+            view.settings().get(_BROKER_CWD_SETTING)
+            or _get_working_dir(self.window)
+            or os.path.expanduser("~")
+        )
+        pty = term.pty
+        # Set before explicit_kill() blocks (below), same reasoning as Kill
+        # Session/End Session: on_close (if the view happens to close for
+        # some unrelated reason mid-relaunch) must not redundantly try to
+        # kill an already-dead broker again.
+        term._expected_termination_reason = "killed"
+
+        def _do_relaunch():
+            try:
+                pty.explicit_kill()
+            except Exception as e:
+                print(f"[ai_terminal] explicit_kill (Relaunch) failed: {e}")
+
+            def _restart():
+                if not view.is_valid():
+                    return
+                with _term_lock():
+                    _term_registry().pop(view.id(), None)
+                if term._watcher is not None:
+                    term._watcher.dispose()
+                    term._watcher = None
+                view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
+                view.run_command("ai_terminal_nuke")
+                for setting_name in (
+                    _BROKER_PIPE_SETTING, _BROKER_PROFILE_SETTING, _BROKER_CWD_SETTING,
+                ):
+                    view.settings().erase(setting_name)
+                s = _settings_obj()
+                resolved_profile, argv, extra_env = _resolve_profile_launch(profile_name, s)
+                _spawn_into_view(view, path, resolved_profile, argv, extra_env)
+
+            # Tear down + respawn on the main thread -- everything touched
+            # here (registry, phantoms, view content/settings, PTY bring-up)
+            # is main-thread-only, same as _spawn's own callers.
+            sublime.set_timeout(_restart, 0)
+
+        # explicit_kill() reconnects over a named pipe with up to ~1s of
+        # WaitNamedPipeW/connect retries -- run off the main thread so a
+        # slow/stale broker can't freeze Sublime's UI for that long.
+        threading.Thread(target=_do_relaunch, daemon=True).start()
+
+    def is_enabled(self, group=-1, index=-1):
+        return _tab_menu_term(self.window, group, index) is not None
 
     def is_visible(self, group=-1, index=-1):
         return self.is_enabled(group, index)
