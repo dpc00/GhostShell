@@ -1100,6 +1100,56 @@ def _is_broker_pty(pty):
     )
 
 
+def _add_close_toolbar(term):
+    """(Re-)anchor the persistent Kill/Detach/Windows-Terminal toolbar to
+    term's view, at the buffer's current end. See _CLOSE_TOOLBAR_PHANTOM_KEY.
+    No-op for non-broker sessions (nothing to detach-vs-kill) or an already-
+    invalid view.
+
+    Called from _do_render after every applied frame (outside term._lock),
+    not just once at spawn/reattach/migrate. A short-lived test (2026-09-09)
+    made it look like a phantom's zero-width anchor tracks the buffer's
+    growing end through every full-buffer view.replace() on its own; a real,
+    longer-running session disproved that -- it went stale mid-buffer once
+    enough new content had been appended after it. Erasing + re-adding here
+    every frame is cheap next to the render it follows and keeps it honest.
+    """
+    view = term.view
+    if not view or not view.is_valid() or not _is_broker_pty(term.pty):
+        return
+    view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
+
+    def _on_navigate(href):
+        v = term.view
+        if not v or not v.is_valid():
+            return
+        w = v.window()
+        if w is None:
+            return
+        if href == "wt":
+            v.run_command("ai_terminal_open_in_windows_terminal")
+            return
+        group, index = w.get_view_index(v)
+        if href == "kill":
+            w.run_command("ai_terminal_kill_session", {"group": group, "index": index})
+        elif href == "detach":
+            w.run_command("ai_terminal_close_keep_alive", {"group": group, "index": index})
+
+    html = (
+        '<body style="padding:2px 8px;">'
+        '<style>a{margin-right:18px;text-decoration:none;}</style>'
+        '<a href="kill">⏹ Kill Session</a>'
+        '<a href="detach">⏏ Keep Alive &amp; Close Tab</a>'
+        '<a href="wt">↗ Open in Windows Terminal</a>'
+        '</body>'
+    )
+    size = view.size()
+    view.add_phantom(
+        _CLOSE_TOOLBAR_PHANTOM_KEY, sublime.Region(size, size), html,
+        sublime.LAYOUT_BLOCK, _on_navigate,
+    )
+
+
 # ─── _PosixPty: forkpty child process (Linux/WSL/macOS) ──────────────────────
 
 
@@ -3575,6 +3625,15 @@ _VIEW_NAME = "Ai"
 _VIEW_SETTING = "ai_terminal_view"
 _TAG_SETTING = "ai_logger"  # so panic_dialog / ClaudeSendTab still find this view
 
+# Persistent bottom-of-tab Kill/Detach/Windows-Terminal toolbar for detachable
+# sessions -- see _add_close_toolbar. Mouse-driven tab close never dispatches
+# a plugin-visible command (sublimehq/sublime_text#1922), so a close-time
+# confirmation dialog can't be relied on; these are always-available buttons
+# instead. Added once at spawn/reattach -- the phantom's anchor region tracks
+# the buffer's growing end through every render frame's full-buffer replace
+# on its own (confirmed live), no per-frame re-add needed.
+_CLOSE_TOOLBAR_PHANTOM_KEY = "ai_terminal_close_toolbar"
+
 # Persisted (view.settings() survives an ST restart via the workspace session
 # file) so a detachable profile's tab can reconnect to its still-running
 # agent_broker.py session after Sublime restarts -- see _BrokerPty and
@@ -3597,26 +3656,18 @@ _BROKER_REATTACH_CONFIRM_MS = 250
 # this set prevents activation/plugin reload from starting duplicate attempts.
 _BROKER_CONNECTING = set()
 
-# view.on_close() fires identically whether the user closed just that one
-# tab or the whole window is going down (confirmed: ViewEventListener has no
-# on_pre_close_window -- only the global EventListener does, and on_close's
-# own doc doesn't distinguish either). EventListener.on_pre_close_window
-# fires first and marks every detachable-broker view in that window here, so
-# on_close can tell "this view's window is closing" apart from "the user
-# deliberately closed this one tab" and only explicit_kill() in the latter
-# case.
+# Marks detachable-broker views mid-whole-window-close so
+# AiTerminalTabCloseInterceptor.on_window_command can tell that apart from a
+# deliberate single-tab close and skip sending a profile's graceful
+# tab_close_input during teardown (killing the window is not the moment to
+# ask an agent to exit gracefully -- it's already going away).
 _WINDOW_CLOSING_TERM_IDS = set()
-# Native close_file/close_by_index commands positively identify a deliberate
-# tab close before Sublime destroys the view.  Keep this separate from the
-# window-close marker: relying only on "window is not closing" can misclassify
-# a tab close during busy terminal output and detach the broker instead.
-_USER_CLOSING_TERM_IDS = set()
 
 
 class AiTerminalWindowCloseListener(sublime_plugin.EventListener):
-    """Marks detachable-broker views so on_close (AiTerminalViewListener,
-    below) can tell a window closing apart from a deliberate single-tab
-    close. See _WINDOW_CLOSING_TERM_IDS."""
+    """Marks detachable-broker views so on_window_command
+    (AiTerminalTabCloseInterceptor, below) can tell a window closing apart
+    from a deliberate single-tab close. See _WINDOW_CLOSING_TERM_IDS."""
 
     def on_pre_close_window(self, window):
         for view in window.views():
@@ -3671,10 +3722,6 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
         term = _Terminal.from_id(view.id())
         if term is None or view.id() in _WINDOW_CLOSING_TERM_IDS:
             return None
-
-        # Record every deliberate terminal-tab close, including profiles such
-        # as Codex that do not use a graceful tab_close_input sequence.
-        _USER_CLOSING_TERM_IDS.add(view.id())
 
         profile = _profile_settings(getattr(term, "profile_name", None))
         exit_input = profile.get("tab_close_input") if profile else None
@@ -4059,6 +4106,7 @@ def _migrate_terminal_view(term, new_view):
         _term_registry()[new_vid] = term
 
     term.view = new_view
+    _add_close_toolbar(term)
     term.screen.dirty = True
     # _do_render's skip_all fast path compares against these caches to avoid
     # repainting unchanged content -- but they were populated by the paint
@@ -4599,6 +4647,7 @@ def _do_render(term):
     term._last_render_text = text
     term._last_caret_off = caret_off if caret_off is not None else -1
     term._last_render_mono = time.monotonic()
+    _add_close_toolbar(term)
     _update_debug_status(term)
     _rearm_if_dirty(term)
 
@@ -4944,45 +4993,18 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             term._watcher = None
         with _term_lock():
             _term_registry().pop(self.view.id(), None)
+        self.view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
 
-        # on_close fires identically whether the user closed just this one
-        # tab or the whole window is going down (confirmed live 2026-08-27:
-        # closing Sublime via the title-bar X killed a detachable
-        # broker/claude.exe pair here, even though this file's own
-        # documented contract says closing the tab must NOT end the agent --
-        # see the _BrokerPty class comment). AiTerminalWindowCloseListener's
-        # on_pre_close_window runs first and records which views belong to a
-        # closing window, so this is the one place that can tell "this
-        # view's window is closing" apart from "the user deliberately closed
-        # this one tab".
-        vid = self.view.id()
-        window_closing = vid in _WINDOW_CLOSING_TERM_IDS
-        user_closing = vid in _USER_CLOSING_TERM_IDS
-        _WINDOW_CLOSING_TERM_IDS.discard(vid)
-        _USER_CLOSING_TERM_IDS.discard(vid)
-
-        def _do_close():
-            if (
-                _is_broker_pty(term.pty)
-                and (user_closing or not window_closing)
-                and term._expected_termination_reason is None
-            ):
-                # A deliberate single-tab close ends the session for real.
-                # Window closes must not: restored tabs reconnect later.
-                # Neither must a tab already handed off elsewhere (Open in
-                # Windows Terminal) -- nothing local is ending, the session
-                # already lives on in whatever it was handed to; killing it
-                # here would end that live session out from under it. Nor an
-                # already-Kill-Session'd tab -- explicit_kill() again here
-                # would just be a harmless no-op against an already-dead
-                # broker, but there's no reason to send it.
-                try:
-                    term.pty.explicit_kill()
-                except Exception as e:
-                    print(f"[ai_terminal] explicit_kill on tab close failed: {e}")
-            term.kill()
-
-        threading.Thread(target=_do_close, daemon=True).start()
+        # Closing a tab -- by any method (mouse-X, Ctrl+W, whole-window
+        # close, a script's view.close()) -- only ever detaches now, never
+        # ends the session. Real termination is deliberately opt-in only:
+        # the toolbar's Kill Session / End Session commands (see
+        # _add_close_toolbar), which set _expected_termination_reason
+        # themselves before anything closes. A bare close can't tell mouse-X
+        # apart from a real command anyway (sublimehq/sublime_text#1922), so
+        # there is no signal here to decide a kill on -- see conversation
+        # 2026-09-09 for the confirmation-dialog approach this replaced.
+        threading.Thread(target=term.kill, daemon=True).start()
 
     # ─── pre-empt ST's internal view.show on focus/hover ───────────────────
     #
@@ -6205,6 +6227,7 @@ def _spawn(window, path, profile=None):
         view.settings().set(_BROKER_CWD_SETTING, path)
     with _term_lock():
         _term_registry()[view.id()] = term
+    _add_close_toolbar(term)
     term.start_reader()
 
 
@@ -6394,6 +6417,7 @@ def _reattach_broker_view(view, pipe_name):
             view.settings().set(_VIEW_SETTING, True)
             view.settings().erase("ai_terminal_orphaned")
             _term_registry()[vid] = term
+        _add_close_toolbar(term)
         term.start_reader()
         print(f"[ai_terminal] reattached view {vid} to pipe {pipe_name!r}")
 

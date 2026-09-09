@@ -307,12 +307,16 @@ def test_open_in_windows_terminal_does_not_auto_close_or_kill_the_handoff_tab():
     assert "self._expected_termination_reason" in read_loop_source
     assert "error is None and reason is None" in read_loop_source
 
+    # on_close no longer ever calls explicit_kill() at all (tab close only
+    # detaches now -- see AiTerminalTabCloseInterceptor's docstring and
+    # AiTerminalKillSessionCommand for the deliberate-kill paths), so a
+    # handoff tab closing can no longer race a real KILL by construction.
     on_close_start = source.index("def on_close(self):")
     on_close_end = source.index(
         "# ─── pre-empt ST's internal view.show", on_close_start
     )
     on_close_source = source[on_close_start:on_close_end]
-    assert "term._expected_termination_reason is None" in on_close_source
+    assert "explicit_kill" not in on_close_source
 
 
 def test_kill_session_keeps_tab_open_close_keep_alive_does_not_kill():

@@ -1376,7 +1376,7 @@ def test_window_close_is_not_converted_to_agent_exit(clean_state):
             ai_terminal._term_registry().pop(view.id(), None)
 
 
-def test_native_codex_tab_close_is_recorded_without_graceful_exit_input(clean_state):
+def test_native_codex_tab_close_falls_through_without_graceful_exit_input(clean_state):
     view = FakeView(vid=906)
     view.settings().set(ai_terminal._VIEW_SETTING, True)
     window = FakeWindow(active_view=view)
@@ -1388,9 +1388,7 @@ def test_native_codex_tab_close_is_recorded_without_graceful_exit_input(clean_st
             window, "close_file", None
         )
         assert result is None
-        assert view.id() in ai_terminal._USER_CLOSING_TERM_IDS
     finally:
-        ai_terminal._USER_CLOSING_TERM_IDS.discard(view.id())
         with ai_terminal._term_lock():
             ai_terminal._term_registry().pop(view.id(), None)
 
