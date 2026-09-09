@@ -454,6 +454,26 @@ CATALOG = {
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
         "notes": "Unverified: not yet run through ai_terminal.",
     },
+    # ---- OpenRouter CLI Agents Rankings cross-check -------------------------
+    # That live, usage-data-driven ranking (openrouter.ai/apps/category/
+    # coding/cli-agent) listed 46 tools; of the 30 not already in CATALOG,
+    # 28 failed verification as standalone local CLI agents (frameworks,
+    # orchestrators, unrelated products, or unconfirmed) and were dropped.
+    # These 2 passed.
+    "hermes": {
+        "display_name": "Hermes Agent",
+        "launch_command": ["hermes"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
+    "letta": {
+        "display_name": "Letta Code",
+        "launch_command": ["letta"],
+        "detachable": True,
+        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
+        "notes": "Unverified: not yet run through ai_terminal.",
+    },
 }
 
 
