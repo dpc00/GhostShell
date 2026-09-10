@@ -1,5 +1,4 @@
 
-
 """ai_terminal.py -- bare-bones owned terminal for the Claude CLI.
 
 Replaces the Terminus dependency for AI launch. No third-party packages: pure
@@ -1132,6 +1131,8 @@ def _add_close_toolbar(term):
         group, index = w.get_view_index(v)
         if href == "relaunch":
             w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
+        elif href == "info":
+            w.run_command("ai_terminal_session_info", {"group": group, "index": index})
 
     # Plain text, no leading symbol: every dingbat/emoji tried (⏹ ⏏ ↗ ↻ 🔄)
     # had some glyph-support quirk in minihtml -- a tofu box, dim/inconsistent
@@ -1153,14 +1154,22 @@ def _add_close_toolbar(term):
     # tab 'X' does -- confirmed live (2026-09-09) they're identical, so a
     # toolbar shortcut for it is redundant. Kill Session/End Session/Close
     # Tab (Keep Session Alive) still exist as explicit commands (Tab Context
-    # menu, Command Palette) for discoverability; they just don't need a
-    # toolbar shortcut too.
+    # menu, Command Palette) for discoverability, and deliberately stay
+    # menu-only: they sit right next to each other with similarly-worded,
+    # differently-destructive captions, and the menu's extra travel
+    # distance (right-click -> hover -> click) is real accident protection,
+    # not just slowness -- a toolbar shortcut would trade a rare
+    # inconvenience for a real, recurring mis-click risk (2026-09-10).
+    # Session Info is the safe, read-only, frequent exception: it answers
+    # "is this still doing something" with zero risk, so it gets the
+    # one-click toolbar treatment those three intentionally don't.
     #
     # (href, display text, html text) -- kept separate in case a future label
     # needs HTML entities again; none of these currently do.
     items = [
         ("relaunch", "Relaunch Agent", "Relaunch Agent"),
         ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
+        ("info", "Session Info", "Session Info"),
     ]
     sep = "   |   "
     try:
@@ -8558,16 +8567,6 @@ class AiTerminalDetachAllToWindowsTerminalCommand(sublime_plugin.ApplicationComm
             sublime.error_message(error)
             return
 
-        noun = "session" if len(terms) == 1 else "sessions"
-        if not sublime.ok_cancel_dialog(
-            f"This will open {len(terms)} Windows Terminal {noun}, one per "
-            "live tab, and close all of those tabs in Sublime. Each agent "
-            "keeps running either way; use 'Reattach All from Windows "
-            "Terminal' afterward to bring them all back.",
-            "Detach All to Windows Terminal",
-        ):
-            return
-
         handed_off, failed = 0, []
         for term in terms:
             pipe_name, error = _handoff_term_to_windows_terminal(term, wt_exe, python_exe)
@@ -8863,11 +8862,11 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
     it's just "don't click anything", so this fills that slot with
     something actually useful instead of leaving it empty.
 
-    Opens a read-only scratch tab rather than sublime.message_dialog --
-    confirmed live 2026-09-02 that dialog's fixed small system font made a
-    multi-line technical readout hard to read; a normal view uses the same
-    font/theme as everything else and can be resized, scrolled, and
-    selected from.
+    Printed inline into the session's own tab via _vwrite (the same path
+    used for "[process exited]"-style notices), like a TUI's own /status or
+    /usage command answering in the conversation it was asked in -- not a
+    separate scratch tab (tried 2026-09-02, then rejected 2026-09-10: a
+    second view to close is worse than reading a dialog's small font).
 
     Human-relevant facts (what is this, is it still doing something) lead;
     plumbing (pipe name, broker PID) is demoted to a details footer -- also
@@ -8889,8 +8888,10 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
         alive = pty.is_alive()
         record = _read_broker_registry_record(pty.pipe_name)
 
+        profile_name = getattr(term, "profile_name", None)
         lines = [
-            "Profile: %s" % (getattr(term, "profile_name", None) or "?"),
+            "Profile: %s" % (profile_name or "?"),
+            "Usage: %s" % _profile_availability_label(profile_name),
             "Status: %s" % ("running" if alive else "frozen (disconnected)"),
         ]
         reason = getattr(term, "_expected_termination_reason", None)
@@ -8908,33 +8909,11 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
                 child = " ".join(str(part) for part in child)
             if child:
                 lines.append("Child command: %s" % child)
-
-        lines.append("")
-        lines.append("--- Details ---")
-        lines.append("Pipe: %s" % pty.pipe_name)
-        if record:
-            broker_pid = record.get("broker_pid")
-            if broker_pid:
-                lines.append("Broker PID: %s" % broker_pid)
-            created_at = record.get("created_at")
-            if created_at:
-                lines.append(
-                    "Broker started: %s"
-                    % time.strftime(
-                        "%Y-%m-%d %H:%M:%S", time.localtime(created_at)
-                    )
-                )
-        else:
+        elif alive:
             lines.append("(broker registry record not found -- may have exited)")
-        lines.extend(_sublime_view_info_lines(view))
 
-        info_view = self.window.new_file()
-        info_view.set_scratch(True)
-        info_view.set_name(
-            "Session Info: %s" % (getattr(term, "profile_name", None) or pty.pipe_name)
-        )
-        info_view.run_command("append", {"characters": "\n".join(lines)})
-        info_view.set_read_only(True)
+        banner = "\n--- Session Info ---\n" + "\n".join(lines) + "\n---\n"
+        _vwrite(view, banner)
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)
