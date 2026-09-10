@@ -406,6 +406,33 @@ Findings recorded as per-profile comments in `ai_terminal.sublime-settings`:
   Qwen-code (`?1002/1003/1006h`), gotui (`?1002/1003/1006h`), Vibe
   (`?1000/1003/1006h`).
 
+**CORRECTION (2026-09-09):** this audit's methodology only proves an app
+*requests* mouse tracking (its escape sequence appears in the recorded
+byte stream), not that the request ever takes effect. Root-caused, via a
+new purpose-built test harness (`tests/mock_agent_cli.py --mouse`) that
+enables real SGR mouse tracking and echoes every raw event received:
+`ai_terminal.py`'s `screen.private_modes`/`mouse_tracking` never actually
+picks up 1000/1002/1003/1006 for a real subprocess on Windows, even though
+the harness's mouse-enable bytes visibly arrive (its subsequent screen
+content, sent right after, renders correctly) and the identical text fed
+directly into the same parser sets the state correctly. Cause: ConPTY's
+mouse passthrough is keyed to the child calling the Win32 console API
+`SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376, fixed
+by #9970), not to it writing an xterm-style escape to its own stdout --
+the POSIX convention every app surveyed above uses, and that ConPTY's
+conhost swallows internally without re-emitting. Independently reconfirmed
+live by Mistral's Vibe CLI reading this same codebase.
+
+Practical effect: the "Do enable it" list above is still accurate as a
+description of what those apps *ask for*, but none of them actually get
+real DEC-mouse-tracking-gated forwarding through this file on Windows --
+`_route_mouse_click`'s tracked branch and the 2026-08-05 hover-poll
+mechanism are currently dead code for every profile, not a Shift/Ctrl-drag
+logic bug and not specific to any one app. See `_mouse_handling_enabled`
+in `ai_terminal.py` for the full writeup, and `ai_terminal_notes.md`'s
+2026-08-05 entry and `ai/RECOVERY_PLAN.md`'s Part B for the sections this
+corrects.
+
 **Implemented and committed** (`c3d0860`, on `main`, 1 ahead of
 `origin/main` — not pushed): `_route_click_to_cursor_fallback()`
 (`ai_terminal.py`, near `_event_to_pty_cell`) synthesizes Left/Right

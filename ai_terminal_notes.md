@@ -323,6 +323,24 @@ in the engine was removed on purpose.
 
 ## 2026-08-05 — Hover-motion (xterm mode 1003) forwarding via OS polling
 
+**CORRECTION 2026-09-09 (root-caused, see `ai/TODO-archive.md`'s entry of
+the same date and `_mouse_handling_enabled` in `ai_terminal.py`):** this
+entire feature's gate (`term.screen.mouse_tracking < 1003` below) can
+never open for a real subprocess on Windows. `screen.mouse_tracking` only
+ever becomes truthy when the child requests it via an xterm-style stdout
+escape (`ESC[?1003h`); ConPTY's mouse passthrough is keyed instead to the
+child calling the Win32 console API `SetConsoleMode(stdin,
+ENABLE_MOUSE_INPUT)` (microsoft/terminal#376/#9970), which no
+cross-platform Textual/Node/etc. app does. Confirmed live: a purpose-built
+test harness's mouse-enable escape visibly arrives (its own subsequent
+screen content renders fine) yet `private_modes` never picks it up, while
+feeding the identical bytes directly into the same parser does set it --
+so the loss is ConPTY's, not this file's. This whole hover-poll mechanism
+is therefore live, harmless, but permanently a no-op on Windows for any
+app that isn't itself talking to ConPTY via the Win32 API. Left in place
+(cheap, no-op when the gate is closed) rather than removed, in case a
+future fix or a non-ConPTY backend (e.g. `_PosixPty`) ever opens the gate.
+
 **Problem:** Textual TUIs (e.g. pybackup's TUI) enable xterm mode 1003
 "any-event" mouse tracking to drive hover-highlight — they need a report for
 every cell the cursor crosses, with no button held. Sublime's plugin API has
