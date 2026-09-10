@@ -247,20 +247,25 @@ the removed regex, still passing. Confirmed live via `eval_python`
 against the running plugin. Full suite: 426 passed, same 3
 pre-existing unrelated `test_launcher_flow.py` failures.
 
-**CORRECTION 2026-09-09:** the premise below ("apps that already enable
-tracking" benefit from the current routing) is false on Windows. Root-caused
-(see `_mouse_handling_enabled` in `ai_terminal.py` and `ai/TODO-archive.md`'s
-2026-09-09 entry): `screen.mouse_tracking`/`private_modes` never actually
-becomes truthy for a real subprocess, because ConPTY's mouse passthrough is
-keyed to the child calling `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)`
-(microsoft/terminal#376/#9970), not to it writing an xterm-style stdout
-escape the way every cross-platform CLI agent does. The August asciicast
-audit this section cites only proved apps *request* tracking, not that
-`ai_terminal.py` ever sees it take effect. So the entire DEC-tracking-gated
-forwarding path (`_route_mouse_click`'s tracked branch, the hover-poll loop,
-etc.) is currently dead code on Windows for any profile, independent of a
-native encoder -- Part B would still be blocked on the same ConPTY ceiling
-this correction describes, not just "separately scoped work."
+**CORRECTION 2026-09-09 (re-scoped same day):** the premise below ("apps
+that already enable tracking" benefit from the current routing) is false
+for *most* profiles on Windows, but not universally -- don't read this as
+"impossible for everyone." Root-caused (see `_mouse_handling_enabled` in
+`ai_terminal.py` and `ai/TODO-archive.md`'s 2026-09-09 entry):
+`screen.mouse_tracking`/`private_modes` never becomes truthy for a
+subprocess that relies solely on writing an xterm-style stdout escape,
+because ConPTY's mouse passthrough is keyed to the child calling
+`SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376/#9970)
+instead. The August asciicast audit this section cites only proved those
+apps *request* tracking, not that `ai_terminal.py` ever sees it take
+effect -- and for them, it doesn't. But "GitHub Copilot" (a separate,
+later-added profile) is a live counter-example: `private_modes` genuinely
+shows `{1003,1006,2004}` and top-tab-bar clicks are confirmed working,
+plausibly because it also calls the real Win32 API. So the
+DEC-tracking-gated forwarding path (`_route_mouse_click`'s tracked
+branch, the hover-poll loop, etc.) is dead code for the *specific* apps
+surveyed in that audit, not provably every profile -- Part B's blocker is
+real for those apps, but not an absolute Windows ceiling.
 
 **Part B — native mouse encoder — not done, split out deliberately.**
 `libghostty-vt` does expose a real mouse encoder C API

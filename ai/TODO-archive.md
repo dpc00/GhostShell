@@ -424,14 +424,21 @@ conhost swallows internally without re-emitting. Independently reconfirmed
 live by Mistral's Vibe CLI reading this same codebase.
 
 Practical effect: the "Do enable it" list above is still accurate as a
-description of what those apps *ask for*, but none of them actually get
-real DEC-mouse-tracking-gated forwarding through this file on Windows --
-`_route_mouse_click`'s tracked branch and the 2026-08-05 hover-poll
-mechanism are currently dead code for every profile, not a Shift/Ctrl-drag
-logic bug and not specific to any one app. See `_mouse_handling_enabled`
-in `ai_terminal.py` for the full writeup, and `ai_terminal_notes.md`'s
-2026-08-05 entry and `ai/RECOVERY_PLAN.md`'s Part B for the sections this
-corrects.
+description of what those apps *ask for*, but most of them don't actually
+get real DEC-mouse-tracking-gated forwarding through this file on
+Windows. RE-SCOPED same day: this is not universal. "GitHub Copilot" (a
+separate profile, added 2026-09-05, not part of the original 470-cast
+survey above) is a live, confirmed counter-example --
+`screen.private_modes` genuinely shows `{1003,1006,2004}` and the user
+physically confirmed its top-tab-bar clicks work, plausibly because it
+also calls the real Win32 `SetConsoleMode(ENABLE_MOUSE_INPUT)` API rather
+than relying solely on the xterm stdout convention. So `_route_mouse_click`'s
+tracked branch and the 2026-08-05 hover-poll mechanism are dead code for
+the apps surveyed in *this* audit specifically, not provably every profile
+in the file -- don't re-assert "every profile, no exceptions." See
+`_mouse_handling_enabled` in `ai_terminal.py` for the full writeup
+(corrected same day), and `ai_terminal_notes.md`'s 2026-08-05 entry and
+`ai/RECOVERY_PLAN.md`'s Part B for the sections this corrects.
 
 **Implemented and committed** (`c3d0860`, on `main`, 1 ahead of
 `origin/main` — not pushed): `_route_click_to_cursor_fallback()`

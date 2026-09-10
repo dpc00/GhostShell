@@ -486,6 +486,16 @@
             // ai_terminal_agents.sublime-settings, with no mouse_handling --
             // so tab-bar clicks were silently swallowed by ST instead of
             // reaching the PTY. That was the reported bug.
+            // RE-CONFIRMED 2026-09-09: unlike most other mouse_handling
+            // profiles here, this one's tracking is genuinely live, not
+            // just requested -- screen.private_modes shows {1003,1006,2004}
+            // and the user physically confirmed top-tab-bar clicks work.
+            // Plausibly because Copilot (Microsoft-affiliated) also calls
+            // the real Win32 SetConsoleMode(ENABLE_MOUSE_INPUT) API rather
+            // than relying solely on the xterm stdout convention -- see
+            // _mouse_handling_enabled in ai_terminal.py for the full
+            // ConPTY-passthrough writeup this profile is the counter-
+            // example for.
             // page_keys_to_pty: inferred by the same pattern as every other
             // alt-screen + force_main_screen agent below (Grok/OpenCode/
             // Mimo/Qwen/jcode/Antigravity) -- NOT yet directly confirmed for
