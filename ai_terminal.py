@@ -1130,9 +1130,7 @@ def _add_close_toolbar(term):
             v.run_command("ai_terminal_open_in_windows_terminal")
             return
         group, index = w.get_view_index(v)
-        if href == "detach":
-            w.run_command("ai_terminal_close_keep_alive", {"group": group, "index": index})
-        elif href == "relaunch":
+        if href == "relaunch":
             w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
 
     # Plain text, no leading symbol: every dingbat/emoji tried (⏹ ⏏ ↗ ↻ 🔄)
@@ -1148,17 +1146,19 @@ def _add_close_toolbar(term):
     # of that hard-wrapping for free; confirmed live (2026-09-09) that a
     # single unwrapped row just overflows sideways instead, with later items
     # clipped off-screen and reachable only by horizontal scroll.
-    # No standalone Kill Session button: a real kill is already reachable via
-    # '/exit' inside the agent itself, or by closing the tab (which detaches,
-    # not kills, by default -- see AiTerminalViewListener.on_close). Kill
-    # Session/End Session still exist as explicit commands (Tab Context menu,
-    # Command Palette) for when the process is genuinely stuck and won't
-    # respond to '/exit'; they just don't need a toolbar shortcut too.
+    # No standalone Kill Session or Close Tab buttons: a real kill is already
+    # reachable via '/exit' inside the agent itself, and closing the tab
+    # (which detaches, not kills, by default -- see
+    # AiTerminalViewListener.on_close) is already exactly what the native
+    # tab 'X' does -- confirmed live (2026-09-09) they're identical, so a
+    # toolbar shortcut for it is redundant. Kill Session/End Session/Close
+    # Tab (Keep Session Alive) still exist as explicit commands (Tab Context
+    # menu, Command Palette) for discoverability; they just don't need a
+    # toolbar shortcut too.
     #
     # (href, display text, html text) -- kept separate in case a future label
     # needs HTML entities again; none of these currently do.
     items = [
-        ("detach", "Close Tab", "Close Tab"),
         ("relaunch", "Relaunch Agent", "Relaunch Agent"),
         ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
     ]
