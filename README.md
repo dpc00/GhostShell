@@ -61,6 +61,10 @@ and live detach/reconnect soak tests.
 
 ## Installing
 
+Not yet available via Package Control. Once it is, install it that way
+instead -- the manual symlink setup below is for development and
+pre-approval use only, and will become obsolete at that point.
+
 Symlink this repo into your Sublime Text `Packages/` directory:
 
 ```powershell
