@@ -561,9 +561,15 @@
         },
         "jcode": {
             "detachable": true,
-            // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords)
-            // -- confirmed across 18+ recorded asciicast sessions (2026-08-11),
-            // reconfirmed across 13 fresh sessions 2026-09-05 -- but the
+            // Mouse tracking: this profile's own output requests ?1003;1006h
+            // (any-motion + SGR coords) -- seen across 18+ recorded asciicast
+            // sessions (2026-08-11), reconfirmed across 13 fresh sessions
+            // 2026-09-05. That only proves jcode *asks* for it, not that real
+            // click/drag ever reaches it -- see _mouse_handling_enabled's
+            // ConPTY-transport-ceiling comment (ai_terminal.py, root-caused
+            // 2026-09-09): a POSIX-style stdout escape request like this one
+            // is swallowed by ConPTY on Windows regardless of this flag. Kept
+            // on anyway for the tap/multi-click fallback it still enables.
             // "mouse_handling" flag itself was missing this whole time
             // despite the confirmation and the design doc
             // (ai/TODO-archive.md:401-407) explicitly calling for it here.
@@ -668,9 +674,14 @@
         },
         "Mimo": {
             "detachable": true,
-            // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
-            // any-motion, SGR coords) -- confirmed across recorded asciicast
-            // sessions (2026-08-11).
+            // Mouse tracking: Mimo's own output requests ?1000/1002/1003/
+            // 1006h (click + drag + any-motion, SGR coords) -- seen across
+            // recorded asciicast sessions (2026-08-11). That only proves
+            // Mimo *asks* for it -- see _mouse_handling_enabled's ConPTY-
+            // transport-ceiling comment (ai_terminal.py, root-caused
+            // 2026-09-09): this POSIX-style request is swallowed by ConPTY
+            // on Windows regardless of this flag. Kept on anyway for the
+            // tap/multi-click fallback it still enables.
             // page_keys_to_pty: sends real DECSET 1049h immediately on boot
             // (confirmed live 2026-08-13 via GhosttyParser._strip_alt_screen
             // instrumentation). Mimo is an explicit fork of OpenCode --
@@ -693,10 +704,16 @@
         },
         "OpenCode": {
             "detachable": true,
-            // Mouse tracking: enables ?1000/1002/1003/1006h (click + drag +
-            // any-motion, SGR coords) -- confirmed across 14+ recorded
-            // asciicast sessions (2026-08-11). Same for the --mini and
-            // →⇢⇨ Ollama variants below (same binary).
+            // Mouse tracking: OpenCode's own output requests ?1000/1002/
+            // 1003/1006h (click + drag + any-motion, SGR coords) -- seen
+            // across 14+ recorded asciicast sessions (2026-08-11). Same for
+            // the --mini and →⇢⇨ Ollama variants below (same binary). That
+            // only proves OpenCode *asks* for it -- see
+            // _mouse_handling_enabled's ConPTY-transport-ceiling comment
+            // (ai_terminal.py, root-caused 2026-09-09): this POSIX-style
+            // stdout request is swallowed by ConPTY on Windows regardless
+            // of this flag. Kept on anyway for the tap/multi-click fallback
+            // it still enables.
             // page_keys_to_pty: OpenCode genuinely enters/exits the alt
             // screen on boot (confirmed live 2026-08-13 by instrumenting
             // GhosttyParser._strip_alt_screen: it saw \x1b[?1049l then
@@ -943,14 +960,37 @@
             "tab_close_input": "q",
             "user_owns_caret_enabled": false
         },
+        "Mouse Test Agent": {
+            // Local, free harness for the Shift/Ctrl-drag question
+            // (2026-09-09) -- mock_agent_cli.py --mouse enables real SGR
+            // mouse tracking and echoes every raw event it receives (button,
+            // Shift/Ctrl/Meta bits, col/row) to the screen, so a live test
+            // shows what ai_terminal actually forwards instead of what its
+            // own comments claim.
+            "detachable": true,
+            "launch_command": [
+                "python",
+                "C:\\Users\\donal\\projects\\GhostShell\\tests\\mock_agent_cli.py",
+                "--mouse"
+            ],
+            "mouse_handling": true,
+            "spawn_env": {},
+            "tab_close_input": "q"
+        },
         "Vibe": {
             "detachable": true,
             "launch_command": [
                 "vibe"
             ],
-            // Mouse tracking: enables ?1000/1003/1006h (click + any-motion,
-            // SGR coords; no 1002) -- confirmed across 17+ recorded asciicast
-            // sessions (2026-08-11).
+            // Mouse tracking: Vibe's own output requests ?1000/1003/1006h
+            // (click + any-motion, SGR coords; no 1002) -- seen across 17+
+            // recorded asciicast sessions (2026-08-11). That only proves
+            // Vibe *asks* for it -- see _mouse_handling_enabled's ConPTY-
+            // transport-ceiling comment (ai_terminal.py, root-caused
+            // 2026-09-09, independently reconfirmed live by Vibe itself
+            // reading this same codebase): this POSIX-style stdout request
+            // is swallowed by ConPTY on Windows regardless of this flag, so
+            // real click/drag inside Vibe cannot reach it through this file.
             // Vibe (Textual) manages its own scroll region and never emits a
             // real ANSI scroll, so the history deque stays empty and PageUp/
             // PageDown reach nothing -- mouse wheel is the only way to see
