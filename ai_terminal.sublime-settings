@@ -773,14 +773,21 @@
         },
         "OpenCode →⇢⇨ Ollama": {
             "detachable": true,
-            // mouse_handling: the inference from the base "OpenCode" profile
-            // turned out wrong -- direct live re-test 2026-09-09 (fresh
-            // spawn, inspecting screen.private_modes) found NONE after 14+s
-            // (bare OpenCode shows tracking within ~4s for comparison), vs.
-            // {2004} only here. The Ollama wrapper does change opencode's
-            // observed DECSET behavior after all. Left mouse_handling on
-            // anyway since it's harmless when the app never requests
-            // tracking (see _mouse_handling_enabled in ai_terminal.py).
+            // mouse_handling: not a real negative -- `ollama launch opencode`
+            // opens Ollama's own keyboard-only model-selection picker first
+            // ("Select models for OpenCode: Type to filter...", arrow-key
+            // nav only, no mouse) before it ever hands off to opencode's own
+            // TUI. A live re-test 2026-09-09 read the actual screen content
+            // and confirmed this is what was running -- {2004} only in
+            // private_modes reflects the picker screen, not opencode itself,
+            // which was never reached. Dead end confirmed same day: every
+            // model in that picker is gated "(Upgrade required)" on this
+            // account, so there is no way through it to opencode's real TUI
+            // at all right now -- an Ollama-account/billing limitation, not
+            // a GhostShell bug. Left mouse_handling on since it would be
+            // correct once a model becomes selectable (same engine as base
+            // "OpenCode", already confirmed working); revisit if the
+            // account's model access ever changes.
             "launch_command": [
                 "ollama",
                 "launch",
