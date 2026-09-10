@@ -98,6 +98,15 @@ heuristic over no heuristic at all.
 (Claude Code, Gemini, Antigravity, Codex, Kimi, Kiro, Junie — determined by
 replaying 470 recorded asciicast sessions and regex-matching DECSET mouse
 codes), a click has no protocol-level way to move the app's real cursor.
+
+**Note (2026-09-09):** root-caused since this was written --
+`screen.mouse_tracking` never actually becomes truthy for *any* profile on
+Windows, tracking-requesting or not (ConPTY swallows the xterm-style
+stdout enable request; see `_mouse_handling_enabled` in `ai_terminal.py`).
+So in practice this fallback is the path every profile's clicks take
+today, not just these 7 -- which happens to be the more useful outcome,
+not a regression, but worth knowing when reasoning about this function's
+actual reach.
 This function fakes it: when the hardware cursor is confirmed on the live
 prompt row, it computes the delta between the clicked column and the current
 column and sends that many synthesized Left/Right keypresses — exactly what
