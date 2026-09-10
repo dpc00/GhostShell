@@ -3154,6 +3154,14 @@ class _Terminal:
         self._writer = None
         self._input_cast_queue = queue.Queue()
         self._input_cast_writer = None
+        # Text queued via queue_input(), drained into the PTY only once the
+        # session has been quiet (no PTY output) for _QUEUED_INPUT_IDLE_S --
+        # unlike send_string, which writes immediately regardless of
+        # activity. Lets a caller hand off a follow-up prompt that lands
+        # like real typing once the current output/thinking settles, instead
+        # of racing live output or a busy agent. See queue_input().
+        self._pending_input = []
+        self._pending_input_poll_armed = False
         self._last_cols = screen.cols
         self._last_rows = screen.rows
         # Copy mode (ctrl+alt+c / AiTerminalToggleCopyModeCommand): while
@@ -3584,6 +3592,43 @@ class _Terminal:
         # (see _on_parser_write_pty) -- it still gets written to the pty, just
         # not logged as an input event.
         self._write_queue.put((s, record))
+
+    def queue_input(self, text, add_newline=True):
+        """Queue text to be written via send_string once this session has
+        been idle (no PTY output) for _QUEUED_INPUT_IDLE_S, so it lands
+        indistinguishable from a real typed-and-submitted line instead of
+        landing mid-output or while a busy agent is still thinking.
+
+        add_newline sends a trailing Enter as its own separate write after
+        text, if text doesn't already end with one. Two real findings from
+        live testing on 2026-09-09, not assumed:
+        - The PTY wants "\r" for Enter, not "\n" (see the keypress path's
+          "\r" if chars == "\n" else chars translation) -- a bare "\n" left
+          PowerShell sitting at a ">>" continuation prompt instead of
+          executing.
+        - Enter must be a SEPARATE send_string call from the text, not
+          appended to the same string. A CLI's multi-line input box (tested
+          against this file's own hosting Claude Code session) accepted a
+          combined "text\r" write as text-plus-a-soft-newline and did not
+          submit; a second, standalone "\r" write immediately after did.
+          Real keystrokes arrive as separate PTY writes even when fast, and
+          apparently some apps' input handling depends on that separation,
+          not just the bytes.
+
+        Defensive getattr/setattr below: a plugin reload replaces class
+        code but does not re-run __init__ on already-live _Terminal
+        instances, so any session spawned before this method existed has
+        neither attribute -- confirmed live via a real AttributeError on
+        this file's own pre-reload hosting-tab instance, 2026-09-09.
+        """
+        if text.endswith("\n") or text.endswith("\r"):
+            text = text[:-1]
+            add_newline = True
+        with self._lock:
+            if not hasattr(self, "_pending_input"):
+                self._pending_input = []
+            self._pending_input.append((text, add_newline))
+        _arm_pending_input_poll(self)
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
@@ -4304,6 +4349,75 @@ def _measure(view, profile_name=None):
 # replaces starve ST key dispatch on Windows; slower feels laggy vs Terminus.
 _RENDER_MS = 30
 _RENDER_MIN_INTERVAL_MS = 30
+
+# How long a session must produce no PTY output before queue_input() will
+# drain a queued line into it. Long enough that a brief pause mid-output
+# (e.g. between two lines of a streaming response) doesn't look like "done
+# and waiting"; short enough that a real return-to-prompt is not felt as a
+# delay by whatever queued the input.
+_QUEUED_INPUT_IDLE_S = 3.0
+_PENDING_INPUT_POLL_MS = 250
+
+# Gap between the queued text's own pty.write() and its trailing Enter's.
+# Must be enough real wall-clock separation that the two land as genuinely
+# separate stdin chunks/ticks on the child's side, not just two Python-level
+# calls -- see the comment at the call site (_check_pending_input) for the
+# specific Claude-Code-side race this avoids. 150ms comfortably clears
+# Claude Code's own PASTE_COMPLETION_TIMEOUT_MS (100ms, confirmed by reading
+# its usePasteHandler.ts) in case that path is ever involved too.
+_QUEUED_INPUT_ENTER_DELAY_MS = 150
+
+
+def _arm_pending_input_poll(term):
+    """Start (if not already running) a self-rescheduling poll that drains
+    term._pending_input once the session goes idle. Only runs while there is
+    something queued -- queue_input() re-arms it each time it appends, and
+    the poll disarms itself once the queue is empty so idle sessions with
+    nothing queued cost nothing.
+
+    getattr, not term._pending_input_poll_armed directly: a session spawned
+    before queue_input existed has neither attribute (reload replaces class
+    code, not already-live instance state) -- confirmed live on this file's
+    own hosting-tab instance, 2026-09-09.
+    """
+    if getattr(term, "_pending_input_poll_armed", False):
+        return
+    term._pending_input_poll_armed = True
+    sublime.set_timeout(lambda: _check_pending_input(term), _PENDING_INPUT_POLL_MS)
+
+
+def _check_pending_input(term):
+    view = getattr(term, "view", None)
+    if not view or not view.is_valid():
+        term._pending_input_poll_armed = False
+        return
+    item = None
+    with term._lock:
+        if not getattr(term, "_pending_input", None):
+            term._pending_input_poll_armed = False
+            return
+        if time.time() - term._last_output_at >= _QUEUED_INPUT_IDLE_S:
+            item = term._pending_input.pop(0)
+    if item is not None:
+        text, add_newline = item
+        term.send_string(text)
+        if add_newline:
+            # A separate, delayed write -- not appended to text -- because
+            # a same-chunk text+Enter write reproduces a real, documented
+            # race in Claude Code's own input layer: usePasteHandler.ts
+            # (in the app, not this file) says plainly that when a paste
+            # and a following Enter arrive in the same stdin chunk, "both
+            # wrappedOnInput calls run in the same discreteUpdates batch
+            # before React commits -- the second call reads stale state...
+            # if that key is Enter, it submits the old input and the paste
+            # is lost." One pty.write() call is one chunk from the child's
+            # side; two separate calls, given real separation, are two
+            # ticks with committed state in between. Confirmed live +
+            # against that source on 2026-09-09/10, not assumed.
+            sublime.set_timeout(
+                lambda t=term: t.send_string("\r"), _QUEUED_INPUT_ENTER_DELAY_MS
+            )
+    sublime.set_timeout(lambda: _check_pending_input(term), _PENDING_INPUT_POLL_MS)
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
 # A level, not a stack: some apps (Grok --minimal and its full TUI both,
@@ -7060,6 +7174,32 @@ class AiTerminalSendStringWindowCommand(sublime_plugin.WindowCommand):
         term = _Terminal.from_id(view.id())
         if term:
             term.send_string(string)
+
+
+class AiTerminalQueueInputCommand(sublime_plugin.WindowCommand):
+    """Queue a string to land in the terminal PTY once the session goes
+    idle (no PTY output for a few seconds) -- as if it had been typed and
+    submitted live, rather than racing current output or a busy agent the
+    way send_string's immediate write can.
+
+    Same view-resolution as AiTerminalSendStringWindowCommand: active view
+    if it's an ai_terminal view, else the first one found in the window.
+
+    No key/menu/palette binding; invoked programmatically.
+    """
+
+    def run(self, string=""):
+        view = self.window.active_view()
+        if view is None or not view.settings().get(_VIEW_SETTING, False):
+            for v in self.window.views():
+                if v.settings().get(_VIEW_SETTING, False):
+                    view = v
+                    break
+        if view is None:
+            return
+        term = _Terminal.from_id(view.id())
+        if term:
+            term.queue_input(string)
 
 
 # Host-only blank lines above AND below the TUI (not sent to the PTY).
