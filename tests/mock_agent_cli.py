@@ -294,12 +294,16 @@ class MockMouseAgent:
     passthrough is keyed to the child calling the Win32 console API
     `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376,
     fixed by #9970), not to it writing an xterm-style escape sequence to
-    its own stdout the way this class (and every real cross-platform CLI
-    agent) does -- conhost swallows that convention internally and never
-    re-emits it. This harness still has real diagnostic value (proves
-    whether a *future* fix changes this, and exercises the tap/multi-click
-    fallback path that isn't affected), it just can't demonstrate real
-    click/drag on Windows today.
+    its own stdout the way this class (and most cross-platform CLI agents)
+    does -- conhost swallows that convention internally and never re-emits
+    it. RE-SCOPED same day: not a universal Windows ceiling -- the
+    "GitHub Copilot" profile is a live counter-example whose real mouse
+    tracking genuinely works, plausibly because it calls the real Win32
+    API too. This harness demonstrates the swallowed-escape path
+    specifically (still has diagnostic value: proves whether a *future*
+    fix changes this, and exercises the tap/multi-click fallback path
+    that isn't affected) -- it just can't demonstrate real click/drag
+    through *this* stdout convention on Windows today.
     """
 
     def __init__(self, cols, rows):

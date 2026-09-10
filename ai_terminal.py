@@ -2222,36 +2222,36 @@ def _mouse_handling_enabled(term):
     """Effective mouse-handling flag for one terminal: profile override, or
     the global kill switch above when the profile doesn't set one.
 
-    IMPORTANT CEILING (root-caused 2026-09-09, see conversation and
-    tests/mock_agent_cli.py --mouse): even when this returns True, real DEC
-    xterm mouse tracking (CSI ?1000/1002/1003/1006h) from the child process
-    essentially never reaches this terminal's screen.private_modes on
-    Windows. Confirmed live: a purpose-built test harness's mouse-enable
-    bytes visibly arrive (its subsequent screen content renders fine,
-    proving the pipe carries data) yet private_modes never picks up any of
+    CONPTY CEILING, NOT UNIVERSAL (root-caused 2026-09-09, RE-SCOPED same
+    day -- see conversation, tests/mock_agent_cli.py --mouse, and the
+    "GitHub Copilot" profile comment below). Original finding: a
+    purpose-built test harness's raw xterm mouse-enable bytes
+    (`ESC[?1000h` etc., written to stdout) visibly arrived -- its
+    subsequent screen content rendered fine, proving the pipe carries data
+    -- yet this terminal's screen.private_modes never picked up any of
     those four modes, while the identical bytes fed directly into the same
-    parser DO set them correctly -- so the loss is in the ConPTY transport,
-    not this file's parser or Python logic.
+    parser DID set them correctly. Root cause per microsoft/terminal#376
+    and the fix in microsoft/terminal#9970: ConPTY's mouse passthrough is
+    keyed to the child calling the *Win32 console API*
+    `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)`, not to it writing an
+    xterm-style escape sequence to its own stdout -- conhost's own VT
+    engine swallows the latter internally and never re-emits it.
 
-    Root cause per microsoft/terminal#376 and the fix in
-    microsoft/terminal#9970: ConPTY's mouse passthrough is keyed to the
-    child calling the *Win32 console API* `SetConsoleMode(stdin,
-    ENABLE_MOUSE_INPUT)`, not to it writing an xterm-style escape sequence
-    to its own stdout. Virtually every cross-platform CLI agent (Node.js,
-    Python, Go -- built against the POSIX convention) does the latter, never
-    the former, so ConPTY's conhost swallows those bytes internally and
-    never re-emits them. This applies to `_Pty` too, not just `_BrokerPty`
-    -- both are ConPTY-backed on Windows; only `_PosixPty` (non-Windows)
-    gets a real, transparent PTY where this ceiling doesn't exist.
-
-    Consequence: `mouse_handling: true` on a profile only ever forwards taps
-    and multi-clicks (see the drag_select handler below) when the app's own
-    fallback heuristics decide to -- real click-and-drag UI inside a
-    fullscreen TUI (list drag-select, slider-drag, custom mouse-driven
-    buttons) cannot work on Windows through this file, for any profile,
-    regardless of settings. Do not re-diagnose this as a Shift/Ctrl-drag bug
-    or a private_modes bug without re-reading this comment first -- both
-    were seriously investigated and ruled out live before this was found.
+    CORRECTED SAME DAY: this is not a blanket "impossible on Windows" --
+    it's specific to apps that rely *solely* on the POSIX/xterm stdout
+    convention. Live counter-example: the "GitHub Copilot" profile (CLI
+    built by a Microsoft-affiliated team, plausibly Windows-console-aware)
+    genuinely gets `private_modes={1003,1006,2004}` and working click
+    forwarding on its top tab bar through this exact code path -- confirmed
+    live by both `screen.private_modes` inspection and the user physically
+    clicking it. Virtually every *other* cross-platform CLI agent (Node.js/
+    Python/Go, targeting POSIX PTYs generically) hits the swallowed-escape
+    ceiling instead, but "every profile, no exceptions" (the original
+    wording here) was wrong -- don't re-assert that blanket claim, and
+    don't be surprised if occasional other apps also turn out to call the
+    real API. Applies to `_Pty` too, not just `_BrokerPty` -- both are
+    ConPTY-backed on Windows; only `_PosixPty` (non-Windows) is exempt from
+    the underlying mechanism entirely.
     """
     return _profile_bool(
         _term_profile_name(term), "mouse_handling", _MOUSE_HANDLING_ENABLED

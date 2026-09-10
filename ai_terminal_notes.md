@@ -337,8 +337,12 @@ screen content renders fine) yet `private_modes` never picks it up, while
 feeding the identical bytes directly into the same parser does set it --
 so the loss is ConPTY's, not this file's. This whole hover-poll mechanism
 is therefore live, harmless, but permanently a no-op on Windows for any
-app that isn't itself talking to ConPTY via the Win32 API. Left in place
-(cheap, no-op when the gate is closed) rather than removed, in case a
+app that isn't itself talking to ConPTY via the Win32 API -- confirmed
+that's a real, not just theoretical, distinction: the "GitHub Copilot"
+profile genuinely does get `private_modes` set and working click
+forwarding, live-confirmed same day, plausibly because it calls that API.
+Left in place (cheap, no-op when the gate is closed) rather than removed,
+in case a
 future fix or a non-ConPTY backend (e.g. `_PosixPty`) ever opens the gate.
 
 **Problem:** Textual TUIs (e.g. pybackup's TUI) enable xterm mode 1003
