@@ -4,6 +4,7 @@
 Usage:
     python tests/mock_agent_cli.py            # replay flood (Testing Agent)
     python tests/mock_agent_cli.py --box      # caret-tracking Ink box
+    python tests/mock_agent_cli.py --mouse    # SGR mouse-tracking harness
     python tests/mock_agent_cli.py --legacy-resize
 
 The Testing Agent profile launches this with no flags. Default mode
@@ -263,6 +264,169 @@ class MockInkAgent:
         _log("box-mode exit")
 
 
+# ─── Mouse-tracking mode: local, free harness for the Shift/Ctrl-drag ───────
+# question (2026-09-09) -- does ai_terminal's mousemap ever actually deliver
+# modifier info to a mouse-tracking-enabled app, or does Sublime's own
+# drag_select absorb Shift/Ctrl before a PTY sequence is ever generated?
+# Real answer only obtainable by watching what this app actually receives,
+# not by reading ai_terminal.py's own comments about what it intends to send.
+
+_MOUSE_BUTTON_ROW = 8
+_MOUSE_BUTTON_COL = 4
+_MOUSE_BUTTON_LABEL = "[ Click / Drag Me ]"
+_MOUSE_LOG_ROWS = 10
+
+
+class MockMouseAgent:
+    """Fullscreen (alt-screen) app with DEC/SGR mouse tracking enabled and a
+    fixed on-screen "button" target. Every raw mouse report received is
+    parsed (button, Shift/Meta/Ctrl bits, motion flag, 1-based col/row) and
+    appended to an on-screen log -- so a live test shows exactly what
+    reaches this process, not what ai_terminal.py's comments claim it sends.
+
+    ROOT-CAUSED 2026-09-09 (independently reconfirmed live by Vibe/Mistral
+    reading this same codebase): a live test through this harness showed
+    the enable sequence's bytes visibly arriving (the screen content this
+    class writes right after it renders fine) yet ai_terminal's
+    screen.private_modes never picks up 1000/1002/1003/1006, while feeding
+    the identical text directly into the same parser does set them. Cause
+    is Windows ConPTY, not this file or ai_terminal.py: ConPTY's mouse
+    passthrough is keyed to the child calling the Win32 console API
+    `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376,
+    fixed by #9970), not to it writing an xterm-style escape sequence to
+    its own stdout the way this class (and every real cross-platform CLI
+    agent) does -- conhost swallows that convention internally and never
+    re-emits it. This harness still has real diagnostic value (proves
+    whether a *future* fix changes this, and exercises the tap/multi-click
+    fallback path that isn't affected), it just can't demonstrate real
+    click/drag on Windows today.
+    """
+
+    def __init__(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self._running = True
+        self._log_lines = []
+        self._clicks = 0
+
+    def _enable_mouse(self):
+        # ?1000 (click) + ?1002 (cell-motion drag) + ?1003 (any-motion) +
+        # ?1006 (SGR extended coords) -- same combination Vibe's profile
+        # comment documents (ai_terminal.sublime-settings).
+        _write("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h")
+
+    def _disable_mouse(self):
+        _write("\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1049l")
+
+    def _goto(self, row, col):
+        _write(f"\x1b[{row + 1};{col + 1}H")
+
+    def _draw(self):
+        _write("\x1b[2J\x1b[H")
+        _write("Mock Mouse Agent -- SGR mouse-tracking test harness\r\n")
+        _write("Reports every raw mouse event this process receives.\r\n\r\n")
+        self._goto(_MOUSE_BUTTON_ROW, _MOUSE_BUTTON_COL)
+        _write(_MOUSE_BUTTON_LABEL)
+        self._goto(_MOUSE_BUTTON_ROW + 1, _MOUSE_BUTTON_COL)
+        _write("clicks on button: %d" % self._clicks)
+        self._goto(_MOUSE_BUTTON_ROW + 3, 0)
+        _write("last %d raw event(s):\x1b[K" % _MOUSE_LOG_ROWS)
+        for i in range(_MOUSE_LOG_ROWS):
+            self._goto(_MOUSE_BUTTON_ROW + 4 + i, 0)
+            line = self._log_lines[-(i + 1)] if i < len(self._log_lines) else ""
+            _write(line + "\x1b[K")
+        self._goto(self.rows - 1, 0)
+        _write("q / ^C quits and disables mouse tracking\x1b[K")
+
+    def _on_sgr_event(self, cb, col, row, is_release):
+        # SGR (CSI < Cb ; Cx ; Cy M/m): bit flags on Cb --
+        # 4=Shift, 8=Meta/Alt, 16=Ctrl, 32=motion (drag/move, not a click).
+        button_num = cb & 0x03
+        shift = bool(cb & 4)
+        meta = bool(cb & 8)
+        ctrl = bool(cb & 16)
+        motion = bool(cb & 32)
+        kind = "release" if is_release else ("drag" if motion else "press")
+        mods = "+".join(
+            m for m, on in (("shift", shift), ("ctrl", ctrl), ("meta", meta)) if on
+        ) or "none"
+        line = "cb=%d btn=%d %s mods=%s col=%d row=%d" % (
+            cb, button_num, kind, mods, col, row,
+        )
+        self._log_lines.append(line)
+        _log("mouse " + line)
+        in_button = (
+            row - 1 == _MOUSE_BUTTON_ROW
+            and _MOUSE_BUTTON_COL <= col - 1 < _MOUSE_BUTTON_COL + len(_MOUSE_BUTTON_LABEL)
+        )
+        if in_button and kind == "press" and button_num == 0:
+            self._clicks += 1
+
+    def _read_sgr_tail(self):
+        """After CSI '<' already consumed: read 'Cb;Cx;Cy' + terminator."""
+        buf = ""
+        while True:
+            ch = sys.stdin.read(1)
+            if not ch:
+                return
+            if ch in ("M", "m"):
+                parts = buf.split(";")
+                if len(parts) == 3:
+                    try:
+                        cb, col, row = (int(p) for p in parts)
+                    except ValueError:
+                        _log("mouse: bad SGR body %r" % buf)
+                        return
+                    self._on_sgr_event(cb, col, row, is_release=(ch == "m"))
+                return
+            buf += ch
+
+    def run(self):
+        self.cols, self.rows = get_size()
+        _log(f"mouse-mode start cols={self.cols} rows={self.rows}")
+        # Diagnostic (2026-09-09): does a delayed/repeated enable behave
+        # differently from an immediate one, i.e. is the PTY/ConPTY link not
+        # yet ready to carry mode-toggle sequences the instant this process
+        # starts writing? See ai_terminal's private_modes investigation.
+        time.sleep(0.5)
+        self._enable_mouse()
+        time.sleep(0.5)
+        self._enable_mouse()
+        self._draw()
+        try:
+            while self._running:
+                try:
+                    ch = sys.stdin.read(1)
+                except (OSError, ValueError):
+                    _log("stdin.read(1) failed:\n%s" % traceback.format_exc())
+                    ch = ""
+                if not ch:
+                    time.sleep(0.02)
+                    continue
+                if ch in ("q", "\x03"):
+                    self._running = False
+                    break
+                if ch == "\x1b":
+                    seq = sys.stdin.read(1)
+                    if seq == "[":
+                        marker = sys.stdin.read(1)
+                        if marker == "<":
+                            self._read_sgr_tail()
+                            self._draw()
+                            continue
+                        # Non-mouse CSI (arrow keys etc. if terminal falls
+                        # back to normal-tracking coords) -- ignore the rest.
+                    continue
+                # Any other keystroke: ignore, just redraw so the log stays
+                # visible (helps confirm plain typing still reaches this
+                # process independent of mouse mode).
+                self._draw()
+        finally:
+            self._disable_mouse()
+            _write("\r\n[mock_agent exited]\r\n")
+            _log("mouse-mode exit")
+
+
 # ─── Legacy resize-stress mode (original behaviour, unrelated to caret work) ─
 
 colors = ["31", "32", "33", "34", "35", "36"]
@@ -382,6 +546,11 @@ def main():
         action="store_true",
         help="Caret-tracking Ink box (the old default).",
     )
+    parser.add_argument(
+        "--mouse",
+        action="store_true",
+        help="Fullscreen SGR mouse-tracking harness with a clickable target.",
+    )
     args = parser.parse_args()
 
     cols, rows = get_size()
@@ -394,6 +563,8 @@ def main():
         MockAgent(initial_cols=cols, initial_rows=rows).run()
     elif args.box:
         MockInkAgent(cols, rows).run()
+    elif args.mouse:
+        MockMouseAgent(cols, rows).run()
     else:
         ReplayAgent().run()
 
