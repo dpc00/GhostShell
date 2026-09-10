@@ -99,14 +99,17 @@ heuristic over no heuristic at all.
 replaying 470 recorded asciicast sessions and regex-matching DECSET mouse
 codes), a click has no protocol-level way to move the app's real cursor.
 
-**Note (2026-09-09):** root-caused since this was written --
-`screen.mouse_tracking` never actually becomes truthy for *any* profile on
-Windows, tracking-requesting or not (ConPTY swallows the xterm-style
-stdout enable request; see `_mouse_handling_enabled` in `ai_terminal.py`).
-So in practice this fallback is the path every profile's clicks take
-today, not just these 7 -- which happens to be the more useful outcome,
-not a regression, but worth knowing when reasoning about this function's
-actual reach.
+**Note (2026-09-09, corrected same day):** an initial note here claimed
+`screen.mouse_tracking` never becomes truthy for *any* profile on
+Windows -- disproven by a full live retest the same day (fresh spawn +
+direct `screen.private_modes` inspection): 9 of 11 real agents tested get
+real DEC mouse tracking working (GitHub Copilot, Cline, Grok Build,
+jcode, Kilo Code, Mimo, OpenCode, Vibe, Pybackup Go TUI). So this fallback
+function is *not* every profile's actual click path -- it's specifically
+for the handful that genuinely never enable tracking (the original 7
+here) plus whichever of Junie/Ollama-wrapped-OpenCode turn out to stay
+that way on re-verification. See `_mouse_handling_enabled` in
+`ai_terminal.py` for the full sequence and final scope.
 This function fakes it: when the hardware cursor is confirmed on the live
 prompt row, it computes the delta between the clicked column and the current
 column and sends that many synthesized Left/Right keypresses — exactly what

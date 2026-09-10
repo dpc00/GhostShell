@@ -619,21 +619,23 @@
             // in the project cwd — not the PyCharm plugin panel. Prefer full
             // path so a long-lived ST process still finds the shim.
             // Mouse tracking: the 2026-08-11 audit found none (6 sessions
-            // checked), but a fresh sweep 2026-09-05 across 9 real sessions
-            // shows 6 of them now emitting real DEC mouse tracking
-            // (?1003;1006h) plus alt-screen enter -- Junie's CLI appears to
-            // have changed behavior since the original audit. Enabling
-            // mouse_handling on that fresh evidence. page_keys_to_pty forced
-            // true (2026-09-05): this is the live Packages/User copy of the
-            // profiles table, which fully shadows the repo's own "profiles"
-            // key (sublime.load_settings does a shallow top-level merge, so
-            // whichever file defines "profiles" wins outright, no per-key
-            // deep merge) -- every prior repo-side page_keys_to_pty edit for
-            // this profile had zero effect at runtime because this file, not
-            // the repo one, is what's actually loaded. Without this, the
-            // /model picker's PageUp/PageDown fell through to native ST
-            // "move by pages", which -- in a short picker buffer -- clamps
-            // straight to the top/bottom of the tab instead of moving the
+            // checked); a 2026-09-05 asciicast sweep claimed 6 of 9 sessions
+            // now emitting it, but that was regex-over-a-recording evidence
+            // (proves a request was written, not that it took effect) and a
+            // direct live re-test 2026-09-09 (fresh spawn, inspecting
+            // screen.private_modes directly) found NONE -- private_modes
+            // stayed {2004} only, fully booted, not mid-update. Treat the
+            // 2026-09-05 claim as superseded; mouse_handling left on anyway
+            // since it's harmless when the app never requests tracking (see
+            // _mouse_handling_enabled in ai_terminal.py). page_keys_to_pty
+            // forced true (2026-09-05) because of a since-fixed settings-
+            // merge bug where the generated ai_terminal_agents.sublime-
+            // settings file could shadow this one -- _all_profiles() now
+            // makes hand-tuned settings here always win, but the flag stays
+            // set since it's still the correct behavior regardless: without
+            // it, the /model picker's PageUp/PageDown fell through to
+            // native ST "move by pages", which -- in a short picker buffer
+            // -- clamps straight to the top/bottom instead of moving the
             // picker's selection.
             "launch_command": [
                 "C:\\Users\\donal\\.local\\bin\\junie.bat"
@@ -771,13 +773,14 @@
         },
         "OpenCode →⇢⇨ Ollama": {
             "detachable": true,
-            // mouse_handling: NOT independently confirmed -- no asciicast
-            // exists launched via `ollama launch opencode` specifically
-            // (checked 2026-09-05: zero matches). Set true here only by
-            // inference from the base "OpenCode" profile (5 real sessions,
-            // solidly confirmed) -- the Ollama wrapper shouldn't change
-            // opencode's own DECSET behavior, but this hasn't been directly
-            // observed. Flip off if a real session shows otherwise.
+            // mouse_handling: the inference from the base "OpenCode" profile
+            // turned out wrong -- direct live re-test 2026-09-09 (fresh
+            // spawn, inspecting screen.private_modes) found NONE after 14+s
+            // (bare OpenCode shows tracking within ~4s for comparison), vs.
+            // {2004} only here. The Ollama wrapper does change opencode's
+            // observed DECSET behavior after all. Left mouse_handling on
+            // anyway since it's harmless when the app never requests
+            // tracking (see _mouse_handling_enabled in ai_terminal.py).
             "launch_command": [
                 "ollama",
                 "launch",

@@ -2222,36 +2222,42 @@ def _mouse_handling_enabled(term):
     """Effective mouse-handling flag for one terminal: profile override, or
     the global kill switch above when the profile doesn't set one.
 
-    CONPTY CEILING, NOT UNIVERSAL (root-caused 2026-09-09, RE-SCOPED same
-    day -- see conversation, tests/mock_agent_cli.py --mouse, and the
-    "GitHub Copilot" profile comment below). Original finding: a
-    purpose-built test harness's raw xterm mouse-enable bytes
-    (`ESC[?1000h` etc., written to stdout) visibly arrived -- its
-    subsequent screen content rendered fine, proving the pipe carries data
-    -- yet this terminal's screen.private_modes never picked up any of
-    those four modes, while the identical bytes fed directly into the same
-    parser DID set them correctly. Root cause per microsoft/terminal#376
-    and the fix in microsoft/terminal#9970: ConPTY's mouse passthrough is
-    keyed to the child calling the *Win32 console API*
-    `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)`, not to it writing an
-    xterm-style escape sequence to its own stdout -- conhost's own VT
-    engine swallows the latter internally and never re-emits it.
+    HISTORY (2026-09-09, do not repeat this investigation without reading
+    this first). A purpose-built test harness (tests/mock_agent_cli.py
+    --mouse -- a bare Python script doing nothing but print()) sent raw
+    xterm mouse-enable bytes (`ESC[?1000h` etc.) that visibly arrived (its
+    subsequent screen content rendered fine) yet never set
+    screen.private_modes, while feeding the identical bytes directly into
+    the same parser did. That's real: ConPTY's mouse passthrough is keyed
+    to the child calling the Win32 console API `SetConsoleMode(stdin,
+    ENABLE_MOUSE_INPUT)` (microsoft/terminal#376, fixed by #9970), not to
+    it writing an xterm-style escape to its own stdout -- conhost's VT
+    engine swallows the latter internally. This was first over-generalized
+    to "no cross-platform CLI can ever get mouse tracking through ConPTY
+    on Windows" -- WRONG, disproven by a full live retest the same day.
 
-    CORRECTED SAME DAY: this is not a blanket "impossible on Windows" --
-    it's specific to apps that rely *solely* on the POSIX/xterm stdout
-    convention. Live counter-example: the "GitHub Copilot" profile (CLI
-    built by a Microsoft-affiliated team, plausibly Windows-console-aware)
-    genuinely gets `private_modes={1003,1006,2004}` and working click
-    forwarding on its top tab bar through this exact code path -- confirmed
-    live by both `screen.private_modes` inspection and the user physically
-    clicking it. Virtually every *other* cross-platform CLI agent (Node.js/
-    Python/Go, targeting POSIX PTYs generically) hits the swallowed-escape
-    ceiling instead, but "every profile, no exceptions" (the original
-    wording here) was wrong -- don't re-assert that blanket claim, and
-    don't be surprised if occasional other apps also turn out to call the
-    real API. Applies to `_Pty` too, not just `_BrokerPty` -- both are
-    ConPTY-backed on Windows; only `_PosixPty` (non-Windows) is exempt from
-    the underlying mechanism entirely.
+    ACTUAL EMPIRICAL RESULT (2026-09-09, fresh spawn + direct
+    screen.private_modes inspection, not asciicast-regex-guessing): 9 of
+    11 real profiles tested get real DEC mouse tracking working today --
+    GitHub Copilot, Cline (+ user-confirmed real click), Grok Build,
+    jcode, Kilo Code, Mimo, OpenCode, Vibe, and the Pybackup Go TUI. Only
+    2 showed no tracking (Junie; OpenCode routed through `ollama launch
+    opencode`) -- both worth re-checking on their own terms, not evidence
+    of a platform ceiling. "Grok Build --minimal" (a different rendering
+    mode of the same app) never requests tracking at all, unrelated to any
+    of this. Full results + methodology in the "agent_tui_catalog.sqlite3"
+    `notes` column for each agent (~/data), dated 2026-09-09.
+
+    Conclusion: the ConPTY/SetConsoleMode mechanism above is a real,
+    correct explanation for *why a naive implementation could fail*, but
+    is not a practical concern for real, maturely-built CLI tools -- their
+    terminal-handling libraries evidently touch enough of the Windows
+    console API (for ANSI/raw-mode setup) to satisfy ConPTY's passthrough
+    trigger as a side effect. Do not re-assert "mouse tracking can't work
+    on Windows through this file" -- it demonstrably does, for nearly
+    everything real. If a *specific* profile shows no tracking, treat it
+    as that profile's own question, verified live (spawn + inspect
+    screen.private_modes directly), not as this platform-wide issue.
     """
     return _profile_bool(
         _term_profile_name(term), "mouse_handling", _MOUSE_HANDLING_ENABLED
