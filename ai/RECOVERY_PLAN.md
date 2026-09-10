@@ -247,25 +247,25 @@ the removed regex, still passing. Confirmed live via `eval_python`
 against the running plugin. Full suite: 426 passed, same 3
 pre-existing unrelated `test_launcher_flow.py` failures.
 
-**CORRECTION 2026-09-09 (re-scoped same day):** the premise below ("apps
-that already enable tracking" benefit from the current routing) is false
-for *most* profiles on Windows, but not universally -- don't read this as
-"impossible for everyone." Root-caused (see `_mouse_handling_enabled` in
-`ai_terminal.py` and `ai/TODO-archive.md`'s 2026-09-09 entry):
-`screen.mouse_tracking`/`private_modes` never becomes truthy for a
-subprocess that relies solely on writing an xterm-style stdout escape,
-because ConPTY's mouse passthrough is keyed to the child calling
-`SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376/#9970)
-instead. The August asciicast audit this section cites only proved those
-apps *request* tracking, not that `ai_terminal.py` ever sees it take
-effect -- and for them, it doesn't. But "GitHub Copilot" (a separate,
-later-added profile) is a live counter-example: `private_modes` genuinely
-shows `{1003,1006,2004}` and top-tab-bar clicks are confirmed working,
-plausibly because it also calls the real Win32 API. So the
-DEC-tracking-gated forwarding path (`_route_mouse_click`'s tracked
-branch, the hover-poll loop, etc.) is dead code for the *specific* apps
-surveyed in that audit, not provably every profile -- Part B's blocker is
-real for those apps, but not an absolute Windows ceiling.
+**CORRECTION, then FINAL RETEST (both 2026-09-09):** the premise below
+("apps that already enable tracking" benefit from the current routing) is
+mostly *true*, not false -- an initial correction over-corrected into
+claiming it fails for "most profiles," which a full live retest the same
+day disproved. Root cause is real (see `_mouse_handling_enabled` in
+`ai_terminal.py` and `ai/TODO-archive.md`'s 2026-09-09 entry): ConPTY's
+mouse passthrough is keyed to the child calling the Win32 console API
+`SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376/#9970),
+not to it writing an xterm-style stdout escape -- but in practice, real,
+maturely-built CLI tools' terminal-handling libraries evidently touch
+enough of that API surface (for ANSI/raw-mode setup) to trigger it as a
+side effect anyway. Fresh-spawn `screen.private_modes` inspection across
+every profile the August audit covers, plus GitHub Copilot, found 9 of 11
+genuinely working (GitHub Copilot, Cline, Grok Build, jcode, Kilo Code,
+Mimo, OpenCode, Vibe, Pybackup Go TUI); only Junie and the Ollama-wrapped
+OpenCode variant showed none. So Part B's blocker from a native mouse
+encoder's own necessity is real only for those two specific apps, not a
+platform-wide ConPTY ceiling -- most of "already enable tracking" already
+works today without one.
 
 **Part B — native mouse encoder — not done, split out deliberately.**
 `libghostty-vt` does expose a real mouse encoder C API

@@ -323,27 +323,22 @@ in the engine was removed on purpose.
 
 ## 2026-08-05 — Hover-motion (xterm mode 1003) forwarding via OS polling
 
-**CORRECTION 2026-09-09 (root-caused, see `ai/TODO-archive.md`'s entry of
-the same date and `_mouse_handling_enabled` in `ai_terminal.py`):** this
-entire feature's gate (`term.screen.mouse_tracking < 1003` below) can
-never open for a real subprocess on Windows. `screen.mouse_tracking` only
-ever becomes truthy when the child requests it via an xterm-style stdout
-escape (`ESC[?1003h`); ConPTY's mouse passthrough is keyed instead to the
-child calling the Win32 console API `SetConsoleMode(stdin,
-ENABLE_MOUSE_INPUT)` (microsoft/terminal#376/#9970), which no
-cross-platform Textual/Node/etc. app does. Confirmed live: a purpose-built
-test harness's mouse-enable escape visibly arrives (its own subsequent
-screen content renders fine) yet `private_modes` never picks it up, while
-feeding the identical bytes directly into the same parser does set it --
-so the loss is ConPTY's, not this file's. This whole hover-poll mechanism
-is therefore live, harmless, but permanently a no-op on Windows for any
-app that isn't itself talking to ConPTY via the Win32 API -- confirmed
-that's a real, not just theoretical, distinction: the "GitHub Copilot"
-profile genuinely does get `private_modes` set and working click
-forwarding, live-confirmed same day, plausibly because it calls that API.
-Left in place (cheap, no-op when the gate is closed) rather than removed,
-in case a
-future fix or a non-ConPTY backend (e.g. `_PosixPty`) ever opens the gate.
+**CORRECTION, then FINAL RETEST (both 2026-09-09, see `ai/TODO-archive.md`'s
+entry of the same date and `_mouse_handling_enabled` in `ai_terminal.py`
+for the full sequence):** an initial correction claimed this feature's
+gate (`term.screen.mouse_tracking < 1003` below) can never open for any
+real subprocess on Windows -- WRONG, disproven the same day. The
+underlying mechanism is real (ConPTY's mouse passthrough is keyed to the
+child calling `SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)`, not to an
+xterm-style stdout escape -- microsoft/terminal#376/#9970), but a full
+live retest (fresh spawn + direct `screen.private_modes` inspection, not
+guessing from a recording) found 9 of 11 real agents get real tracking
+working today: GitHub Copilot, Cline, Grok Build, jcode, Kilo Code, Mimo,
+OpenCode, Vibe, Pybackup Go TUI. Only Junie and an Ollama-wrapped OpenCode
+variant showed none. So this hover-poll mechanism's gate does open, for
+nearly every real profile that sets `mouse_handling: true` -- it is not a
+permanent no-op, and the earlier framing here was too pessimistic. Left
+in place either way (cheap when the gate happens to be closed).
 
 **Problem:** Textual TUIs (e.g. pybackup's TUI) enable xterm mode 1003
 "any-event" mouse tracking to drive hover-highlight — they need a report for

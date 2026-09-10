@@ -406,39 +406,40 @@ Findings recorded as per-profile comments in `ai_terminal.sublime-settings`:
   Qwen-code (`?1002/1003/1006h`), gotui (`?1002/1003/1006h`), Vibe
   (`?1000/1003/1006h`).
 
-**CORRECTION (2026-09-09):** this audit's methodology only proves an app
-*requests* mouse tracking (its escape sequence appears in the recorded
-byte stream), not that the request ever takes effect. Root-caused, via a
-new purpose-built test harness (`tests/mock_agent_cli.py --mouse`) that
-enables real SGR mouse tracking and echoes every raw event received:
-`ai_terminal.py`'s `screen.private_modes`/`mouse_tracking` never actually
-picks up 1000/1002/1003/1006 for a real subprocess on Windows, even though
-the harness's mouse-enable bytes visibly arrive (its subsequent screen
-content, sent right after, renders correctly) and the identical text fed
-directly into the same parser sets the state correctly. Cause: ConPTY's
-mouse passthrough is keyed to the child calling the Win32 console API
-`SetConsoleMode(stdin, ENABLE_MOUSE_INPUT)` (microsoft/terminal#376, fixed
-by #9970), not to it writing an xterm-style escape to its own stdout --
-the POSIX convention every app surveyed above uses, and that ConPTY's
-conhost swallows internally without re-emitting. Independently reconfirmed
-live by Mistral's Vibe CLI reading this same codebase.
+**CORRECTION, then FINAL RETEST (both 2026-09-09) -- this audit's
+byte-in-a-recording methodology only ever proved a request was made, not
+that it took effect, and an initial re-investigation over-corrected into
+an equally wrong opposite claim before a full live retest settled it.**
+Sequence, so the mistake isn't repeated:
 
-Practical effect: the "Do enable it" list above is still accurate as a
-description of what those apps *ask for*, but most of them don't actually
-get real DEC-mouse-tracking-gated forwarding through this file on
-Windows. RE-SCOPED same day: this is not universal. "GitHub Copilot" (a
-separate profile, added 2026-09-05, not part of the original 470-cast
-survey above) is a live, confirmed counter-example --
-`screen.private_modes` genuinely shows `{1003,1006,2004}` and the user
-physically confirmed its top-tab-bar clicks work, plausibly because it
-also calls the real Win32 `SetConsoleMode(ENABLE_MOUSE_INPUT)` API rather
-than relying solely on the xterm stdout convention. So `_route_mouse_click`'s
-tracked branch and the 2026-08-05 hover-poll mechanism are dead code for
-the apps surveyed in *this* audit specifically, not provably every profile
-in the file -- don't re-assert "every profile, no exceptions." See
-`_mouse_handling_enabled` in `ai_terminal.py` for the full writeup
-(corrected same day), and `ai_terminal_notes.md`'s 2026-08-05 entry and
-`ai/RECOVERY_PLAN.md`'s Part B for the sections this corrects.
+1. A purpose-built test harness (`tests/mock_agent_cli.py --mouse`) found
+   its own mouse-enable bytes never set `ai_terminal.py`'s
+   `screen.private_modes`, while feeding the identical bytes directly into
+   the parser did. Root cause: ConPTY's mouse passthrough is keyed to the
+   child calling the Win32 console API `SetConsoleMode(stdin,
+   ENABLE_MOUSE_INPUT)` (microsoft/terminal#376, fixed by #9970), not to
+   it writing an xterm-style stdout escape -- conhost swallows the latter.
+   True, but then over-generalized to "no cross-platform CLI can ever get
+   mouse tracking through ConPTY on Windows."
+2. That blanket claim was disproven the same day by direct fresh-spawn
+   `screen.private_modes` inspection (not asciicast scanning) across every
+   profile in the "Do enable it" list above, plus GitHub Copilot: **9 of
+   11 real agents tested get real DEC mouse tracking working today** --
+   GitHub Copilot, Cline (+ user-confirmed real click), Grok Build, jcode,
+   Kilo Code, Mimo, OpenCode, Vibe, and the Pybackup Go TUI. Only Junie and
+   `OpenCode` routed through `ollama launch opencode` showed none -- both
+   worth re-checking on their own terms, not evidence of any platform
+   ceiling. "Grok Build --minimal" never requests tracking at all
+   (different rendering mode), unrelated to any of this.
+
+Full per-agent results are recorded in `~/data/agent_tui_catalog.sqlite3`
+(`agents.notes`, dated 2026-09-09) alongside this same correction. See
+`_mouse_handling_enabled` in `ai_terminal.py` for the final writeup, and
+`ai_terminal_notes.md`'s 2026-08-05 entry and `ai/RECOVERY_PLAN.md`'s
+Part B for the sections this also corrects. Bottom line: mouse tracking
+genuinely works through this file on Windows for nearly everything real;
+don't re-litigate that. If one specific profile shows no tracking, that's
+its own question, verified live -- not this one.
 
 **Implemented and committed** (`c3d0860`, on `main`, 1 ahead of
 `origin/main` — not pushed): `_route_click_to_cursor_fallback()`
