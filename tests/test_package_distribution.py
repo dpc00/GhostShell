@@ -19,6 +19,22 @@ def test_unpacked_install_and_python_host_are_declared():
     assert (ROOT / ".python-version").read_text().strip() == "3.8"
 
 
+def test_each_main_sublime_menu_declares_at_most_one_top_level_block():
+    """Confirmed live 2026-09-11: when one Main.sublime-menu file declares two
+    top-level blocks (e.g. "preferences" and "tools"), Sublime silently merges
+    only the first and drops the rest -- no error, no console warning, the
+    menu item just never appears. Reproduced on a real install: "tools" was
+    dropped while "preferences" (listed first) kept working; isolating "tools"
+    into its own file fixed it immediately, with no other change. This is why
+    GhostShell ships two files both named Main.sublime-menu (root: "tools",
+    menus/: "preferences") -- the same split Debugger and OpenUri already use
+    in this install. Guard against silently regressing back to one file.
+    """
+    for menu_path in sorted(ROOT.rglob("Main.sublime-menu")):
+        blocks = json.loads(menu_path.read_text(encoding="utf-8"))
+        assert len(blocks) <= 1, (menu_path.relative_to(ROOT), [b.get("id") for b in blocks])
+
+
 @pytest.mark.parametrize("path", RUNTIME_PYTHON, ids=lambda p: p.name)
 def test_runtime_python_has_sublime_python_38_syntax(path):
     # Syntax compatibility only. Actual Sublime API behavior needs a live test.
@@ -42,7 +58,11 @@ def _flatten(items):
 
 def test_settings_palette_and_preferences_menu_use_same_user_editor():
     commands = json.loads((ROOT / "Default.sublime-commands").read_text(encoding="utf-8"))
-    menus = json.loads((ROOT / "Main.sublime-menu").read_text(encoding="utf-8"))
+    # Split from the root Main.sublime-menu: Sublime silently drops the second
+    # top-level block when one package file declares more than one (see
+    # test_root_menu_declares_at_most_one_top_level_block below), so
+    # "preferences" lives in its own Main.sublime-menu under menus/.
+    menus = json.loads((ROOT / "menus/Main.sublime-menu").read_text(encoding="utf-8"))
     palette = next(c for c in commands if c["caption"] == "GhostShell: Settings")
     preferences = next(m for m in menus if m.get("id") == "preferences")
     menu = next(m for m in _flatten([preferences]) if m.get("command") == "edit_settings")
