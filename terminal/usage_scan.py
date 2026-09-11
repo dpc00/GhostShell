@@ -905,12 +905,15 @@ def fetch_openrouter_usage(qwen_home="~/.qwen", now=None):
     return parse_openrouter_key(payload)
 
 
-def gather_usage(home=None, now=None):
+def gather_usage(home=None, now=None, should_cancel=None):
     """Provider → usage dict: live endpoints first, local files as fallback.
 
     This is the slow, thorough sweep — run it once from a background thread
     at plugin load. Each provider is independent; one failure never hides
-    another's data.
+    another's data. ``should_cancel`` is an optional thread-safe predicate,
+    checked before each provider or local fallback. An in-flight provider
+    finishes normally, including saving any rotated OAuth tokens, but no
+    subsequent fetch starts after cancellation is observed.
     """
     home_dir = os.path.expanduser(home or "~")
     results = {}
@@ -923,6 +926,8 @@ def gather_usage(home=None, now=None):
         halfway through and discard every provider after it, so the bug
         surfaced as missing quota rather than as a bug.
         """
+        if should_cancel is not None and should_cancel():
+            return None
         try:
             return fetch()
         except Exception as e:

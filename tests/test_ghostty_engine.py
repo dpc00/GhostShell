@@ -9,6 +9,7 @@ Run from repo root:
     python -m unittest tests.test_ghostty_engine -v
 """
 import ctypes
+import os
 import unittest
 
 from terminal import ghostty_vt as gvt
@@ -352,8 +353,13 @@ class GhosttyVtBindingTests(unittest.TestCase):
 
 
 def _dll_available():
+    # Collection must not download a native binary. Provision it explicitly
+    # before running native tests, as documented for offline installation.
+    path = os.environ.get("GHOSTTY_VT_DLL") or gvt.DEFAULT_DLL_PATH
+    if not os.path.isfile(path):
+        return False
     try:
-        gvt.load_library()
+        gvt.load_library(path)
         return True
     except OSError:
         return False

@@ -32,11 +32,10 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from terminal.ghostty_engine import GhosttyParser
+from terminal.ghostty_vt import DEFAULT_DLL_PATH
 from terminal.screen import Screen
 
-DLL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "ai", "terminal", "bin", "ghostty-vt.dll"
-)
+DLL_PATH = os.environ.get("GHOSTTY_VT_DLL") or DEFAULT_DLL_PATH
 
 _LINES_PER_TURN = 28
 
