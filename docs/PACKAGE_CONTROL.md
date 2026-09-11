@@ -19,6 +19,10 @@ these preparation changes.
 - The command palette and Preferences menu expose the standard split settings
   editor. The README explains installation, dependencies, privacy, and offline
   DLL provisioning.
+- `usage_scan_enabled: false` disables startup, periodic, and manual usage
+  scans and cancels subsequent provider fetches in an active sweep. A provider
+  already running can finish, including saving rotated tokens. The current
+  default remains enabled to preserve existing installations.
 - [package-control-entry.json](package-control-entry.json) contains the proposed
   channel entry. It is a template for the channel repository, **not** a
   `package-metadata.json` to ship with the plugin.
@@ -37,8 +41,8 @@ these preparation changes.
   input/output recording, detachable brokers, and automatic credential-backed
   usage requests. Make recording and provider-network activity explicitly
   opt-in for a public release, or obtain reviewer agreement on the disclosed
-  behavior. A complete usage-network opt-out requires a code change:
-  `usage_refresh_minutes: 0` does not prevent the startup scan. Audit diagnostic
+  behavior. Use `usage_scan_enabled: false` for a complete usage-scanner opt-out:
+  `usage_refresh_minutes: 0` only disables the timer. Audit diagnostic
   logs and Windows ACLs too, not just the two recording flags.
 - [ ] **Review the download/install lifecycle.** First parser construction
   obtains the DLL synchronously. Test slow/offline networks, a failed checksum,
@@ -86,8 +90,10 @@ overrides.
 
 Use a disposable portable Sublime installation and test account or isolated
 home directories. Do not link your normal `Packages/User`, CLI credentials, or
-live sessions into it. Startup usage scanning currently reads CLI credentials
-from home directories, so an isolated Packages directory alone is insufficient.
+live sessions into it. Before loading GhostShell, create
+`Packages/User/ai_terminal.sublime-settings` with `"usage_scan_enabled": false`
+to prevent startup credential reads. Keep the isolated environment too, since
+commands launched from a terminal may read their own credentials independently.
 
 1. Install the release archive under `Packages/GhostShell`, not a working-tree
    symlink. Confirm that Sublime uses Python 3.8 and loads without errors.

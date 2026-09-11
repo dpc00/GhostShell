@@ -1138,6 +1138,13 @@
     // "Ai: Refresh Usage & Quota" command. Values below 1 are clamped to 1.
     // Changes apply immediately; no reload needed.
     "usage_refresh_minutes": 20,
+    // Master switch for credential-backed provider usage discovery. False
+    // prevents startup, periodic, and manual scans, including local credential
+    // reads and token refreshes. An already-running provider fetch may finish
+    // (and persist rotated tokens), but subsequent fetches are cancelled.
+    // Usage observed from terminal output remains available. This does not
+    // control the native DLL download or network access by launched CLIs.
+    "usage_scan_enabled": true,
     // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
     // selection outside the live prompt row permanently hold the ST caret in
     // place instead of the render loop re-snapping it to the PTY cursor every
