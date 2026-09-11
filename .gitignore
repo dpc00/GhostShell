@@ -25,6 +25,11 @@ auth.json
 .env.*
 .mimo*/
 
+# omp (oh-my-pi) project config -- .omp/mcp.json carries real MCP server
+# credentials (API keys, tokens) in plaintext, same category as the other
+# credential files above.
+.omp/
+
 # Session recordings/transcripts are verbatim terminal output (keys, source).
 *.cast
 
