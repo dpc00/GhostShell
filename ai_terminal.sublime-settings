@@ -611,7 +611,9 @@
             ],
             "mouse_handling": true,
             "page_keys_to_pty": true,
-            "spawn_env": {}
+            "spawn_env": {
+                "OPENROUTER_API_KEY": "$secret:OPENROUTER_API_KEY"
+            }
         },
         "Junie": {
             "detachable": true,
