@@ -11,6 +11,11 @@ stripped, CamelCase -> snake_case).
 
 ## Commands
 
+**GhostShell: Settings** uses Sublime's built-in `edit_settings` command to
+open package defaults beside `User/ai_terminal.sublime-settings`. It is also
+available under Preferences > Package Settings > GhostShell > Settings.
+Keep customizations in the User file so package updates do not overwrite them.
+
 | Class | ST command | Type | Command palette | Menu(s) | Keybinding |
 |---|---|---|---|---|---|
 | `AiTerminalLauncherCommand` | `ai_terminal_launcher` | WindowCommand | "Ai Terminal: Launch Agent…" | Tools > Ai Terminal > Launch Agent…; Side Bar: "Launch Ai Terminal Agent…" (`{"paths": [...]}`) | `ctrl+alt+n` |

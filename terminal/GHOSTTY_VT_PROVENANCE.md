@@ -9,6 +9,10 @@ Git. The binary audited on 2026-08-30 has:
 - Distribution: [GitHub Release `ghostty-vt-634957c8`](https://github.com/dpc00/GhostShell/releases/tag/ghostty-vt-634957c8)
 - Source repository: `https://github.com/ghostty-org/ghostty`
 - Source commit: `634957c8e67cad5040f54cef57de5502450d1f5f`
+- License: MIT, reproduced in [GHOSTTY_LICENSE](GHOSTTY_LICENSE) from the
+  [pinned source revision](https://github.com/ghostty-org/ghostty/blob/634957c8e67cad5040f54cef57de5502450d1f5f/LICENSE).
+- Supported distribution target: Windows x64. The downloaded artifact is a
+  Windows DLL, not a macOS or Linux shared library.
 
 At the time of the audit, the shipped DLL was byte-for-byte identical to
 `zig-out/bin/ghostty-vt.dll` in the source checkout at that commit. The source

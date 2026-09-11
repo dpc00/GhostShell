@@ -1,0 +1,13 @@
+{
+    "name": "GhostShell",
+    "details": "https://github.com/dpc00/GhostShell",
+    "description": "A Windows terminal for Sublime Text with AI CLI profiles and detachable sessions, powered by libghostty-vt.",
+    "labels": ["terminal/shell/repl"],
+    "releases": [
+        {
+            "sublime_text": ">=4107",
+            "platforms": ["windows-x64"],
+            "tags": true
+        }
+    ]
+}

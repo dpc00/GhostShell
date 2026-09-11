@@ -1,0 +1,1 @@
+GhostShell needs real filesystem paths for its native DLL and broker scripts.
