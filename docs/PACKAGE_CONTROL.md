@@ -64,6 +64,26 @@ these preparation changes.
 
 ## Local verification
 
+### Preparation verification, 2026-09-11
+
+- `622 passed, 1 skipped` with pytest on Windows/Python 3.12. The sole skip is
+  the opt-in Task Scheduler integration test. Native replay and concurrency
+  tests use the actual DLL location and passed, rather than silently skipping
+  an obsolete `ai/terminal/` path.
+- `tools/check_import.py` passed. Runtime Python files also passed Python 3.8
+  syntax checks. These syntax checks alone do not guarantee API compatibility.
+- A `git archive` of the preparation commit retained required runtime files
+  and excluded tests, internal notes, and local workspace state.
+- An isolated portable **Sublime build 4200 / Python 3.8.12** loaded an archive
+  of commit `77ea9cd`, created a non-detachable `cmd.exe` terminal, accepted
+  input, rendered an `echo` result, and opened the User settings file through
+  the new settings command. `usage_scan_enabled: false` prevented startup of
+  the provider scanner. The test used an isolated home and environment, no
+  user credentials, recording disabled, and a pre-provisioned pinned DLL.
+- Not covered by that smoke test: build 4107, fresh online DLL download,
+  Task Scheduler/detach, update/uninstall, or interactive resize/selection.
+  The full release checklist below remains necessary.
+
 From a Git checkout with the intended changes committed:
 
 ```console
