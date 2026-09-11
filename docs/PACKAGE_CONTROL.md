@@ -61,9 +61,13 @@ these preparation changes.
   Check whether the reviewer wants the binary bundled as a release asset
   instead of a first-use download. If changing its distribution, retain the
   fingerprint/provenance and audit licenses for any compiled dependencies.
-- [ ] **Verify a clean first install in real Sublime Text.** Existing-checkout
-  tests and a preexisting DLL can conceal missing release files and first-run
-  errors. Use the procedure below, including the proposed minimum build.
+- [ ] **Verify a clean first install in real Sublime Text.** `.tmp/run_package_smoke.py`
+  now automates the install+settings+one-profile-launch slice of this (see
+  2026-09-11 verification below) but does not cover the full 7-step matrix
+  (download lifecycle, detach/reconnect across a restart, uninstall, or the
+  minimum supported build). Existing-checkout tests and a preexisting DLL
+  can still conceal missing release files and first-run errors on anything
+  the script doesn't exercise. Use the procedure below.
 - [ ] **Publish a semantic-version package tag after validation.** The existing
   `ghostty-vt-634957c8` tag distributes the native dependency. It is not a
   semantic-version GhostShell release. Choose an initial package version
@@ -94,6 +98,31 @@ these preparation changes.
 - Not covered by that smoke test: build 4107, fresh online DLL download,
   Task Scheduler/detach, update/uninstall, or interactive resize/selection.
   The full release checklist below remains necessary.
+
+### Automated install/runtime smoke test, 2026-09-11 (commit `43749fd`)
+
+- `.tmp/run_package_smoke.py` builds a fully isolated Sublime install in a
+  temp dir: copies the real Program Files install, `git archive HEAD` into a
+  fresh `Packages/GhostShell`, copies only `terminal/bin/ghostty-vt.dll`,
+  gives it its own `USERPROFILE`/`APPDATA`/`TEMP` and a minimal `Smoke`
+  profile launching bare `cmd.exe`, then spawns `sublime_text.exe
+  --new-window --background` against that isolated environment. A probe
+  script written into the isolated `Packages/User` opens a terminal, sends
+  an `echo`, asserts `usage_scan_enabled` is `False` and that the usage-scan
+  thread never started, opens **GhostShell: Settings**, and writes
+  `result.json`.
+- Result: `passed: true`, Sublime build 4200, Python 3.8.12. All of
+  `input_sent`, `rendered_echo`, `usage_scan_not_started`, and
+  `settings_user_file_opened` were `true`. This confirms the new privacy
+  defaults (`usage_scan_enabled: false` from this commit) take effect at
+  runtime, not just that the settings file parses correctly. Temp dir
+  cleaned up after the run.
+- Still not covered: download-lifecycle edge cases (offline, checksum
+  failure, read-only package folder, update while the DLL is loaded),
+  detach/reconnect across a real Sublime restart, uninstall behavior, and a
+  repeat against the minimum supported build (4107) — this script only
+  covers install + settings + one profile launch on 4200, not the full
+  7-step matrix above.
 
 From a Git checkout with the intended changes committed:
 
