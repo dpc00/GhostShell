@@ -108,16 +108,19 @@ rather than merely disconnect from a persistent broker.
 
 Review the defaults before running commands with sensitive output:
 
-- **Session transcripts and asciicast recording are currently enabled.** They
-  write under `~/data/logs/ai_terminal_session_text_logs` and
+- **Session transcripts and asciicast recording are disabled by default**
+  (`log_tab_text: false`, `record_asciicast: false`). Enabling either writes
+  under `~/data/logs/ai_terminal_session_text_logs` and
   `~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering`.
   Recordings can contain terminal output and input, including credentials and
-  source code. Set `log_tab_text` and `record_asciicast` to `false` before
-  launching a session to disable those recordings. Profiles can override these
-  settings. Disabling recording does not remove existing files or disable all
-  diagnostic logs.
+  source code. Profiles can override these settings. Disabling recording does
+  not remove existing files or disable all diagnostic logs.
 - Detachable brokers retain a bounded output replay buffer and local registry
-  records. Their temporary launch files include the child environment. Review
+  records. Their temporary launch files include the child environment. A
+  detachable session's broker process persists in the background across
+  Sublime Text restarts (that's the point — it's what makes reconnect work),
+  not just while Sublime is open; use **End Session (Kill + Close)** to
+  actually terminate one instead of just closing the tab. Review
   [the broker architecture](docs/DETACHABLE_SESSIONS.md) before enabling them
   in a restricted environment.
 - Usage/quota discovery reads supported CLIs' local session and credential

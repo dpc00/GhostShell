@@ -19,31 +19,42 @@ these preparation changes.
 - The command palette and Preferences menu expose the standard split settings
   editor. The README explains installation, dependencies, privacy, and offline
   DLL provisioning.
-- `usage_scan_enabled: false` disables startup, periodic, and manual usage
-  scans and cancels subsequent provider fetches in an active sweep. A provider
-  already running can finish, including saving rotated tokens. The current
-  default remains enabled to preserve existing installations.
+- `usage_scan_enabled: false`, `record_asciicast: false`, and
+  `log_tab_text: false` are now the shipped defaults (2026-09-11). Together
+  they disable startup/periodic/manual usage scans, asciicast recording, and
+  plain-text session-transcript logging out of the box; each is a global or
+  per-profile opt-in. `usage_scan_enabled: false` also cancels subsequent
+  provider fetches in an active sweep, though an already-running fetch may
+  finish, including saving rotated tokens.
 - [package-control-entry.json](package-control-entry.json) contains the proposed
   channel entry. It is a template for the channel repository, **not** a
   `package-metadata.json` to ship with the plugin.
 
 ## Remaining release blockers and decisions
 
-- [ ] **Separate personal configuration from package defaults.**
-  `ai_terminal.sublime-settings` still includes absolute developer-machine paths
-  (Antigravity, Junie, local source builds and test agents), local STLOGS
-  environment variables, an unrelated prompt-wrapper path, and development
-  commentary. Move local overrides to `Packages/User` before replacing these
-  with portable examples. Existing local settings were deliberately preserved
-  during the packaging pass. Choose a default shell that works without a paid
-  CLI account, rather than assuming Claude is installed.
-- [ ] **Decide safe public defaults.** Current defaults enable transcript and
-  input/output recording, detachable brokers, and automatic credential-backed
-  usage requests. Make recording and provider-network activity explicitly
-  opt-in for a public release, or obtain reviewer agreement on the disclosed
-  behavior. Use `usage_scan_enabled: false` for a complete usage-scanner opt-out:
-  `usage_refresh_minutes: 0` only disables the timer. Audit diagnostic
-  logs and Windows ACLs too, not just the two recording flags.
+- [x] **Separate personal configuration from package defaults (2026-09-11).**
+  Removed the dead `context_files` and `system_prompt_wrapper_file` keys
+  (unused by `ai_terminal.py`, both carried an unrelated absolute developer
+  path). Replaced hardcoded developer-machine `launch_command` paths for the
+  Antigravity, Junie, and Continue profiles with bare command names (resolved
+  via `shutil.which`/PATHEXT, same as every other CLI profile). Removed the
+  `Pybackup Go TUI` profile (launches an unrelated personal project),
+  `Qwen (repo)` (launches a personal patched git-branch checkout, non-
+  functional for any other user), and the `Testing Agent`/`Mouse Test Agent`
+  dev-only profiles (reference `tests/mock_agent_cli.py`, which
+  `.gitattributes` excludes from source archives). Removed the local
+  `STLOGS_*` telemetry variables from `shared_spawn_env`. Changed
+  `default_profile` from `"Claude"` to `"Dos Console"` (cmd.exe) so a first
+  install works without any CLI/API account. Development commentary
+  documenting per-profile mouse/alt-screen/page-key behavior was
+  deliberately kept — it is accurate operational documentation, not personal
+  configuration.
+- [ ] **Decide safe public defaults.** Recording and usage-scan defaults are
+  now off (see above), and the README's privacy section documents that
+  detachable brokers persist in the background across Sublime restarts by
+  design (a stability feature, not itself a privacy leak) and how to
+  terminate one. Still open: audit diagnostic logs and Windows ACLs too, not
+  just the recording/usage-scan flags.
 - [ ] **Review the download/install lifecycle.** First parser construction
   obtains the DLL synchronously. Test slow/offline networks, a failed checksum,
   a read-only package folder, and updates while the DLL is loaded on Windows.
