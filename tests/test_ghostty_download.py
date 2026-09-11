@@ -66,3 +66,28 @@ def test_offline_install_cleans_temporary_download(tmp_path, monkeypatch):
     with pytest.raises(urllib.error.URLError, match="offline"):
         ghostty_vt.ensure_dll(str(path), URL, DIGEST)
     assert not list(tmp_path.iterdir())
+
+
+def test_permission_denied_temp_file_fails_fast_not_retries_forever(tmp_path, monkeypatch):
+    """Regression test: ensure_dll must NOT use tempfile.mkstemp() for the
+    download temp file. mkstemp's Windows-specific PermissionError handler
+    retries as long as os.access(dir, os.W_OK) claims the directory is
+    writable -- but os.access on Windows only reflects the
+    FILE_ATTRIBUTE_READONLY bit, not real ACL deny rules, so an ACL-denied
+    (but not attribute-readonly) package folder makes that check misreport
+    "writable" and retry effectively forever, stalling the single-threaded
+    Sublime plugin host instead of raising a catchable error (confirmed
+    live in an isolated Sublime install: >90s stall, had to be force-killed).
+    """
+    path = tmp_path / "bin" / "ghostty-vt.dll"
+
+    def denied_open(*args, **kwargs):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(ghostty_vt.os, "open", denied_open)
+    monkeypatch.setattr(
+        ghostty_vt.urllib.request, "urlopen",
+        lambda *a, **k: pytest.fail("must fail before ever touching the network"),
+    )
+    with pytest.raises(OSError, match="could not create a temp file"):
+        ghostty_vt.ensure_dll(str(path), URL, DIGEST)

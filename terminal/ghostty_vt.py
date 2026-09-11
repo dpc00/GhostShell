@@ -20,10 +20,10 @@ build during development -- either one skips the download entirely.
 import ctypes
 import hashlib
 import os
-import tempfile
 import traceback
 import urllib.error
 import urllib.request
+import uuid
 
 DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dll")
 
@@ -117,7 +117,24 @@ def ensure_dll(path=DEFAULT_DLL_PATH, url=RELEASE_DLL_URL, expected_sha256=EXPEC
                   % (path, traceback.format_exc()))
     dest_dir = os.path.dirname(path)
     os.makedirs(dest_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dest_dir, suffix=".dll.download")
+    tmp_path = os.path.join(dest_dir, ".ghostty-vt-%s.dll.download" % uuid.uuid4().hex)
+    try:
+        fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError as e:
+        # Deliberately NOT tempfile.mkstemp(): on Windows its PermissionError
+        # handler retries as long as os.access(dir, os.W_OK) claims the
+        # directory is writable -- but os.access on Windows only reflects
+        # the FILE_ATTRIBUTE_READONLY bit, not real ACLs, so an ACL-denied
+        # (but not attribute-readonly) package folder makes it report
+        # "writable" forever and retry in an effectively unbounded loop,
+        # stalling Sublime's single-threaded plugin host instead of raising
+        # a catchable error (confirmed live: >90s stall, force-killed).
+        # A single os.open() attempt with a UUID-random name gives the same
+        # collision safety as mkstemp without that retry path.
+        raise OSError(
+            "could not create a temp file in %s to download the DLL into (%s)"
+            % (dest_dir, e)
+        ) from e
     try:
         with os.fdopen(fd, "wb") as tmp, urllib.request.urlopen(url, timeout=timeout) as resp:
             while True:
