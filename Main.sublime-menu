@@ -1,34 +1,9 @@
 [
     {
-        "id": "preferences",
-        "children": [
-            {
-                "id": "package-settings",
-                "children": [
-                    {
-                        "caption": "GhostShell",
-                        "children": [
-                            {
-                                "caption": "Settings",
-                                "command": "edit_settings",
-                                "args": {
-                                    "base_file": "${packages}/GhostShell/ai_terminal.sublime-settings",
-                                    "default": "{\n\t$0\n}\n"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        ]
-    },
-    {
         "id": "tools",
         "children": [
             {
                 "caption": "Ai Terminal",
-                "mnemonic": "A",
-                "id": "ai-terminal",
                 "children": [
                     {
                         "caption": "Launch Agent…",
