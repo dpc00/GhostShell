@@ -1,102 +1,191 @@
 # GhostShell
 
-A bare-bones, owned terminal for Sublime Text — no Terminus dependency. Pure
-ctypes against the Windows ConPTY (Pseudoconsole) API, plus a cursor-aware
-ANSI renderer (backed by libghostty-vt) tailored to the subset TUI agents
-(Claude Code, OpenCode, Codex, etc.) emit.
+A terminal for Sublime Text, with profiles for shells and AI coding CLIs,
+native editor scrollback, and detachable sessions. GhostShell uses Windows
+ConPTY and [libghostty-vt](https://github.com/ghostty-org/ghostty) rather than
+depending on another terminal package.
 
-![12 AI coding CLIs running natively in GhostShell terminal tabs](docs/screenshots/supported-clis.png)
+![12 AI coding CLIs running in GhostShell terminal tabs](docs/screenshots/supported-clis.png)
 
-Which CLIs/agents run in a given tab is a matter of your own profiles in
-`ai_terminal.sublime-settings`. Mouse tracking, alt-screen handling, and
-page-key routing are per-profile knobs, set by trial and error against
-whatever a given TUI actually does — not vetted or "tuned" support, and not
-something this README tracks. Planned: a shared TUI-profile layer that
-individual agent profiles select from, instead of each one repeating its
-own knob values.
+## Requirements
 
-## Layout
+- **Sublime Text 4, build 4107 or newer, on Windows x64.** The plugin selects
+  Sublime's bundled Python 3.8 host via `.python-version`.
+- **Windows 10 version 1809 or newer, or Windows 11**, for ConPTY.
+- Internet access to GitHub on the first terminal launch, to download the
+  pinned native library. See [Native library](#native-library) for offline use.
+- Install any shells or AI CLIs you want to use separately and make their
+  commands available on `PATH`. GhostShell does not install them or provide
+  their accounts, subscriptions, or API access.
+- **Detachable sessions**, enabled in the current defaults, additionally need
+  a standalone Windows Python installation (`python.exe` and `pythonw.exe`),
+  PowerShell, and permission to run a temporary task in Windows Task Scheduler.
+  Python 3.12 is used for development. Set `broker_python` to the full path to
+  `python.exe` if detection picks the wrong interpreter. A Windows Store
+  execution alias is not a substitute for an installed interpreter.
+- Windows Terminal is optional, only needed for the Windows Terminal handoff
+  commands. A monospace font with box-drawing coverage is recommended. Install
+  Cascadia Code or override `font_face` if it is not available on your machine.
 
-```
-ai_terminal.py          -- Sublime adapter: ConPTY, view I/O, commands, color-scheme
-terminal/                -- pure core, unit-testable without Sublime
-    screen.py, parser.py, colors.py, keys.py, render.py, caret.py, mouse.py
-    ghostty_engine.py, ghostty_vt.py -- ctypes bindings to libghostty-vt (auto-downloads
-        the DLL on first load, see below)
-    launcher.py, profile_availability.py, profile_schema.py, pty_env.py -- profile/launch
-        plumbing
-    agent_catalog.py       -- known-CLI catalog backing "Sync Detected Agent Profiles"
-    history_scan.py, usage_scan.py   -- scrollback/usage helpers
-    session_text_log.py, log_paths.py -- plain-text session transcript logging
-    layout.py, cast_recorder.py, color_scheme_log.py, raw_debug_log.py,
-        settings_debug_log.py -- resize/recording/diagnostic support
-    bin/ghostty-vt.dll  -- libghostty-vt (not tracked in Git, downloaded automatically)
-Default.sublime-keymap, Default.sublime-mousemap -- key/mouse-forwarding bindings, gated
-    by setting.ai_terminal_view
-Main.sublime-menu       -- Tools > Ai Terminal submenu
-Default.sublime-commands, Context.sublime-menu, Side Bar.sublime-menu,
-Tab Context.sublime-menu -- command palette / context-menu entries
-ai_terminal.sublime-settings     -- profiles (shells/agents), rendering knobs
-ai_terminal.sublime-color-scheme -- color scheme with the ai.terminal.* scopes
-tools/                  -- agent_broker.py + agent_broker_client.py (detachable-session
-    broker, see docs/DETACHABLE_SESSIONS.md), scan_agents.py, check_import.py (import
-    sanity check), recovery/diagnostic scripts
-tests/                  -- unit tests for terminal/*, no Sublime required
+The distributed native library is Windows x64 only. POSIX-related code in the
+repository does **not** mean that macOS or Linux installations are supported.
+
+## Installation
+
+**Not yet listed in Package Control.** Until approved, use a development
+checkout. In Sublime Text, choose **Preferences > Browse Packages**, then clone
+this repository into a folder named **GhostShell** inside that directory:
+
+```console
+git clone https://github.com/dpc00/GhostShell.git GhostShell
 ```
 
-See [COMMANDS.md](COMMANDS.md) for every registered command: ST command name,
-command palette entry, menu location(s), and keybinding.
-
-`Ai Terminal: Sync Detected Agent Profiles` is an optional bootstrap command.
-It checks the current PATH for CLIs known to `terminal/agent_catalog.py` and
-rewrites only the machine-generated `ai_terminal_agents.sublime-settings`.
-It never edits `ai_terminal.sublime-settings`; a hand-written profile with the
-same display name always overrides the generated one. Syncing is useful after
-installing a new agent, but is unnecessary for profiles already maintained in
-the main settings file.
-
-See [docs/DETACHABLE_SESSIONS.md](docs/DETACHABLE_SESSIONS.md) for the
-windowless broker architecture, recovery commands, guarantees, limitations,
-and live detach/reconnect soak tests.
-
-## Installing
-
-Not yet available via Package Control. Once it is, install it that way
-instead -- the manual symlink setup below is for development and
-pre-approval use only, and will become obsolete at that point.
-
-Symlink this repo into your Sublime Text `Packages/` directory:
+Alternatively, link an existing checkout from PowerShell (creating a symbolic
+link may require Developer Mode or administrator permission):
 
 ```powershell
-New-Item -ItemType SymbolicLink -Path "$env:APPDATA\Sublime Text\Packages\GhostShell" -Target "<path to this repo checkout>"
+New-Item -ItemType SymbolicLink -Path "<Packages directory>\GhostShell" -Target "<checkout directory>"
 ```
 
-The symlinked folder can be named anything -- ai_terminal.py has no hardcoded
-package-name import, so nothing needs updating to match.
+Use the actual Packages directory opened by Sublime, especially for portable
+installations. Keep the folder name `GhostShell`: generated resources and the
+settings menu use that package name. Restart Sublime after installation.
 
-### Getting libghostty-vt.dll
+After the package is accepted, use **Package Control: Install Package**, then
+select **GhostShell**. Do not keep a manual checkout installed alongside the
+Package Control installation. The `.no-sublime-package` marker ensures that
+the native library and broker scripts have real filesystem paths.
 
-The DLL isn't tracked in Git (it's a built binary artifact). Nothing to do
-by hand: the first time `ai_terminal.py` loads, `terminal/ghostty_vt.py`
-downloads the pinned binary from a GitHub Release, verifies it against a
-recorded SHA-256, and places it at `terminal/bin/ghostty-vt.dll` — a file
-already there that already matches the checksum is reused as-is, no network
-touched. Set the `GHOSTTY_VT_DLL` env var (or pass a path to
-`load_library()`) to point at a different build during development instead.
+## Quick start and settings
 
-To build it yourself: clone https://github.com/ghostty-org/ghostty, run
-`zig build`, and copy `zig-out/bin/ghostty-vt.dll` to the path above.
+1. Open **GhostShell: Settings** from the command palette, or
+   **Preferences > Package Settings > GhostShell > Settings**.
+2. Put overrides in the **right-hand User file**, not the left-hand defaults.
+   Package updates replace the defaults. The settings filename remains
+   `ai_terminal.sublime-settings` for compatibility.
+3. Run **Ai Terminal: Launch Agent…** (`Ctrl+Alt+N`) and select an installed
+   shell or CLI. Most commands currently use the **Ai Terminal** prefix.
+   **Ai Terminal: Open Here** launches the configured default profile.
 
-The fingerprint and source revision of the currently pinned binary are in
-[terminal/GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md); its
-reported libghostty-vt version is `0.1.0-dev`.
+The current defaults still include development-machine profiles. To start
+with a plain Windows command prompt, without a detachable broker or full
+session recording, use these User settings:
 
-## Testing
-
+```json
+{
+    "default_profile": "Command Prompt",
+    "log_tab_text": false,
+    "record_asciicast": false,
+    "color_scheme_log_path": null,
+    "shared_spawn_env": {},
+    "profiles": {
+        "Command Prompt": {
+            "launch_command": ["cmd.exe"],
+            "detachable": false,
+            "spawn_env": {}
+        }
+    }
+}
 ```
+
+Add other profiles using their CLI command, for example `"launch_command":
+["claude"]` or `["codex"]`. Restart Sublime after changing its inherited
+`PATH`. Mouse handling, alternate-screen behavior, and page-key routing are
+per-profile options, not a guarantee of compatibility with every TUI version.
+
+**Ai Terminal: Sync Detected Agent Profiles** refreshes the generated profile
+list after installing a CLI. It writes only
+`User/ai_terminal_agents.sublime-settings`. Hand-written profiles take precedence
+over generated profiles of the same name.
+
+See [COMMANDS.md](COMMANDS.md) for command names and bindings, and
+[detachable sessions](docs/DETACHABLE_SESSIONS.md) for recovery and lifecycle
+details. Use **End Session (Kill + Close)** when you want to stop a session,
+rather than merely disconnect from a persistent broker.
+
+## Privacy and background activity
+
+Review the defaults before running commands with sensitive output:
+
+- **Session transcripts and asciicast recording are currently enabled.** They
+  write under `~/data/logs/ai_terminal_session_text_logs` and
+  `~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering`.
+  Recordings can contain terminal output and input, including credentials and
+  source code. Set `log_tab_text` and `record_asciicast` to `false` before
+  launching a session to disable those recordings. Profiles can override these
+  settings. Disabling recording does not remove existing files or disable all
+  diagnostic logs.
+- Detachable brokers retain a bounded output replay buffer and local registry
+  records. Their temporary launch files include the child environment. Review
+  [the broker architecture](docs/DETACHABLE_SESSIONS.md) before enabling them
+  in a restricted environment.
+- Usage/quota discovery reads supported CLIs' local session and credential
+  files and calls their providers' usage endpoints in the background. Some
+  providers may refresh saved OAuth tokens. This happens at plugin load and,
+  by default, every 20 minutes. **`usage_refresh_minutes: 0` disables the
+  periodic refresh only, not the startup scan or a manual refresh.** There is
+  currently no complete settings-based network opt-out for usage discovery.
+- The native library is downloaded from the pinned GitHub Release below.
+  Installing GhostShell does not install or authenticate AI CLIs. Commands
+  run inside a terminal have their own privacy policies and side effects.
+
+Do not attach recordings or credential settings to public bug reports without
+reviewing and redacting them. POSIX-style `0600` file modes do not enforce
+private Windows ACLs. Protect the log directories using Windows permissions.
+
+## Native library
+
+`terminal/bin/ghostty-vt.dll` is not tracked in Git. When the first terminal
+creates its parser, `terminal/ghostty_vt.py` downloads the pinned binary from a
+GitHub Release, verifies its SHA-256, and installs it atomically at that path.
+An existing matching file is reused without a download. An offline first
+launch fails unless the library is already installed.
+
+For offline installation, download the artifact linked in
+[GHOSTTY_VT_PROVENANCE.md](terminal/GHOSTTY_VT_PROVENANCE.md) on a connected
+machine, verify its recorded SHA-256, and copy it to
+`GhostShell/terminal/bin/ghostty-vt.dll` before launching a terminal.
+
+Developers may set `GHOSTTY_VT_DLL` to an alternative compatible build. This
+override bypasses the pinned download **and its checksum enforcement**, so use
+only a trusted build. The pinned source revision, fingerprint, and upstream
+[MIT license](terminal/GHOSTTY_LICENSE) are included in `terminal/`.
+
+## Development and testing
+
+```console
+python -m pip install "pytest>=7,<8.4"
 python -m pytest tests/ -q
 ```
 
-`python -m unittest discover -s tests -v` also works but silently misses
-the pytest-only tests in this suite (fewer collected than the command
-above) — use the pytest invocation for a full run.
+The test dependency range also supports Python 3.8. Sublime itself does not
+need pytest. Run the suite outside Sublime: tests use API stubs, and native
+stress tests belong in an isolated Python process. Native tests skip if the
+DLL is absent. The Task Scheduler integration test is separately opt-in, as
+documented in [detachable sessions](docs/DETACHABLE_SESSIONS.md).
+
+`python -m unittest discover -s tests -v` misses pytest-only tests. Use pytest
+for the full suite. Unit tests are not a substitute for a clean Sublime
+installation smoke test.
+
+Repository layout:
+
+- `ai_terminal.py`: Sublime adapter, ConPTY, views, commands, and settings.
+- `terminal/`: renderer, VT bindings, profiles, history, usage, and logging.
+- `tools/`: runtime broker/relay scripts and development utilities. The broker
+  scripts must remain in release archives.
+- `tests/`: unit and opt-in integration tests, retained in Git checkouts.
+- `docs/`: user documentation and screenshots.
+
+Maintainers: see the
+[Package Control submission checklist](https://github.com/dpc00/GhostShell/blob/main/docs/PACKAGE_CONTROL.md)
+in the source repository before tagging a release.
+
+## License and support
+
+GhostShell is [MIT licensed](LICENSE). libghostty-vt has its own
+[MIT license](terminal/GHOSTTY_LICENSE).
+
+Report problems at [GitHub Issues](https://github.com/dpc00/GhostShell/issues),
+including your Windows and Sublime builds, CLI version, and a minimal
+reproduction without secrets.

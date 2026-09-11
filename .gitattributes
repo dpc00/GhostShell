@@ -1,0 +1,11 @@
+# Keep development-only material out of tag source archives used by Package Control.
+# These files remain in Git checkouts. Runtime broker scripts in tools/ must ship.
+/.gitattributes export-ignore
+/ai export-ignore
+/tests export-ignore
+/GhostShell-debug.sublime-project export-ignore
+/GhostShell-debug.sublime-workspace export-ignore
+/ai_terminal_notes.md export-ignore
+/temp_note.md export-ignore
+/docs/PACKAGE_CONTROL.md export-ignore
+/docs/package-control-entry.json export-ignore

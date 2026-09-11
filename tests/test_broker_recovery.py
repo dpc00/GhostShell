@@ -432,7 +432,7 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     assert kill_call < close_call, "must kill before closing"
 
     info_start = end_end
-    info_end = source.index("class AiTerminalRecoverSessionCommand", info_start)
+    info_end = source.index("def _attach_recovered_session", info_start)
     info_source = source[info_start:info_end]
     assert "sublime_plugin.WindowCommand" in info_source.split("\n")[0]
     # Read-only: never touches pty state or the view's lifecycle.
@@ -441,17 +441,16 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     assert "info_view.close()" not in info_source
     assert "_expected_termination_reason =" not in info_source
     assert "_read_broker_registry_record(" in info_source
-    # A readable scratch tab, not sublime.message_dialog -- confirmed live
-    # 2026-09-02: the dialog's fixed small system font made a multi-line
-    # technical readout hard to read.
+    # Session Info now reports inline in the existing terminal. It must not
+    # open another view/dialog or send status text as input to the child.
     assert "sublime.message_dialog(" not in info_source
-    assert "self.window.new_file()" in info_source
-    assert "info_view.set_read_only(True)" in info_source
-    # Human-relevant facts lead; pipe name / broker PID (plumbing, not
-    # decision-relevant per the same feedback) are demoted to a footer.
-    assert info_source.index('"Status: %s"') < info_source.index('"Pipe: %s"')
+    assert "self.window.new_file()" not in info_source
+    assert "_vwrite(view, banner)" in info_source
+    assert "pty.write(" not in info_source
+    assert "send_string(" not in info_source
+    assert info_source.index('"Status: %s"') < info_source.index('"Child command: %s"')
     assert '"Last output: %s" % _human_ago(' in info_source
-    assert "_sublime_view_info_lines(view)" in info_source
+    assert '"Usage: %s" % _profile_availability_label(profile_name)' in info_source
 
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
@@ -470,6 +469,55 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     for name in ("ai_terminal_end_session", "ai_terminal_session_info"):
         assert name in by_command
         assert by_command[name].get("args") == {"group": -1, "index": -1}, name
+
+
+def test_session_info_reports_inline_without_mutating_session(monkeypatch):
+    from types import SimpleNamespace
+
+    # Only read methods exist. Any kill, write, detach, close, or new_file call
+    # fails rather than quietly passing through a permissive Mock.
+    view = SimpleNamespace(id=lambda: 42)
+    window = object()
+    pty = SimpleNamespace(
+        pipe_name="test-session", _cwd="C:\\project", is_alive=lambda: True,
+    )
+    term = SimpleNamespace(
+        pty=pty, profile_name="Example", _last_output_at=100.0,
+        _expected_termination_reason=None,
+    )
+    term_before, pty_before = vars(term).copy(), vars(pty).copy()
+    targets, reads, writes = [], [], []
+
+    def target_window(actual_window, group, index):
+        targets.append((actual_window, group, index))
+        return view
+
+    def registry(pipe_name):
+        reads.append(pipe_name)
+        return {"child_argv": ["cmd.exe"]}
+
+    monkeypatch.setattr(ai_terminal, "_tab_menu_target_view", target_window)
+    monkeypatch.setattr(ai_terminal._Terminal, "from_id", staticmethod(
+        lambda view_id: term if view_id == 42 else None,
+    ))
+    monkeypatch.setattr(ai_terminal, "_is_broker_pty", lambda value: value is pty)
+    monkeypatch.setattr(ai_terminal, "_read_broker_registry_record", registry)
+    monkeypatch.setattr(ai_terminal, "_profile_availability_label", lambda _: "Available")
+    monkeypatch.setattr(ai_terminal.time, "time", lambda: 160.0)
+    monkeypatch.setattr(ai_terminal, "_vwrite", lambda v, text: writes.append((v, text)))
+
+    ai_terminal.AiTerminalSessionInfoCommand(window).run(group=2, index=3)
+
+    assert targets == [(window, 2, 3)]
+    assert reads == ["test-session"]
+    assert len(writes) == 1 and writes[0][0] is view
+    banner = writes[0][1]
+    assert "Profile: Example\nUsage: Available\nStatus: running" in banner
+    assert "Last output: 1 minute ago" in banner
+    assert "Working directory: C:\\project" in banner
+    assert "Child command: cmd.exe" in banner
+    assert vars(term) == term_before
+    assert vars(pty) == pty_before
 
 
 def test_relaunch_kills_then_respawns_into_the_same_view():

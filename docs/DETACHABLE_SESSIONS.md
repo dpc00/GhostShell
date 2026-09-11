@@ -138,23 +138,13 @@ plus a read-only fourth:
 - `End Session (Kill + Close)` does both together, in one action -- the
   same combination a plain tab close already does, just explicit and
   reachable without needing to physically close the tab.
-- `Session Info...` is non-destructive: opens a read-only scratch tab (not
-  `sublime.message_dialog` -- confirmed live 2026-09-02 that its fixed
-  small system font made a multi-line technical readout hard to read) with
-  everything known about the session. Human-relevant facts lead: profile,
-  running/frozen status, last output (`_human_ago()`, updated on every
-  `_on_data` call -- absolute start time alone doesn't answer "is this
-  still doing something"), working directory, child command. Pipe name and
-  broker PID are demoted to a "Details" footer -- also 2026-09-02 feedback,
-  the original ordering led with exactly the two fields least useful for
-  deciding what to do with a tab. Child command, broker PID, and start time
-  are read from the on-disk registry record via
-  `_read_broker_registry_record()`, so they're absent if the broker already
-  exited and removed its own record. The Details footer also carries
-  Sublime's own view/sheet/window identifiers (`_sublime_view_info_lines()`
-  -- requested directly, best-effort per field since e.g. `view.sheet()`
-  isn't guaranteed for every view kind): View ID, Buffer ID, Sheet ID,
-  Window ID, and Group/Index.
+- `Session Info...` reports inline in the existing terminal tab. It does not
+  open a separate scratch tab or dialog, send input to the child, or change
+  the session lifecycle. The report shows the profile, usage/quota label,
+  running/frozen status, last output time, working directory, and child
+  command when available. The child command comes from the local broker
+  registry and may be absent after the broker exits. The earlier scratch-tab
+  report and its technical-details footer were replaced by inline output.
 
 Kill Session, Close Tab, and End Session all share the same
 `_expected_termination_reason` mechanism (`"killed"` / `"closed"`), just
