@@ -66,13 +66,20 @@ these preparation changes.
   open: whether the reviewer wants the binary bundled as a release asset
   instead of a first-use download. If changing its distribution, retain the
   fingerprint/provenance and audit licenses for any compiled dependencies.
-- [ ] **Verify a clean first install in real Sublime Text.** `.tmp/run_package_smoke.py`
-  now automates the install+settings+one-profile-launch slice of this (see
-  2026-09-11 verification below) but does not cover the full 7-step matrix
-  (download lifecycle, detach/reconnect across a restart, uninstall, or the
-  minimum supported build). Existing-checkout tests and a preexisting DLL
-  can still conceal missing release files and first-run errors on anything
-  the script doesn't exercise. Use the procedure below.
+- [x] **Verify a clean first install in real Sublime Text (2026-09-11).**
+  `.tmp/run_package_smoke.py` covers install+settings+one-profile-launch on
+  build 4200. `.tmp/run_lifecycle_full_smoke.py` extends this with real,
+  isolated-Sublime coverage of detach/hard-kill/reconnect/explicit
+  termination, update-preserves-User-settings, and uninstall-while-a-
+  session-is-alive (findings below). Build 4107 was also verified for real
+  after fetching the official installer directly from
+  `download.sublimetext.com` (see below) -- Sublime Text does not publish
+  historical builds on its normal download page, but the same
+  build-numbered URL pattern that hosts the current release still serves
+  old builds directly; no third-party mirror was needed. Interactive
+  resize/selection remains unautomated (needs a real user or a UI-driving
+  tool this harness doesn't have) -- the one piece of the original 7-step
+  matrix still not covered by any script.
 - [ ] **Publish a semantic-version package tag after validation.** The existing
   `ghostty-vt-634957c8` tag distributes the native dependency. It is not a
   semantic-version GhostShell release. Choose an initial package version
@@ -81,6 +88,7 @@ these preparation changes.
 - [ ] **Submit the channel entry and pass channel tests.** Follow the official
   instructions below. Nothing in this repository alone lists the package in
   Package Control.
+
 
 ## Local verification
 
@@ -191,6 +199,83 @@ calls the real `ensure_dll()` again against the now-loaded file.
   before a DLL replacement can actually land; this is unrelated to
   `ensure_dll`'s own atomic-rename design, which already avoids ever loading
   a partially-written file.
+
+### Detach/reconnect, update, uninstall, and build 4107, 2026-09-11
+
+`.tmp/run_lifecycle_full_smoke.py` covers the remaining pieces of "Verify a
+clean first install" using the same fully-isolated-Sublime approach (own
+`USERPROFILE`/`APPDATA`/`TEMP`/`Packages`, `git archive HEAD`, real Task
+Scheduler task and broker process independently checked and force-cleaned
+regardless of outcome -- nothing is left running on the real machine).
+
+- **Detach / hard-kill / reconnect / explicit termination**: **PASS.**
+  Opened a `detachable: true` Smoke profile, confirmed a real registry
+  record (`%LOCALAPPDATA%\GhostShell\broker_sessions\<pipe>.json`) with no
+  leftover `.launch` file and no leftover `GhostShell Broker *` scheduled
+  task (both already cleaned up by `spawn_outside_job.ps1` on success, per
+  its own design), and a live broker process. Then genuinely hard-killed
+  the isolated `sublime_text.exe` (`taskkill /F`, no graceful quit) --
+  the broker (a real, independently-verified PID) survived. Launched a
+  fresh Sublime process against the same isolated install/home, ran
+  **Ai Terminal: Recover Session...** (quick panel auto-picked, since it's
+  a real UI dialog with no restored tab to trigger auto-reattach), and
+  confirmed: the old `PRE_RESTART_MARKER` text replayed into the
+  reconnected view, a fresh `echo` round-tripped through the *same* broker
+  live, and **End Session (Kill + Close)** actually killed the broker
+  process (verified by PID, not just trusting the UI) and removed its
+  registry record. No scheduled task, registry file, or launch file was
+  left behind afterward.
+- **Update (package-file replace) preserves User settings**: **PASS.**
+  Set a distinctive marker key in the isolated `Packages/User/ai_terminal.
+  sublime-settings`, confirmed a terminal echo works, then replaced every
+  file under the isolated `Packages/GhostShell` (except `terminal/bin/`,
+  where the DLL lives) with a fresh `git archive HEAD` extraction --
+  simulating a Package Control update of an unpacked-repository install.
+  `Packages/User` is a separate directory tree Package Control never
+  touches, and that held here: the marker survived byte-for-byte, the DLL
+  bytes were unchanged, and a relaunched Sublime process still worked and
+  still read the marker back through `sublime.load_settings()`. Whether
+  Package Control's own file-list diffing would additionally prune the
+  locally-downloaded DLL (an untracked extra file inside the package
+  directory) cannot be verified without a live Package Control install
+  updating against this package's actual (still unpublished) channel entry
+  -- out of scope here, stated plainly rather than skipped silently.
+- **Uninstall while a detachable session is running**: **PASS (confirms
+  intended, already-documented behavior -- not a bug).** Opened a
+  detachable session, confirmed its broker PID was alive, then deleted the
+  entire isolated `Packages/GhostShell` directory (as Package Control does
+  on removal) while that broker was still running. The broker (and its
+  child `cmd.exe`) kept running afterward, confirmed independently by PID --
+  expected, since `plugin_unloaded()` deliberately never touches ConPTY
+  children (its own comment: they're "cleaned up when ST itself exits",
+  which is true for in-process PTYs but does not apply to a broker
+  specifically designed to survive outside Sublime's lifetime) and nothing
+  else on Windows notices a script file disappearing out from under an
+  already-running interpreter. Practical consequence, now documented in the
+  README's privacy section: uninstalling (or updating) with a live
+  detachable session leaves it permanently orphaned, with no
+  package-provided way left to reconnect or stop it once `agent_broker.py`/
+  `recover_console.py` are gone -- run **End Session** on every open tab
+  first, or find the orphaned `python.exe`/`pythonw.exe` in Task Manager
+  afterward.
+- **Sublime Text build 4107**: **PASS.** No 4107 install existed anywhere on
+  this machine (checked `tools/launch_portable_clean.ps1`'s referenced path
+  and searched the whole filesystem for `sublime_text.exe`/installers
+  first -- only two build-4200 copies and a 4200/4207 installer were
+  found). Sublime Text does not list old builds on its normal download
+  page, but `https://download.sublimetext.com/sublime_text_build_4107_x64_
+  setup.exe` -- the same first-party domain and URL pattern already used
+  for every other build -- returned the real installer directly (`200 OK`),
+  so it was fetched from Sublime's own server rather than a third-party
+  mirror. Installed silently (`/VERYSILENT /DIR=...`) into an isolated
+  temp cache directory, never touching the real install. The base
+  install+settings+terminal-launch smoke test then passed against it for
+  real: `sublime_build: "4107"`, bundled `Python 3.8.8`, echo rendered,
+  Settings command opened the right file.
+- **Not covered by any script**: interactive resize/selection. This needs
+  a real user (or a UI-driving automation tool this harness doesn't have)
+  physically resizing a window/dragging a selection -- not something a
+  headless probe script can drive meaningfully.
 
 From a Git checkout with the intended changes committed:
 

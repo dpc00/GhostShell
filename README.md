@@ -122,7 +122,18 @@ Review the defaults before running commands with sensitive output:
   not just while Sublime is open; use **End Session (Kill + Close)** to
   actually terminate one instead of just closing the tab. Review
   [the broker architecture](docs/DETACHABLE_SESSIONS.md) before enabling them
-  in a restricted environment.
+  in a restricted environment. **Removing the package does not stop a
+  running broker either** — confirmed directly: deleting the package
+  directory while a detachable session is alive leaves its broker and
+  child process running, with no package-provided way left to reconnect or
+  stop them (`agent_broker.py`/`recover_console.py` are gone too). The same
+  is almost certainly true of a Package Control *update* while a session is
+  live, for the same reason (the running broker process already has its
+  code loaded and never checks the package directory again), though that
+  exact combination has not been separately tested. Run **End Session** on
+  every open detachable tab (or check for orphaned `python.exe`/
+  `pythonw.exe` processes running `agent_broker.py` in Task Manager) before
+  uninstalling or updating if you don't want any left running.
 - Usage/quota discovery reads supported CLIs' local session and credential
   files and calls their providers' usage endpoints in the background. Some
   providers may refresh saved OAuth tokens. This happens at plugin load and,
