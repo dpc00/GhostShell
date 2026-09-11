@@ -80,11 +80,10 @@ these preparation changes.
   resize/selection remains unautomated (needs a real user or a UI-driving
   tool this harness doesn't have) -- the one piece of the original 7-step
   matrix still not covered by any script.
-- [ ] **Publish a semantic-version package tag after validation.** The existing
-  `ghostty-vt-634957c8` tag distributes the native dependency. It is not a
-  semantic-version GhostShell release. Choose an initial package version
-  (for example `0.1.0`) and record release notes before tagging it. Keep the
-  native dependency release intact.
+- [x] **Publish a semantic-version package tag after validation (2026-09-11).**
+  Tagged `v0.1.0` (commit `de506b4`) and pushed. Release notes recorded in
+  [RELEASE_NOTES.md](RELEASE_NOTES.md). The pre-existing `ghostty-vt-634957c8`
+  tag distributing the native dependency was left intact.
 - [ ] **Submit the channel entry and pass channel tests.** Follow the official
   instructions below. Nothing in this repository alone lists the package in
   Package Control.
