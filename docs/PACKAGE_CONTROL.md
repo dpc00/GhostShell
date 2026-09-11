@@ -55,10 +55,15 @@ these preparation changes.
   design (a stability feature, not itself a privacy leak) and how to
   terminate one. Still open: audit diagnostic logs and Windows ACLs too, not
   just the recording/usage-scan flags.
-- [ ] **Review the download/install lifecycle.** First parser construction
-  obtains the DLL synchronously. Test slow/offline networks, a failed checksum,
-  a read-only package folder, and updates while the DLL is loaded on Windows.
-  Check whether the reviewer wants the binary bundled as a release asset
+- [x] **Review the download/install lifecycle (2026-09-11).** All four named
+  edge cases -- failed/corrupted checksum, offline first run, a read-only
+  (ACL-denied) package folder, and an update attempt while the DLL is
+  loaded -- are now verified for real in an isolated Sublime install (see
+  2026-09-11 findings below), not just assumed from reading the code. One
+  real bug was found and fixed: an ACL-denied `terminal/bin` folder used to
+  stall Sublime's main thread indefinitely instead of showing an error;
+  `ensure_dll()` no longer uses `tempfile.mkstemp()` for this reason. Still
+  open: whether the reviewer wants the binary bundled as a release asset
   instead of a first-use download. If changing its distribution, retain the
   fingerprint/provenance and audit licenses for any compiled dependencies.
 - [ ] **Verify a clean first install in real Sublime Text.** `.tmp/run_package_smoke.py`
@@ -123,6 +128,69 @@ these preparation changes.
   repeat against the minimum supported build (4107) — this script only
   covers install + settings + one profile launch on 4200, not the full
   7-step matrix above.
+
+### Download/install lifecycle edge cases, 2026-09-11 (commit `49a48e8`)
+
+`.tmp/run_download_lifecycle_smoke.py` extends the isolated-install approach
+above with four scenarios, each building its own fresh isolated Sublime
+install from `git archive HEAD` (nothing touches the real install or the
+real `terminal/bin/ghostty-vt.dll`). Checksum-mismatch and offline scenarios
+monkeypatch only `urllib.request.urlopen` inside the isolated process --
+`ensure_dll`/`load_library`/`_spawn` run unmodified end to end. The
+read-only scenario uses a real Windows ACL deny-write rule (`icacls`), no
+mocking. The update-while-loaded scenario loads the real DLL for real, then
+calls the real `ensure_dll()` again against the now-loaded file.
+
+- **Corrupted/failed checksum on download**: PASS as-is, no fix needed. A
+  forced-corrupt "download" raises `ValueError: ... checksum mismatch`, caught
+  by `_spawn`'s existing VT-engine-init handler, which shows
+  `sublime.error_message` and closes the tab. No bad file is left at the
+  target path and no `*.dll.download` temp file is left behind.
+- **Offline first run, no DLL present**: PASS as-is, no fix needed. A forced
+  `urllib.error.URLError` produces the same clean error dialog + tab close,
+  no partial file written.
+- **Read-only (ACL-denied) package folder**: **FAILED, then fixed.** With a
+  real `icacls /deny <user>:(OI)(CI)W` rule on `terminal/bin` and no DLL
+  present, the isolated Sublime process never returned a result within 35s
+  and had to be force-killed -- a genuine stall, not a harness timeout.
+  Root cause: `tempfile.mkstemp()`'s Windows-specific `PermissionError`
+  handler retries as long as `os.access(dir, os.W_OK)` claims the directory
+  is writable, but `os.access` on Windows only reflects the
+  `FILE_ATTRIBUTE_READONLY` bit, not real ACL deny rules, so it misreports
+  "writable" and retries in an effectively unbounded loop -- reproduced
+  directly in plain Python too (>90s, still not raised, killed externally).
+  Note in passing: a plain `/grant:r <user>:(OI)(CI)RX` swap (removing the
+  explicit write grant but not adding a DENY) does **not** actually block
+  write on a real box -- the directory's inherited `OWNER RIGHTS`/
+  `Administrators` ALLOW-Full-Control ACEs still grant the owning account
+  write regardless; only an explicit DENY ACE reliably blocks it. **Fix**
+  (commit `49a48e8`): `ensure_dll()` now creates its download temp file with
+  a single `os.open(O_CREAT|O_EXCL)` call against a UUID-random name instead
+  of `tempfile.mkstemp()`, so a `PermissionError` propagates immediately.
+  Re-run after the fix: clean `sublime.error_message` naming the real OS
+  error, tab closed, no hang. A unit regression test
+  (`tests/test_ghostty_download.py::test_permission_denied_temp_file_fails_fast_not_retries_forever`)
+  pins the fast-fail behavior at the function level.
+- **Update attempt while the DLL is loaded**: PASS, and answers a
+  previously-unknown question. With the real DLL already loaded via
+  `ctypes.CDLL` in a live Sublime process, both a direct in-place
+  `open(path, "r+b")` write and a real `ensure_dll()` re-verify-and-replace
+  (forced into its download branch, real `os.replace()` call) raised
+  `PermissionError` (`WinError 5`/errno 13) -- Windows fully locks a loaded
+  DLL against being overwritten or replaced from the same process, it does
+  **not** allow a POSIX-style unlink-and-replace-while-open. The original,
+  already-open terminal tab kept working after the failed update attempt
+  (verified with a fresh `echo`), a brand-new second tab opened and worked
+  too, the on-disk DLL bytes were unchanged, and no leftover
+  `*.dll.download` temp file remained. Practical implication for a real
+  Package Control update: replacing `terminal/bin/ghostty-vt.dll` on disk
+  while any GhostShell terminal tab is open in the same Sublime process will
+  fail with a clear, catchable `PermissionError` on that file -- Package
+  Control's own update mechanism (or a manual re-download) needs Sublime
+  restarted (or all GhostShell tabs closed and the plugin host reloaded)
+  before a DLL replacement can actually land; this is unrelated to
+  `ensure_dll`'s own atomic-rename design, which already avoids ever loading
+  a partially-written file.
 
 From a Git checkout with the intended changes committed:
 
