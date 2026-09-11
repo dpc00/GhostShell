@@ -8862,6 +8862,237 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
+# Every profile-overridable boolean that resolves via _profile_bool/
+# _setting_bool with a genuine per-event (not spawn-cached) read site --
+# audited against every _profile_bool/_setting_bool/_profile_settings call
+# in this file AND every key documented in ai_terminal.sublime-settings,
+# not just the ones that looked TUI-relevant at a glance (that earlier,
+# narrower pass wrongly dropped the "bisection gate" caret/render settings
+# as internal-only; they're genuinely live and genuinely tunable, just also
+# used for engineering bisection -- both true at once). Each entry is
+# (key, description, true_default) -- true_default is what the setting
+# resolves to when neither the profile nor the global key is set, i.e. what
+# _setting_bool's own `default` argument is at that call site; most are
+# False but a few (close_tab_on_exit, log_tab_text) default True.
+#
+# Deliberately excluded: drag_forwards_by_default -- its one call site
+# (AiTerminalKeypressCommand's drag_select handling) reads
+# `sublime.load_settings(_SETTINGS_NAME).get(...)` directly, global-only,
+# no profile_name passed -- a per-profile override here would write
+# correctly but the running code never checks it, so offering it as a tab
+# toggle would lie about what it does. Separate bug, out of scope for this
+# panel to paper over.
+_LIVE_TUNABLE_PROFILE_KEYS = (
+    ("mouse_handling", "Route mouse events (clicks/wheel/drag) to the PTY as DEC mouse-tracking sequences", False),
+    ("page_keys_to_pty", "Send PageUp/PageDown to the PTY instead of native Sublime scroll", False),
+    ("wheel_to_pty", "Send mouse-wheel scroll to the PTY too (defaults to following mouse_handling)", False),
+    ("home_end_native", "Home/End go to native Sublime line/buffer navigation instead of the PTY", False),
+    ("pin_viewport", "Hard-pin the viewport to the bottom whenever mouse-tracking is on (_tui_like)", True),
+    ("force_tui_like", "Treat this app as a fullscreen TUI (pin viewport) even with no alt-screen/mouse-tracking DECSET", False),
+    ("osc_title_updates_tab", "Let the app's own OSC 0/2 title-change sequences rename this tab", False),
+    ("caret_footer_pinning_enabled", "Remap the display caret when the app parks its hardware cursor off the live prompt row (Claude footer-flicker fix)", False),
+    ("click_to_cursor_fallback_enabled", "Synthesize arrow keys so a click repositions the app's real cursor on agents with no DEC mouse-tracking receiver", False),
+    ("debug_status_bar_enabled", "Show a live follow/tui/cols×rows/vp_y status-bar readout on this tab", False),
+    ("fast_caret_patch_enabled", "Diff-patch only changed cells per frame instead of a full-buffer replace (cosmetic risk: character splatter)", False),
+    ("host_cursor_paint_enabled", "Paint a synthetic block cursor when the app hides its own (DECTCEM off)", False),
+    ("user_owns_caret_enabled", "Let the user's own ST caret placement (not just the app's) drive rendering", False),
+    ("close_tab_on_exit", "Close this tab automatically ~1.5s after its process exits", True),
+    ("log_tab_text", "Keep a session text log for this tab (also gates asciicast recording upstream)", True),
+)
+
+# Settings baked in once at view/parser/_Terminal bring-up rather than
+# re-read per event -- a plain live toggle would write the override
+# correctly but have no visible effect until this tab's session is rebuilt.
+# So unlike _LIVE_TUNABLE_PROFILE_KEYS, picking one of these in the panel
+# saves the value AND immediately respawns in the same action -- see
+# on_pick's `idx >= n_live` branch. Same (key, description, true_default)
+# shape. Only boolean settings belong here (the panel is toggle-only);
+# font_face/font_size are real spawn-fixed settings too (also refreshed by
+# Respawn's reattach, see _reattach_broker_view / _apply_terminal_view_settings)
+# but need a string/number editor this panel doesn't have yet, so they're
+# not offered here.
+_REATTACH_TUNABLE_PROFILE_KEYS = (
+    ("force_main_screen", "Pin the tab to a fixed alt-screen-style grid instead of real scrollback -- baked into the parser at view bring-up", True),
+    ("record_asciicast", "Record this session as an asciicast -- set once when the _Terminal/SessionTextLog is constructed", True),
+)
+# NOT fixed by Respawn at all -- these belong to the real child process,
+# fixed at its creation; only a genuine new process ("New Session
+# (Relaunch)", which also discards the conversation) can change them. Not
+# offered as toggles here for that reason -- listed so the "why doesn't
+# Respawn pick this up" question has an answer in one place.
+_RELAUNCH_REQUIRED_PROFILE_KEYS = (
+    "spawn_env",
+    "launch_command",
+    "detachable",  # controls how *future* spawns of this profile behave, not this one
+)
+
+
+class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
+    """Tune this tab's profile settings live, in place.
+
+    Two kinds of row, no separate "apply"/"Respawn" step to remember:
+
+    - _LIVE_TUNABLE_PROFILE_KEYS: _mouse_handling_enabled/_page_keys_to_pty/
+      _tui_like/etc. all resolve these fresh on every event rather than
+      caching at spawn, so picking one just flips it -- takes effect on the
+      tab's very next keypress, wheel, or redraw.
+    - _REATTACH_TUNABLE_PROFILE_KEYS (currently force_main_screen): baked in
+      once at view/parser bring-up, so a plain toggle would save correctly
+      but do nothing visible. Picking one of these saves the value AND
+      immediately respawns in the same action (see on_pick's `idx >= n_live`
+      branch and _respawn below) -- a fresh tab, SAME underlying agent
+      process, not a new one. _respawn detaches this tab's session (not a
+      kill -- the exact reattach mechanism "Recover Session..."/"Close Tab
+      (Keep Session Alive)" already use) and immediately reattaches a
+      brand-new view/parser to that same broker pipe; rebuilding the view
+      from scratch is what picks up the just-saved setting, since
+      _reattach_broker_view calls _make_parser(..., _force_main_screen(...))
+      fresh. spawn_env and launch_command are the genuine exception -- those
+      belong to the real child process, fixed at its creation, and no amount
+      of rebuilding the Sublime-side tab can change them; that really does
+      need "New Session (Relaunch)" instead (which also throws the
+      conversation away, unlike this).
+
+    Writes into ai_terminal.sublime-settings's "profiles" key, which always
+    wins over the auto-generated catalog profile (_all_profiles) and is
+    never touched by a sync -- unlike ai_terminal_agents.sublime-settings,
+    which is fully machine-generated and gets wholesale overwritten by
+    AiTerminalLauncherCommand/AiTerminalSyncAgentProfilesCommand every time
+    they run. The override is written as a full profile dict, not just the
+    changed key: _all_profiles() merges explicit over generated per-name
+    (dict.update), not per-key, so a partial override would silently drop
+    the rest of the profile (launch_command, spawn_env, ...).
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        if term is None:
+            sublime.status_message("Ai terminal: this tab has no session to tune")
+            return
+        profile_name = _term_profile_name(term)
+        if not profile_name:
+            sublime.status_message("Ai terminal: this tab has no named profile")
+            return
+
+        current = _profile_settings(profile_name) or {}
+        rows = []
+        for key, desc, default in _LIVE_TUNABLE_PROFILE_KEYS:
+            value = bool(current.get(key, default))
+            rows.append(["%s: %s" % (key, "on" if value else "off"), desc])
+        n_live = len(rows)
+        # Respawn-required settings live in the same panel, not a separate
+        # step to remember -- picking one saves the value AND immediately
+        # respawns, since it cannot do anything until the session is
+        # rebuilt anyway.
+        for key, desc, default in _REATTACH_TUNABLE_PROFILE_KEYS:
+            value = bool(current.get(key, default))
+            rows.append([
+                "%s: %s (respawns on change)" % (key, "on" if value else "off"), desc,
+            ])
+
+        def on_pick(idx):
+            if idx < 0:
+                return
+            if idx >= n_live:
+                key, _desc, default = _REATTACH_TUNABLE_PROFILE_KEYS[idx - n_live]
+                self._toggle(profile_name, key, default)
+                self._respawn(view, term, profile_name)
+                return
+            key, _desc, default = _LIVE_TUNABLE_PROFILE_KEYS[idx]
+            self._toggle(profile_name, key, default)
+
+        self.window.show_quick_panel(
+            rows, on_pick, placeholder="Tune %s -- which setting?" % profile_name
+        )
+
+    def _toggle(self, profile_name, key, default):
+        base = dict(_profile_settings(profile_name) or {})
+        new_value = not bool(base.get(key, default))
+        base[key] = new_value
+
+        explicit_s = sublime.load_settings(_SETTINGS_NAME)
+        profiles = explicit_s.get("profiles", {}) or {}
+        if not isinstance(profiles, dict):
+            profiles = {}
+        profiles[profile_name] = base
+        explicit_s.set("profiles", profiles)
+        sublime.save_settings(_SETTINGS_NAME)
+
+        sublime.status_message(
+            "Ai terminal: %s.%s = %s -- live now, no respawn needed"
+            % (profile_name, key, "on" if new_value else "off")
+        )
+
+    def _respawn(self, view, term, profile_name):
+        # Fresh Sublime-side tab, SAME underlying agent process -- not a new
+        # spawn (that's what Relaunch already does, and it throws the
+        # conversation away). This only re-does the tab/view/parser bring-up
+        # (_reattach_broker_view -> _make_parser(..., _force_main_screen(...))
+        # etc.), which is exactly what picks up a just-saved
+        # _RESPAWN_REQUIRED_PROFILE_KEYS setting like force_main_screen or
+        # font_face/font_size. The real child process and its environment
+        # are untouched -- spawn_env genuinely can't change without a real
+        # new process (see _RESPAWN_REQUIRED_PROFILE_KEYS's own comment).
+        window = self.window
+        path = (
+            view.settings().get(_BROKER_CWD_SETTING)
+            or _get_working_dir(window)
+            or os.path.expanduser("~")
+        )
+        pty = term.pty
+        detachable = _is_broker_pty(pty)
+        if not detachable:
+            sublime.status_message(
+                "Ai terminal: %s isn't a detachable session -- nothing to "
+                "reattach, use New Session (Relaunch) instead" % profile_name
+            )
+            return
+        pipe_name = pty.pipe_name
+        # Same reasoning as Close Tab (Keep Session Alive): set before
+        # kill() (which fires on_close) so on_close doesn't also try to
+        # explicit_kill an already-detached broker.
+        term._expected_termination_reason = "closed"
+
+        def _do_respawn():
+            try:
+                pty.kill()  # detach only -- same process keeps running
+            except Exception as e:
+                print(f"[ai_terminal] kill (Respawn) failed: {e}")
+
+            def _finish():
+                if view.is_valid():
+                    view.close()
+                _attach_recovered_session(
+                    window, pipe_name, {"profile_name": profile_name, "cwd": path}
+                )
+
+            # A short delay, not 0: kill() above closes this tab's end of
+            # the pipe from a background thread (see explicit_kill's own
+            # WaitNamedPipeW-retry reasoning) -- reattaching immediately on
+            # the very next main-thread tick risked finding the pipe still
+            # torn down, same race Recover Session's own pipe_free check
+            # exists to avoid.
+            sublime.set_timeout(_finish, 150)
+
+        # Off the main thread: pty.kill()'s pipe teardown shouldn't block
+        # Sublime's UI thread, same reasoning as Kill/Close Session.
+        threading.Thread(target=_do_respawn, daemon=True).start()
+        sublime.status_message(
+            "Ai terminal: respawning %s -- same process, fresh tab" % profile_name
+        )
+
+    def is_enabled(self, group=-1, index=-1):
+        return _tab_menu_term(self.window, group, index) is not None
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
 def _sublime_view_info_lines(view):
     """View/sheet/window identifiers for Session Info's Details footer --
     Sublime-internal plumbing (same category as pipe name/broker PID), not
