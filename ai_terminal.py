@@ -1099,6 +1099,43 @@ def _is_broker_pty(pty):
     )
 
 
+def _tune_profile_panel_html(term):
+    """Minihtml body for the expanded in-tab profile-settings panel (the
+    "Settings" toolbar link's on-state). Each row is a clickable checkbox
+    glyph -- minihtml has no real <input>, so a checked/unchecked glyph
+    doubles as the toggle link, same trick the toolbar itself uses for
+    edit_mode. Clicking writes through immediately via
+    AiTerminalTuneProfileSetCommand (href "tp_set:<key>") -- no separate
+    Save/Cancel, per explicit instruction: this panel auto-saves on click.
+    """
+    profile_name = term.profile_name
+    current = _profile_settings(profile_name) or {}
+
+    def _row(key, desc, default, respawns):
+        value = bool(current.get(key, default))
+        glyph = "☑" if value else "☐"  # ☑ / ☐
+        suffix = (
+            ' <span style="font-style:italic;">(respawns tab)</span>'
+            if respawns else ""
+        )
+        return (
+            '<a href="tp_set:%s">%s %s</a>%s<br>'
+            '<span style="padding-left:1.4em;">%s</span>'
+            % (key, glyph, key, suffix, desc)
+        )
+
+    rows = []
+    for key, desc, default in _LIVE_TUNABLE_PROFILE_KEYS:
+        rows.append(_row(key, desc, default, respawns=False))
+    for key, desc, default in _REATTACH_TUNABLE_PROFILE_KEYS:
+        rows.append(_row(key, desc, default, respawns=True))
+
+    return (
+        "<br>&mdash; %s profile settings &mdash;<br>" % profile_name
+        + "<br>".join(rows)
+    )
+
+
 def _add_close_toolbar(term):
     """(Re-)anchor the persistent Close Tab/Relaunch/Windows-Terminal toolbar
     to term's view, at the buffer's current end. See
@@ -1133,6 +1170,14 @@ def _add_close_toolbar(term):
             t = _Terminal.from_id(v.id())
             if t is not None:
                 _add_close_toolbar(t)
+            return
+        if href == "tune_profile":
+            v.run_command("ai_terminal_toggle_tune_profile_panel")
+            return
+        if href.startswith("tp_set:"):
+            v.run_command(
+                "ai_terminal_tune_profile_set", {"key": href[len("tp_set:"):]}
+            )
             return
         group, index = w.get_view_index(v)
         if href == "relaunch":
@@ -1195,6 +1240,12 @@ def _add_close_toolbar(term):
         ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
         ("info", "Session Info", "Session Info"),
     ]
+    if term.profile_name:
+        settings_label = (
+            "Settings ▲" if getattr(term, "tune_profile_open", False)
+            else "Settings ▼"
+        )
+        items.append(("tune_profile", settings_label, settings_label))
     sep = "   |   "
     try:
         cols, _rows = _measure(view, profile_name=term.profile_name)
@@ -1218,6 +1269,9 @@ def _add_close_toolbar(term):
         sep.join('<a href="%s">%s</a>' % (href, markup) for href, markup in line)
         for line in lines
     ]
+    panel_html = ""
+    if term.profile_name and getattr(term, "tune_profile_open", False):
+        panel_html = _tune_profile_panel_html(term)
     # font-family: monospace so a character actually is the width _measure's
     # cols count assumed -- minihtml's default UI font isn't monospace, and
     # the cols-based line-wrap above is only valid if characters here are the
@@ -1226,6 +1280,7 @@ def _add_close_toolbar(term):
         '<body style="padding:2px 8px; font-family:monospace;">'
         '<style>a{text-decoration:none;}</style>'
         + "<br>".join(row_html)
+        + panel_html
         + "</body>"
     )
     size = view.size()
@@ -3256,6 +3311,10 @@ class _Terminal:
         # True, plain navigation keys move the ST caret instead of reaching
         # the PTY. See AiTerminalKeypressCommand.run for the routing.
         self.copy_mode = False
+        # Whether the in-tab profile-settings panel (toolbar "Settings" link,
+        # AiTerminalToggleTuneProfilePanelCommand) is currently expanded below
+        # the close toolbar. See _add_close_toolbar's panel_html branch.
+        self.tune_profile_open = False
         # True once the user has moved the ST caret away from the PTY's own
         # cursor by a real gesture (click, native ST nav) -- see
         # AiTerminalViewListener.on_selection_modified. The render loop then
@@ -7758,6 +7817,75 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             sublime.status_message("Ai terminal: Text Edit Mode OFF")
 
 
+class AiTerminalToggleTuneProfilePanelCommand(sublime_plugin.TextCommand):
+    """Show/hide the in-tab profile-settings panel (toolbar "Settings" link).
+
+    Expands/collapses inside this same view's phantom -- see
+    _add_close_toolbar's panel_html branch -- rather than opening a
+    separate view, so the live PTY tab is never covered or navigated away
+    from.
+    """
+
+    def run(self, edit):
+        term = _Terminal.from_id(self.view.id())
+        if term is None:
+            return
+        term.tune_profile_open = not term.tune_profile_open
+        _add_close_toolbar(term)
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and bool(_term_profile_name(term))
+
+
+class AiTerminalTuneProfileSetCommand(sublime_plugin.TextCommand):
+    """Flip one boolean setting for this tab's profile and write through
+    immediately -- no separate Save step (the user explicitly does not want
+    one here, unlike the mockup's dirty-state version). For a respawn-
+    required key (_REATTACH_TUNABLE_PROFILE_KEYS), also respawns this tab
+    right away, same as AiTerminalTuneProfileCommand's quick-panel on_pick.
+
+    args: key (str) -- must appear in _LIVE_TUNABLE_PROFILE_KEYS or
+    _REATTACH_TUNABLE_PROFILE_KEYS, else this is a no-op.
+    """
+
+    def run(self, edit, key):
+        view = self.view
+        term = _Terminal.from_id(view.id())
+        if term is None:
+            return
+        profile_name = _term_profile_name(term)
+        if not profile_name:
+            return
+
+        all_keys = dict(
+            (k, d) for k, _desc, d in _LIVE_TUNABLE_PROFILE_KEYS
+        )
+        reattach_keys = dict(
+            (k, d) for k, _desc, d in _REATTACH_TUNABLE_PROFILE_KEYS
+        )
+        if key in all_keys:
+            new_value = _toggle_profile_bool(profile_name, key, all_keys[key])
+            sublime.status_message(
+                "Ai terminal: %s.%s = %s"
+                % (profile_name, key, "on" if new_value else "off")
+            )
+            _add_close_toolbar(term)
+        elif key in reattach_keys:
+            _toggle_profile_bool(profile_name, key, reattach_keys[key])
+            # Reuse the exact respawn machinery AiTerminalTuneProfileCommand
+            # uses for these keys, rather than duplicating it here.
+            window = view.window()
+            if window is not None:
+                AiTerminalTuneProfileCommand(window)._respawn(
+                    view, term, profile_name
+                )
+
+    def is_enabled(self):
+        term = _Terminal.from_id(self.view.id())
+        return term is not None and bool(_term_profile_name(term))
+
+
 class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
     """Move the live terminal between a normal tab and the bottom output
     panel (like Sublime's own Find/Console), keeping the same PTY running.
@@ -8993,6 +9121,28 @@ _RELAUNCH_REQUIRED_PROFILE_KEYS = (
 )
 
 
+def _toggle_profile_bool(profile_name, key, default):
+    """Flip one boolean in profile_name's explicit override dict and persist
+    it to ai_terminal.sublime-settings's "profiles" key. Returns the new
+    value. Shared by AiTerminalTuneProfileCommand's quick panel and the
+    in-tab settings panel (_add_close_toolbar's panel_html /
+    AiTerminalTuneProfileSetCommand) so both write through identically --
+    see the "profiles" merge-order note on AiTerminalTuneProfileCommand.
+    """
+    base = dict(_profile_settings(profile_name) or {})
+    new_value = not bool(base.get(key, default))
+    base[key] = new_value
+
+    explicit_s = sublime.load_settings(_SETTINGS_NAME)
+    profiles = explicit_s.get("profiles", {}) or {}
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profiles[profile_name] = base
+    explicit_s.set("profiles", profiles)
+    sublime.save_settings(_SETTINGS_NAME)
+    return new_value
+
+
 class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
     """Tune this tab's profile settings live, in place.
 
@@ -9077,18 +9227,7 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
         )
 
     def _toggle(self, profile_name, key, default):
-        base = dict(_profile_settings(profile_name) or {})
-        new_value = not bool(base.get(key, default))
-        base[key] = new_value
-
-        explicit_s = sublime.load_settings(_SETTINGS_NAME)
-        profiles = explicit_s.get("profiles", {}) or {}
-        if not isinstance(profiles, dict):
-            profiles = {}
-        profiles[profile_name] = base
-        explicit_s.set("profiles", profiles)
-        sublime.save_settings(_SETTINGS_NAME)
-
+        new_value = _toggle_profile_bool(profile_name, key, default)
         sublime.status_message(
             "Ai terminal: %s.%s = %s -- live now, no respawn needed"
             % (profile_name, key, "on" if new_value else "off")
