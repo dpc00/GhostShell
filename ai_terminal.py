@@ -1128,6 +1128,12 @@ def _add_close_toolbar(term):
         if href == "wt":
             v.run_command("ai_terminal_open_in_windows_terminal")
             return
+        if href == "edit_mode":
+            v.run_command("ai_terminal_toggle_copy_mode")
+            t = _Terminal.from_id(v.id())
+            if t is not None:
+                _add_close_toolbar(t)
+            return
         group, index = w.get_view_index(v)
         if href == "relaunch":
             w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
@@ -1164,9 +1170,27 @@ def _add_close_toolbar(term):
     # "is this still doing something" with zero risk, so it gets the
     # one-click toolbar treatment those three intentionally don't.
     #
+    # Text Edit Mode toggle: a persistent MODE, not a held modifier key, and
+    # deliberately so. Shift is already claimed by ST's own keyboard-driven
+    # selection-extend (shift+arrow) everywhere, including in this view's
+    # own keymap context gate below -- overloading it as a mouse escape
+    # hatch back to normal ST selection would collide with that meaning,
+    # not add a new one. A toggle is the only strategy that doesn't fight
+    # existing ST semantics. This is the existing `term.copy_mode` /
+    # ai_terminal_toggle_copy_mode command (ctrl+alt+c) -- previously
+    # keyboard-only with no visible affordance, surfaced here as a toolbar
+    # item because the user needs to see/reach it without memorizing a
+    # chord. "Text Edit Mode" is the user-facing name; the internal
+    # `copy_mode` attribute/command name is unchanged (rename is a larger,
+    # separate refactor if ever wanted).
+    edit_mode_label = (
+        "Text Edit Mode: On" if getattr(term, "copy_mode", False) else "Text Edit Mode: Off"
+    )
+
     # (href, display text, html text) -- kept separate in case a future label
     # needs HTML entities again; none of these currently do.
     items = [
+        ("edit_mode", edit_mode_label, edit_mode_label),
         ("relaunch", "Relaunch Agent", "Relaunch Agent"),
         ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
         ("info", "Session Info", "Session Info"),
@@ -5087,6 +5111,12 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         term = _Terminal.from_id(self.view.id())
         if term is None:
             return None
+        # Recorded on every dispatch (regardless of copy_mode) so
+        # on_selection_modified can tell a real mouse click on the command
+        # line apart from a keyboard move that merely landed there -- only
+        # the former should auto-disengage Text Edit Mode. See the click-vs-
+        # keyboard comment there for why this distinction matters.
+        term._last_sel_command_was_click = (command == "drag_select")
         if term.copy_mode:
             # Copy mode hands the view fully back to ST -- every command,
             # including "insert"/"left_delete"/"right_delete" from plain
@@ -5202,6 +5232,14 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         # box: that direction can only ever hand control back to the PTY,
         # never trap the user, so a missed/late bounds read just means the
         # user keeps using the manual ctrl+alt+c toggle instead.
+        #
+        # BUT: this must only fire for an actual mouse click, not a keyboard
+        # move that happens to land the caret on that row -- confirmed live
+        # 2026-09-11 that plain cursor-up navigation while in Text Edit Mode
+        # was silently kicking the mode back off the moment the caret
+        # reached the command line, with no click involved and no warning.
+        # See on_text_command's `_last_sel_command_was_click` for the flag
+        # that disambiguates the two.
         view = self.view
         term = _Terminal.from_id(view.id())
         if term is None or not term.pty.is_alive():
@@ -5245,8 +5283,9 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             # true PTY cursor immediately.
             term.screen.dirty = True
             _schedule_render(term)
-            if term.copy_mode:
+            if term.copy_mode and getattr(term, "_last_sel_command_was_click", False):
                 term.copy_mode = False
+                view.set_read_only(False)
                 _scroll_to_bottom(view)
                 _set_auto_follow(term, True)
                 sublime.status_message("Ai terminal: command line")
@@ -7691,20 +7730,22 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
         if term is None:
             return
         term.copy_mode = not term.copy_mode
+        # Text Edit Mode is read/select/copy only -- there is no legitimate
+        # reason to type into it, and letting typed characters through was
+        # actively misleading: on_text_command already hands "insert" etc.
+        # straight to ST as a plain buffer edit (never term.send_string), so
+        # it visually looks like it went somewhere and then silently
+        # vanishes on the next full-buffer repaint (confirmed live
+        # 2026-09-11: typed into what looked like the command line, hit
+        # Enter, toggled off, command line was blank -- the edit was never
+        # real). Sublime's native read-only still permits move/select/copy,
+        # it only blocks mutating commands, so this doesn't touch
+        # navigation. AiTerminalRenderCommand.run re-asserts this every
+        # frame (it must reset read_only=False first to paint), so it can't
+        # be lost to a background render while the user is mid-navigation.
+        self.view.set_read_only(term.copy_mode)
         if term.copy_mode:
-            # TEMP DEBUG: this command is only reachable via the ctrl+alt+c
-            # keybinding (no menu/palette entry, no other run_command call
-            # anywhere in the codebase) -- yet it's been reported engaging
-            # without a deliberate ctrl+alt+c press (Kiro profile, plain
-            # ASCII typing, non-US layout ruled out). Logging the call stack
-            # to nail down the real trigger next time it reproduces; remove
-            # once root-caused (see ai/TODO.md).
-            print(
-                "[ai_terminal] copy_mode ON via toggle command — "
-                f"view={self.view.id()} name={self.view.name()!r}\n"
-                + "".join(traceback.format_stack()[-6:])
-            )
-            sublime.status_message("Ai terminal: copy mode ON (Esc to exit)")
+            sublime.status_message("Ai terminal: Text Edit Mode ON (Esc to exit)")
         else:
             # Hand caret control back to the PTY cursor -- otherwise the
             # caret stays wherever copy-mode nav left it (outside the box)
@@ -7714,7 +7755,7 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
             term._user_owns_caret = False
             _scroll_to_bottom(self.view)
             _set_auto_follow(term, True)
-            sublime.status_message("Ai terminal: copy mode OFF")
+            sublime.status_message("Ai terminal: Text Edit Mode OFF")
 
 
 class AiTerminalTogglePanelCommand(sublime_plugin.TextCommand):
@@ -7934,6 +7975,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         if term.copy_mode:
             if key == "escape" and not ctrl and not alt and not shift:
                 term.copy_mode = False
+                self.view.set_read_only(False)
                 term._user_owns_caret = False
                 if last_auto is not None:
                     pos = min(last_auto, self.view.size())
@@ -7950,7 +7992,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         term._in_render = prev_in_render
                 _scroll_to_bottom(self.view)
                 _set_auto_follow(term, True)
-                sublime.status_message("Ai terminal: copy mode OFF")
+                sublime.status_message("Ai terminal: Text Edit Mode OFF")
                 return
             if not ctrl and not alt and key in ("up", "down", "left", "right", "pageup", "pagedown", "home", "end"):
                 if key in ("up", "down"):
@@ -8253,6 +8295,15 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         finally:
             if term is not None:
                 term._in_render = False
+            # set_read_only(False) above is required so _run can paint --
+            # re-lock immediately after if Text Edit Mode is on, on every
+            # exit path (including the early _selection_paint_blocked
+            # return inside _run), so a background render triggered by new
+            # PTY output can never leave the view writable behind the
+            # user's back. See AiTerminalToggleCopyModeCommand for why
+            # typing must not be possible in this mode.
+            if term is not None and term.copy_mode:
+                view.set_read_only(True)
 
     def _run(self, view, edit, term, vp, ve, lh, text, cursor, cursor_offset, regions, fast_caret):
         # Abort buffer mutation while the user is selecting text. Even a
@@ -8385,12 +8436,27 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         # Bisection gate (ai_terminal.sublime-settings): when disabled, the
         # render loop always re-syncs to the PTY cursor every frame,
         # unconditionally, Terminus-style -- see settings comment.
-        keep_selection = bool(
+        #
+        # Text Edit Mode (term.copy_mode) is an explicit, deliberate full
+        # hand-off of the view to ST (see on_text_command's own comment to
+        # that effect) and must win here unconditionally -- it must NOT
+        # depend on the separate user_owns_caret_enabled profile setting,
+        # which defaults off and governs a different, softer "let the user
+        # nudge the caret during normal operation" behavior. Before this,
+        # copy_mode changed keymap routing only; the render loop had no
+        # idea it was on, so any render fired by new PTY output (streaming
+        # agent replies keep rendering even while idle-looking) silently
+        # relocated the caret back to the live PTY cursor out from under a
+        # selection the user was actively building. Confirmed live
+        # 2026-09-11: caret jumping to the command line unprompted, and
+        # selections getting destroyed on the very next frame.
+        in_copy_mode = bool(term is not None and term.copy_mode)
+        keep_selection = in_copy_mode or bool(
             term is not None
             and getattr(term, "_user_owns_caret", False)
             and _setting_bool("user_owns_caret_enabled", False, profile_name=_term_profile_name(term))
         )
-        if keep_selection and term is not None and term._auto_follow:
+        if keep_selection and not in_copy_mode and term is not None and term._auto_follow:
             # Self-heal a false latch: on_selection_modified's on-command-line
             # check (_command_line_row_range / _live_cursor_row) can mis-fire
             # for TUIs with no drawn input box and a fast-changing footer
