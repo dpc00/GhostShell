@@ -424,16 +424,29 @@
             // spawn path calls CreateProcess directly on the argv, so the
             // bare form failed unpredictably inside ai_terminal specifically
             // (worked fine launched directly in a real terminal, where the
-            // shell's own PATHEXT/.cmd handling kicks in). Fixed by calling
-            // node directly on cn.cmd's actual entry script (inspected the
-            // shim itself: it falls back to plain "node" on PATH since no
-            // bundled node.exe sits next to it, then runs
-            // node_modules\@continuedev\cli\dist\cn.js) -- same fix pattern
-            // as the "Qwen (repo)" profile below (direct node + script path,
-            // no shell wrapper needed).
+            // shell's own PATHEXT/.cmd handling kicks in).
+            // CORRECTED AGAIN 2026-09-12: the ["node", "cn"] fix that used
+            // to be here was itself wrong -- "cn" is not a real module/path
+            // Node can resolve on its own; it only "worked" when the
+            // terminal's cwd happened to be one where that lookup succeeded
+            // (e.g. npm's own global prefix), and threw a plain
+            // MODULE_NOT_FOUND from any real project directory (confirmed
+            // live from ~/projects/GhostShell itself). A hardcoded absolute
+            // path to cn.js is NOT an acceptable fix either -- it bakes in
+            // one machine's username/install location, which won't pass
+            // review for a shared/released profile. The correct, portable
+            // fix is the same "cmd /c <shim>" wrapper already used
+            // elsewhere in this file (see the header comment's own
+            // examples) -- cmd.exe is a real PE executable CreateProcess
+            // can launch directly, and it handles PATHEXT/.cmd resolution
+            // internally, sidestepping the CreateProcess limitation without
+            // needing node's own resolution or any absolute path. Verified
+            // live, cwd-independent (tested from GhostShell's own
+            // directory, where ["node", "cn"] failed).
             "detachable": true,
             "launch_command": [
-                "node",
+                "cmd",
+                "/c",
                 "cn"
             ],
             "spawn_env": {}
