@@ -68,10 +68,13 @@ def _open_text_log(tmp_path, monkeypatch):
 def test_observe_keeps_the_latest_complete_tab_paint(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["hello", "world"])
+    log.flush_now()
     assert path.read_text(encoding="utf-8") == "hello\nworld\n"
     log.observe(["hello", "world"])
+    log.flush_now()
     assert path.read_text(encoding="utf-8") == "hello\nworld\n"
     log.observe(["hello", "world", "more"])
+    log.flush_now()
     assert path.read_text(encoding="utf-8") == "hello\nworld\nmore\n"
 
 
@@ -79,6 +82,7 @@ def test_observe_replaces_a_line_when_it_changes_on_the_tab(tmp_path, monkeypatc
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["a"])
     log.observe(["ab"])
+    log.flush_now()
     assert path.read_text(encoding="utf-8") == "ab\n"
 
 
@@ -90,6 +94,7 @@ def test_observe_does_not_preserve_superseded_tab_frames(
     log.observe([chrome, "a"])
     log.observe([chrome, "ab"])
     log.observe([chrome, "done"])
+    log.flush_now()
     text = path.read_text(encoding="utf-8")
     assert text.count(chrome) == 1
     assert "a\n" not in text
@@ -100,6 +105,7 @@ def test_observe_does_not_preserve_superseded_tab_frames(
 def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["top  ", "", "bottom"])
+    log.flush_now()
     assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
 
 
@@ -156,6 +162,7 @@ def test_observe_atomically_replaces_the_previous_snapshot(tmp_path, monkeypatch
         return original_replace(source, destination)
 
     log.observe(["old", "snapshot"])
+    log.flush_now()
     monkeypatch.setattr(stl.os, "replace", recording_replace)
     log.observe(["new", "snapshot"])
     log.close()
@@ -170,6 +177,7 @@ def test_observe_can_replace_snapshot_while_an_external_reader_is_open(
 ):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["first"])
+    log.flush_now()
     with path.open("r", encoding="utf-8") as reader:
         assert reader.read() == "first\n"
         log.observe(["second"])
@@ -182,14 +190,16 @@ def test_failed_atomic_replace_keeps_old_snapshot_and_can_retry(
 ):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["old"])
+    log.flush_now()
     original_replace = stl.os.replace
 
     def fail_replace(_source, _destination):
         raise OSError("simulated replace failure")
 
     monkeypatch.setattr(stl.os, "replace", fail_replace)
+    log.observe(["new"])
     try:
-        log.observe(["new"])
+        log.flush_now()
         assert False, "observe should report a failed replacement"
     except OSError as error:
         assert "simulated replace failure" in str(error)
@@ -208,6 +218,7 @@ def test_temp_file_permission_failure_does_not_truncate_old_snapshot(
 ):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["old"])
+    log.flush_now()
     original_open = stl.open_private
     calls = []
 
@@ -218,8 +229,9 @@ def test_temp_file_permission_failure_does_not_truncate_old_snapshot(
         return original_open(target, mode, **kwargs)
 
     monkeypatch.setattr(stl, "open_private", fail_temp_open)
+    log.observe(["new"])
     try:
-        log.observe(["new"])
+        log.flush_now()
         assert False, "observe should report a temp-file permission failure"
     except PermissionError as error:
         assert "simulated temp permission failure" in str(error)
