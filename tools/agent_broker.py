@@ -182,6 +182,8 @@ class _Pty:
         self._exit_code = None
         self._pc_lock = threading.Lock()
         self._exit_watcher = None
+        self._exit_callbacks = []
+        self._exit_callbacks_lock = threading.Lock()
         self._cmdline = subprocess.list2cmdline(self.argv)
         self._cwd = cwd or None
         self._env = env
@@ -275,6 +277,38 @@ class _Pty:
         self._exit_watcher = threading.Thread(target=self._watch_process_exit, daemon=True)
         self._exit_watcher.start()
 
+    def on_exit(self, callback):
+        """Register a callback fired once, from the exit-watcher thread,
+        the moment the child process is confirmed dead. Used to unstick a
+        server thread parked in a blocking Windows call (e.g.
+        ConnectNamedPipe waiting for the *next* client) that would
+        otherwise never re-check is_alive() and never notice the child
+        died -- see _OutputServer._cancel_pending_accept.
+
+        Fires immediately (still via the caller's thread, not the exit
+        watcher) if the child has already exited by the time this is
+        called -- e.g. a child that crashes on startup, before the
+        constructor registering this callback even runs -- so a slow
+        registration can't miss the one-shot exit event and leak the same
+        way the un-cancellable ConnectNamedPipe wait used to."""
+        with self._exit_callbacks_lock:
+            if not self.is_alive():
+                already_fired = True
+            else:
+                self._exit_callbacks.append(callback)
+                already_fired = False
+        if already_fired:
+            callback()
+
+    def _fire_exit_callbacks(self):
+        with self._exit_callbacks_lock:
+            callbacks, self._exit_callbacks = self._exit_callbacks, []
+        for callback in callbacks:
+            try:
+                callback()
+            except OSError:
+                print("[agent_broker] exit callback failed:\n%s" % traceback.format_exc())
+
     def _watch_process_exit(self):
         h = self._hProcess
         if h is None:
@@ -305,6 +339,8 @@ class _Pty:
                 )
         except OSError:
             print("[agent_broker] exit watcher failed:\n%s" % traceback.format_exc())
+        self._alive = False
+        self._fire_exit_callbacks()
         self._close_pc()
 
     def exit_code(self):
@@ -452,6 +488,28 @@ class _OutputServer:
         self._scrollback = scrollback
         self._client_handle = None
         self._client_lock = threading.Lock()
+        # The listen handle currently blocked in ConnectNamedPipe, waiting
+        # for the *next* client -- distinct from _client_handle above,
+        # which is only set once a client has actually connected. Without
+        # this, a child that dies while nobody is attached leaves
+        # run_forever's ConnectNamedPipe call parked with no timeout: it
+        # never re-checks pty.is_alive(), so run_forever() never returns,
+        # main()'s `finally: _remove_registry()` never runs, and the
+        # broker leaks forever as an unkillable phantom entry in "list
+        # sessions" (confirmed live 2026-09-15: dead child, live broker
+        # process, orphaned registry file on disk for days). pty.on_exit
+        # below cancels this pending accept the moment the child dies, so
+        # the loop falls through to its own is_alive() check and exits
+        # cleanly.
+        self._pending_lock = threading.Lock()
+        self._pending_handle = None
+        pty.on_exit(self._cancel_pending_accept)
+
+    def _cancel_pending_accept(self):
+        with self._pending_lock:
+            handle = self._pending_handle
+        if handle is not None:
+            _k32.CancelIoEx(handle, None)
 
     def feed(self, data):
         with self._client_lock:
@@ -501,12 +559,25 @@ class _OutputServer:
                 time.sleep(1)
                 continue
 
+            with self._pending_lock:
+                self._pending_handle = handle
             ok = _k32.ConnectNamedPipe(handle, None)
-            if not ok and ctypes.get_last_error() != _ERROR_PIPE_CONNECTED:
-                print("[agent_broker] ConnectNamedPipe(out) failed (GetLastError %d)"
-                      % ctypes.get_last_error())
-                _k32.CloseHandle(handle)
-                continue
+            with self._pending_lock:
+                self._pending_handle = None
+            if not ok:
+                err = ctypes.get_last_error()
+                if err == _ERROR_OPERATION_ABORTED:
+                    # Cancelled by _cancel_pending_accept because the child
+                    # died while nobody was connected -- not an error, just
+                    # the signal to fall through to the loop's own
+                    # is_alive() check and exit run_forever().
+                    _k32.CloseHandle(handle)
+                    continue
+                if err != _ERROR_PIPE_CONNECTED:
+                    print("[agent_broker] ConnectNamedPipe(out) failed (GetLastError %d)"
+                          % err)
+                    _k32.CloseHandle(handle)
+                    continue
 
             print("[agent_broker] client attached to pipe %r" % self._name)
             try:

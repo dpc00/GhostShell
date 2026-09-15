@@ -632,6 +632,21 @@ def _registered_brokers(profile_name=None, cwd=None):
     return [record for _mtime, record in found]
 
 
+def _same_view(a, b):
+    """True if `a` and `b` are the same Sublime view, compared by view id
+    rather than Python object identity. sublime.View is a lightweight
+    proxy: consecutive calls like window.active_view() return a fresh
+    Python object wrapping the same underlying view, so `a is b` is False
+    even when they ARE the same tab (confirmed live 2026-09-15: window
+    .active_view() called twice in a row returned two distinct objects
+    with `is` False but `==`/id() True) -- `is` comparisons of views are
+    always wrong and silently mislabel the active tab as some other one.
+    """
+    if a is None or b is None:
+        return False
+    return a.id() == b.id()
+
+
 def _broker_pipe_path(name):
     return "\\\\.\\pipe\\" + name
 
@@ -9965,7 +9980,7 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             pipe_free = broker.get("pipe_free", True) if broker else True
             if term is None:
                 state = "orphaned broker" if pipe_free else "busy — close its other window first"
-            elif view is active:
+            elif _same_view(view, active):
                 state = "active tab"
             else:
                 state = "stale/attached client"
@@ -10144,7 +10159,7 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
                       % traceback.format_exc())
                 name = None
             if windowed:
-                state = "active tab, this window" if open_view is active else "open tab, elsewhere"
+                state = "active tab, this window" if _same_view(open_view, active) else "open tab, elsewhere"
             elif open_view is not None:
                 # A real view object, just not in a window at this instant
                 # (e.g. mid-close) -- still worth revival, unlike a fully
@@ -10172,7 +10187,7 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
             pipe_name, term, broker = sessions[index]
             open_view = _open_view(term)
             if open_view is not None and open_view.window():
-                if open_view is not active:
+                if not _same_view(open_view, active):
                     self.window.focus_view(open_view)
                 return
             if not pipe_free_by_pipe.get(pipe_name, True):
