@@ -9608,6 +9608,154 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
         return self.is_enabled(group, index)
 
 
+def _agent_catalog_path():
+    return os.path.expanduser("~/data/agent_tui_catalog.sqlite3")
+
+
+def _agent_catalog_lookup(profile_name):
+    """Best-effort match of an ai_terminal profile name (e.g. "Grok Build
+    --minimal") to a row in the standalone agent_tui_catalog.sqlite3
+    database -- a real CLI/slash-command reference built from live TUI
+    walks and official docs, tracked separately from this repo. Strips a
+    " --flag"/" -> variant" suffix before matching, since the catalog
+    tracks one row per underlying CLI, not per ai_terminal profile
+    variant. Returns None on any failure (missing db, no match, locked
+    file, etc.) -- this integration must never be required for
+    ai_terminal's own commands to keep working.
+    """
+    path = _agent_catalog_path()
+    if not os.path.isfile(path):
+        return None
+    base = re.split(r"\s+(?:--|→)", profile_name or "", maxsplit=1)[0].strip()
+    key = re.sub(r"[\s\-]+", "", base).lower()
+    if not key:
+        return None
+    try:
+        import sqlite3
+        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=1.0)
+    except Exception:
+        print("[ai_terminal] agent catalog: could not open db:\n%s" % traceback.format_exc())
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        agent = None
+        for row in conn.execute("SELECT id, name, display_name, notes FROM agents"):
+            cand = re.sub(r"[\s\-]+", "", row["name"]).lower()
+            if cand == key or cand.startswith(key) or key.startswith(cand):
+                agent = row
+                break
+        if agent is None:
+            return None
+        agent_id = agent["id"]
+        cli_rows = conn.execute(
+            "SELECT syntax, description, category FROM cli_commands "
+            "WHERE agent_id=? ORDER BY category, syntax",
+            (agent_id,),
+        ).fetchall()
+        cmd_rows = conn.execute(
+            "SELECT command, aliases, description, category FROM commands "
+            "WHERE agent_id=? ORDER BY category, command",
+            (agent_id,),
+        ).fetchall()
+        return {
+            "name": agent["name"],
+            "display_name": agent["display_name"],
+            "notes": agent["notes"],
+            "cli_commands": [dict(r) for r in cli_rows],
+            "commands": [dict(r) for r in cmd_rows],
+        }
+    except Exception:
+        print("[ai_terminal] agent catalog lookup failed:\n%s" % traceback.format_exc())
+        return None
+    finally:
+        conn.close()
+
+
+class AiTerminalAgentHelpCommand(sublime_plugin.WindowCommand):
+    """Search this tab's agent's real CLI/slash-command reference in a
+    quick panel -- the actual "what can I ask this beast" help system the
+    standalone agent_tui_catalog.sqlite3 database was built for, reachable
+    from inside GhostShell instead of living as a disconnected research
+    artifact with no way to reach a user.
+
+    Type to filter (native quick-panel behavior) across both CLI-level
+    commands (run in an external shell, prefixed '$') and in-session slash
+    commands (typed into the running chat, prefixed '/'). Picking a slash
+    command queues it into this tab's own input via
+    ai_terminal_queue_input_to -- not sent, reviewable before pressing
+    Enter, same caution as every other input-injection path in this file.
+    Picking a CLI command copies it to the clipboard instead, since it's
+    meant to run in an external shell, not be typed into a live chat.
+
+    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
+    Tab Context.sublime-menu needs that to reach the right-clicked tab
+    rather than whichever one happens to be focused.
+    """
+
+    def run(self, group=-1, index=-1):
+        view = _tab_menu_target_view(self.window, group, index)
+        term = _Terminal.from_id(view.id()) if view else None
+        profile_name = getattr(term, "profile_name", None) if term else None
+        if not profile_name:
+            sublime.status_message("Ai terminal: this tab has no agent profile to look up")
+            return
+        data = _agent_catalog_lookup(profile_name)
+        if data is None:
+            sublime.status_message(
+                "Ai terminal: no cataloged reference for %s yet" % profile_name
+            )
+            return
+
+        entries = []
+        for row in data["commands"]:
+            entries.append(("/", row["command"], row.get("aliases") or "", row["description"] or ""))
+        for row in data["cli_commands"]:
+            entries.append(("$", row["syntax"], "", row["description"] or ""))
+        if not entries:
+            sublime.status_message(
+                "Ai terminal: %s is cataloged but has no commands recorded yet" % profile_name
+            )
+            return
+
+        rows = []
+        for kind, name, aliases, desc in entries:
+            title = "%s %s" % (kind, name)
+            detail = desc
+            if aliases:
+                detail = "%s  (aliases: %s)" % (detail, aliases)
+            rows.append([title, detail])
+
+        tab_name = view.name()
+
+        def on_pick(idx):
+            if idx < 0:
+                return
+            kind, name, aliases, desc = entries[idx]
+            if kind == "/":
+                self.window.run_command(
+                    "ai_terminal_queue_input_to",
+                    {"name": tab_name, "string": name.split()[0]},
+                )
+                sublime.status_message(
+                    "Ai terminal: queued %s into %s -- press Enter to send"
+                    % (name.split()[0], tab_name)
+                )
+            else:
+                sublime.set_clipboard(name)
+                sublime.status_message("Ai terminal: copied to clipboard -- %s" % name)
+
+        self.window.show_quick_panel(
+            rows, on_pick, placeholder="%s: search commands…" % profile_name
+        )
+
+    def is_enabled(self, group=-1, index=-1):
+        term = _tab_menu_term(self.window, group, index)
+        return term is not None
+
+    def is_visible(self, group=-1, index=-1):
+        return self.is_enabled(group, index)
+
+
 def _attach_recovered_session(window, pipe_name, broker):
     """Build a new terminal tab bound to an already-running broker session.
 

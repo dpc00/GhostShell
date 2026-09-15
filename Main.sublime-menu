@@ -1,71 +1,76 @@
 [
     {
-        "id": "ai_terminal",
-        "caption": "Ai Terminal",
+        "id": "tools",
         "children": [
             {
-                "caption": "Launch Agent…",
-                "command": "ai_terminal_launcher"
-            },
-            {
-                "caption": "All Agent History…",
-                "command": "ai_terminal_history"
-            },
-            {
-                "caption": "-"
-            },
-            {
-                "caption": "Sessions",
+                "id": "ai_terminal",
+                "caption": "Ai Terminal",
                 "children": [
                     {
-                        "caption": "List Sessions…",
-                        "command": "ai_terminal_list_sessions"
+                        "caption": "Launch Agent…",
+                        "command": "ai_terminal_launcher"
                     },
                     {
-                        "caption": "Recover Session…",
-                        "command": "ai_terminal_recover_session"
+                        "caption": "All Agent History…",
+                        "command": "ai_terminal_history"
                     },
                     {
                         "caption": "-"
                     },
                     {
-                        "caption": "Detach All to Windows Terminal",
-                        "command": "ai_terminal_detach_all_to_windows_terminal"
+                        "caption": "Sessions",
+                        "children": [
+                            {
+                                "caption": "List Sessions…",
+                                "command": "ai_terminal_list_sessions"
+                            },
+                            {
+                                "caption": "Recover Session…",
+                                "command": "ai_terminal_recover_session"
+                            },
+                            {
+                                "caption": "-"
+                            },
+                            {
+                                "caption": "Detach All to Windows Terminal",
+                                "command": "ai_terminal_detach_all_to_windows_terminal"
+                            },
+                            {
+                                "caption": "Reattach All from Windows Terminal",
+                                "command": "ai_terminal_reattach_all_from_windows_terminal"
+                            }
+                        ]
                     },
                     {
-                        "caption": "Reattach All from Windows Terminal",
-                        "command": "ai_terminal_reattach_all_from_windows_terminal"
+                        "caption": "-"
+                    },
+                    {
+                        "caption": "Default Profile",
+                        "command": "ai_terminal_open_here"
+                    },
+                    {
+                        "caption": "Refresh Usage & Quota",
+                        "command": "ai_terminal_refresh_usage"
+                    },
+                    {
+                        "caption": "-"
+                    },
+                    {
+                        "caption": "Set Working Directory",
+                        "command": "ai_terminal_set_working_directory"
+                    },
+                    {
+                        "caption": "Clear Working Directory",
+                        "command": "ai_terminal_clear_working_directory"
+                    },
+                    {
+                        "caption": "-"
+                    },
+                    {
+                        "caption": "Nuke Ai Terminal",
+                        "command": "ai_terminal_nuke"
                     }
                 ]
-            },
-            {
-                "caption": "-"
-            },
-            {
-                "caption": "Default Profile",
-                "command": "ai_terminal_open_here"
-            },
-            {
-                "caption": "Refresh Usage & Quota",
-                "command": "ai_terminal_refresh_usage"
-            },
-            {
-                "caption": "-"
-            },
-            {
-                "caption": "Set Working Directory",
-                "command": "ai_terminal_set_working_directory"
-            },
-            {
-                "caption": "Clear Working Directory",
-                "command": "ai_terminal_clear_working_directory"
-            },
-            {
-                "caption": "-"
-            },
-            {
-                "caption": "Nuke Ai Terminal",
-                "command": "ai_terminal_nuke"
             }
         ]
     }
