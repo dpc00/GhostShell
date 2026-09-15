@@ -1376,21 +1376,70 @@ def test_window_close_is_not_converted_to_agent_exit(clean_state):
             ai_terminal._term_registry().pop(view.id(), None)
 
 
-def test_native_codex_tab_close_falls_through_without_graceful_exit_input(clean_state):
-    view = FakeView(vid=906)
+def test_ctrl_w_close_command_is_intercepted(clean_state):
+    # Ctrl+W and File > Close File both actually dispatch a command named
+    # "close" (confirmed via Default (Windows).sublime-keymap /
+    # Main.sublime-menu, 2026-09-15) -- not "close_file", which is only
+    # Ctrl+F4. This hook must watch "close" too or it silently never fires
+    # for the two most common close actions.
+    view = FakeView(vid=910)
     view.settings().set(ai_terminal._VIEW_SETTING, True)
     window = FakeWindow(active_view=view)
-    term = types.SimpleNamespace(profile_name="Codex")
+    term = types.SimpleNamespace(profile_name="Codex", pty=types.SimpleNamespace())
     with ai_terminal._term_lock():
         ai_terminal._term_registry()[view.id()] = term
     try:
         result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
-            window, "close_file", None
+            window, "close", None
         )
-        assert result is None
+        assert result == ("ai_terminal_noop_window", {})
     finally:
         with ai_terminal._term_lock():
             ai_terminal._term_registry().pop(view.id(), None)
+
+
+def test_ai_terminal_tab_close_without_graceful_exit_input_always_blocked(
+    clean_state, monkeypatch
+):
+    # No native window-command close (Ctrl+W/"close", Ctrl+F4/"close_file",
+    # right-click "close_by_index", or sublime-mcp's close_file, which now
+    # routes through a real window command specifically so it lands here)
+    # is ever allowed through for an ai_terminal tab without a configured
+    # graceful-exit command, for any profile, broker-backed or not -- no
+    # dialog, no confirmation. Reversed from an earlier 2026-09-15 native-
+    # dialog-based design (see memory:
+    # ghostshell-close-dialog-can-hide-behind-windows) that could lose
+    # focus and hide behind other windows on Windows, freezing all of
+    # Sublime with zero visible cue. Ending or detaching a session goes
+    # through Tab Context menu / Command Palette (Close & Keep Alive /
+    # Kill Session / End Session) instead, which this hook never touches.
+    for command, args, broker in (
+        ("close", None, False),
+        ("close_file", None, True),
+        ("close_by_index", {"group": -1, "index": -1}, True),
+    ):
+        view = FakeView(vid=920 + int(broker))
+        view.settings().set(ai_terminal._VIEW_SETTING, True)
+        window = FakeWindow(active_view=view)
+        window._views = [view]
+        window.active_group = lambda: 0
+        window.views_in_group = lambda g: [view]
+        window.active_view_in_group = lambda g: view
+        term = types.SimpleNamespace(
+            profile_name="Codex", pty=types.SimpleNamespace()
+        )
+        monkeypatch.setattr(ai_terminal, "_is_broker_pty", lambda p, b=broker: b)
+        with ai_terminal._term_lock():
+            ai_terminal._term_registry()[view.id()] = term
+        try:
+            result = ai_terminal.AiTerminalTabCloseInterceptor().on_window_command(
+                window, command, args
+            )
+            assert result == ("ai_terminal_noop_window", {}), (command, broker)
+            assert not getattr(term, "_tab_close_requested", False)
+        finally:
+            with ai_terminal._term_lock():
+                ai_terminal._term_registry().pop(view.id(), None)
 
 
 def test_recover_session_choices_hide_dead_gc_terms_after_successful_process_scan(monkeypatch):
