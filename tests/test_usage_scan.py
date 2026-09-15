@@ -12,6 +12,7 @@ from terminal.usage_scan import (
     parse_claude_oauth_usage,
     parse_codex_rate_limits,
     parse_codex_wham_usage,
+    parse_copilot_user,
     parse_kimi_me,
     parse_ollama_me,
     parse_openrouter_key,
@@ -268,6 +269,39 @@ class OllamaOpenRouterParseTests(unittest.TestCase):
         self.assertIsNone(parse_kimi_me({"nickname": "x"}))
         self.assertIsNone(parse_kimi_me("nope"))
 
+    def test_copilot_user(self):
+        # Shape captured from a live api.github.com/copilot_internal/user call.
+        payload = {
+            "copilot_plan": "individual",
+            "quota_reset_date": "2026-10-01",
+            "quota_reset_date_utc": "2026-10-01T00:00:00.000Z",
+            "quota_snapshots": {
+                "chat": {"percent_remaining": 98.9, "unlimited": False},
+                "completions": {"percent_remaining": 100.0, "unlimited": False},
+                "premium_interactions": {"percent_remaining": 0.0, "unlimited": False},
+            },
+        }
+        now = 1789465504
+        usage = parse_copilot_user(payload, now=now)
+        self.assertEqual(usage["remaining"], 0.0)
+        self.assertEqual(usage["plan"], "individual")
+        self.assertIn("Premium 0% left", usage["summary"])
+        self.assertEqual(len(usage["windows"]), 3)
+
+    def test_copilot_user_unlimited_dropped(self):
+        payload = {
+            "quota_reset_date": "2026-10-01",
+            "quota_snapshots": {
+                "chat": {"percent_remaining": 50.0, "unlimited": True},
+            },
+        }
+        self.assertIsNone(parse_copilot_user(payload))
+
+    def test_copilot_user_garbage(self):
+        self.assertIsNone(parse_copilot_user({}))
+        self.assertIsNone(parse_copilot_user("nope"))
+        self.assertIsNone(parse_copilot_user({"quota_snapshots": "nope"}))
+
 
 class ClaudeTokenHelperTests(unittest.TestCase):
     def test_expired_uses_ms_epoch_with_margin(self):
@@ -330,6 +364,7 @@ class GatherUsageErrorTests(unittest.TestCase):
         )
         self._patch("fetch_kimi_usage", lambda *a, **k: None)
         self._patch("fetch_openrouter_usage", lambda *a, **k: None)
+        self._patch("fetch_copilot_usage", lambda *a, **k: None)
 
         results = usage_scan.gather_usage(home="/nonexistent")
         self.assertIn("RuntimeError", results["claude"]["error"])

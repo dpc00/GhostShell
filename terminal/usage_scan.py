@@ -18,6 +18,7 @@ load. The full sweep can take minutes; nothing blocks the UI.
 import json
 import os
 import re
+import subprocess
 import tempfile
 import time
 import traceback
@@ -122,6 +123,38 @@ import urllib.request
 #   jcode   — itself a multi-provider aggregator (routes through its own
 #             stored OpenAI/Gemini/Claude/Antigravity grants); "jcode usage"
 #             isn't one number, it's whichever backend it dispatched to.
+#   copilot — WIRED. fetch_copilot_usage() below. GitHub Copilot CLI keeps no
+#             separate credential on this machine (no token file under
+#             ~/.copilot, no Windows Credential Manager entry of its own) --
+#             it rides on `gh`'s own OAuth token. Confirmed live 2026-09-15:
+#             `gh auth token` against api.github.com/copilot_internal/user
+#             returns 200 with real quota_snapshots, matching the exact
+#             response shape the installed Copilot CLI itself caches at
+#             %LOCALAPPDATA%\copilot\copilot-user-cache.json. Ported from
+#             omp's packages/ai/src/usage/github-copilot.ts, internal-usage
+#             branch only (the billing-API branch needs a PAT with billing
+#             scope a CLI-stored token doesn't have).
+#   cline   — INVESTIGATED, BLOCKED. omp's ClinePass usage-limits endpoint
+#             (api.cline.bot/api/v1/users/me/plan/usage-limits) is real, but
+#             Cline's own stored credential here (~/.cline/data/settings/
+#             providers.json) is OAuth (accessToken/refreshToken/expiresAt),
+#             not the api_key type omp's own fetcher requires -- and the
+#             access token on disk is expired. Refreshing it needs Cline's
+#             OAuth token endpoint, which is not in cline-pass.ts and was not
+#             tracked down. Revisit if that endpoint surfaces.
+#   devin   — NOT ACTIONED. No credential anywhere on this machine (no
+#             ~/.devin config dir, no Credential Manager entry) -- never
+#             actually logged in via CLI here, same dead-end shape as mimo.
+#             The Connect-RPC protobuf endpoint (see project memory
+#             project_ghostshell_usage_scan_omp_port) is real but not worth
+#             building against zero accounts.
+#   antigravity — NOT ACTIONED BY CHOICE. Has a real credential (Windows
+#             Credential Manager, target "gemini:antigravity"), but its
+#             quota endpoint is the same daily-cloudcode-pa.googleapis.com
+#             Cloud Code Assist family Donal dropped over an unrelated
+#             billing dispute (see the gemini entry above: "do not build or
+#             revisit this fetcher"). Ask before spending effort here even
+#             though Antigravity is a distinct product from Gemini CLI.
 # The text tier (usage_update_from_text / reset_update_from_text in
 # profile_availability.py) covers any provider whose own TUI prints quota
 # text, with zero endpoint work — that's how the "100% used" Kimi fix
@@ -139,6 +172,7 @@ _PROVIDER_EXECUTABLES = {
     "opencode": "opencode",
     "jcode": "jcode",
     "mimo": "mimo",
+    "copilot": "copilot",
     # Wrapped launches ("ollama launch codex") bill Ollama, not the wrapped
     # CLI's account, so the wrapper must win provider detection.
     "ollama": "ollama",
@@ -905,6 +939,110 @@ def fetch_openrouter_usage(qwen_home="~/.qwen", now=None):
     return parse_openrouter_key(payload)
 
 
+def _gh_auth_token(timeout=10):
+    """GitHub CLI's own OAuth token via `gh auth token`, or None.
+
+    Copilot CLI keeps no credential of its own on this machine -- it rides on
+    gh's token (Windows Credential Manager). Missing gh / not logged in both
+    mean "not configured", same as a fetcher finding no credential file.
+
+    ``creationflags=CREATE_NO_WINDOW`` matters here: this runs from Sublime's
+    GUI-subsystem host process (no console of its own), and a subprocess call
+    without it triggers console allocation for the child -- see
+    ai_terminal.py's own subprocess.check_output call for the same flag with
+    the same rationale.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    return token or None
+
+
+_COPILOT_WINDOW_LABELS = {
+    "premium_interactions": "Premium",
+    "chat": "Chat",
+    "completions": "Completions",
+}
+
+
+def parse_copilot_user(payload, now=None):
+    """Usage dict from api.github.com/copilot_internal/user JSON.
+
+    quota_snapshots carries one entry per metered surface (chat, completions,
+    premium_interactions), all sharing one monthly reset
+    (quota_reset_date_utc). An unlimited=True entry is dropped -- it carries
+    no meaningful percent_remaining.
+    """
+    if not isinstance(payload, dict):
+        return None
+    snapshots = payload.get("quota_snapshots")
+    if not isinstance(snapshots, dict):
+        return None
+    reset_epoch = _iso_to_epoch(
+        payload.get("quota_reset_date_utc") or payload.get("quota_reset_date")
+    )
+    windows = []
+    for key, label in _COPILOT_WINDOW_LABELS.items():
+        detail = snapshots.get(key)
+        if not isinstance(detail, dict) or detail.get("unlimited"):
+            continue
+        remaining = detail.get("percent_remaining")
+        if not isinstance(remaining, (int, float)):
+            continue
+        windows.append({
+            "label": label,
+            "remaining": round(max(0.0, min(100.0, float(remaining))), 1),
+            "reset": humanize_epoch(reset_epoch, now=now, label="copilot:%s" % key),
+        })
+    if not windows:
+        return None
+    result = {
+        "windows": windows,
+        "remaining": min(w["remaining"] for w in windows),
+        "summary": summarize_windows(windows, now=now),
+        "source": "live",
+        "observed_at": now if now is not None else time.time(),
+    }
+    plan = payload.get("copilot_plan")
+    if isinstance(plan, str) and plan:
+        result["plan"] = plan
+    return result
+
+
+def fetch_copilot_usage(now=None):
+    """Live GitHub Copilot quota from its own internal user endpoint.
+
+    Uses `gh auth token` (see _gh_auth_token) since Copilot CLI stores no
+    separate credential here. Returns None when gh is missing/not logged in
+    (not configured), an {"error": ...} dict when a token exists but the live
+    call fails.
+    """
+    token = _gh_auth_token()
+    if not token:
+        return None
+    headers = {
+        "Authorization": "token %s" % token,
+        "Accept": "application/json",
+        "User-Agent": "copilot/1.0.82",
+    }
+    try:
+        payload = _get_json("https://api.github.com/copilot_internal/user", headers)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print("[usage_scan] Copilot live usage fetch failed:\n%s" % traceback.format_exc())
+        return _live_error(e)
+    return parse_copilot_user(payload, now=now)
+
+
 def gather_usage(home=None, now=None, should_cancel=None):
     """Provider → usage dict: live endpoints first, local files as fallback.
 
@@ -973,5 +1111,9 @@ def gather_usage(home=None, now=None, should_cancel=None):
     )
     if openrouter:
         results["qwen"] = openrouter
+
+    copilot = collect("copilot", lambda: fetch_copilot_usage(now=now))
+    if copilot:
+        results["copilot"] = copilot
 
     return results
