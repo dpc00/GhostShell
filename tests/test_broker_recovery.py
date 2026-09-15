@@ -2,6 +2,7 @@
 
 import ast
 import os
+import re
 import time
 from pathlib import Path
 
@@ -533,9 +534,15 @@ def test_relaunch_kills_then_respawns_into_the_same_view():
     assert any(c.get("command") == "ai_terminal_relaunch" for c in commands)
 
     relaunch_start = source.index("class AiTerminalRelaunchCommand")
-    relaunch_end = source.index(
-        "def _sublime_view_info_lines(view):", relaunch_start
-    )
+    # Stop at the next top-level class/def, not a fixed distant marker --
+    # a far-away end marker silently swallows whatever unrelated
+    # classes/functions get added in between over time (confirmed live:
+    # AiTerminalTuneProfileCommand grew its own unrelated view.close() call
+    # for a "Respawn" feature and broke this test's view.close() assertion
+    # even though that code was never part of AiTerminalRelaunchCommand).
+    first_newline = source.index("\n", relaunch_start)
+    next_def = re.search(r"^(?:class |def )", source[first_newline + 1:], re.M)
+    relaunch_end = first_newline + 1 + next_def.start()
     relaunch_source = source[relaunch_start:relaunch_end]
     assert "sublime_plugin.WindowCommand" in relaunch_source.split("\n")[0]
     assert "_tab_menu_target_view(self.window, group, index)" in relaunch_source

@@ -461,6 +461,35 @@
             // confirmed live, reverted. Do not re-enable force_tui_like for
             // this profile without a different fix for the overflow case.
         },
+        "Devin": {
+            // Installed 2026-09-15: C:\Users\donal\AppData\Local\devin\cli\bin\devin.exe,
+            // already on the registry-level User PATH (installer added it
+            // there directly) -- _refresh_path_env re-reads that on every
+            // spawn, so no ST/shell restart is needed for this to resolve.
+            // A real .exe, not a .cmd/.bat shim -- CreateProcess can launch
+            // it directly, no "cmd /c" wrapper needed (see the Continue
+            // profile's comment above for why that wrapper exists for
+            // shims and doesn't apply here).
+            // Mouse tracking: confirmed live 2026-09-15 (cast
+            // ai_2026-09-14_234955_514407) -- real DEC mouse tracking codes
+            // ?1000h/?1002h/?1003h/?1006h (click+drag+any-motion, SGR
+            // coords), same class as Cline/Claude. Alt-screen entered once
+            // at boot and held for the whole session (persistent full-
+            // screen TUI, not per-view toggling).
+            // Page keys: sent a real PageUp at the main chat prompt --
+            // no byte reached the PTY (no new input event in the
+            // recording) and the visible screen was unchanged, so no
+            // evidence the app does anything special with it there.
+            // Left unset (native Sublime scrollback) for the same reason
+            // as Codex. Not yet tested inside /model or /fusion pickers,
+            // which may behave differently -- revisit if that's observed.
+            "detachable": true,
+            "launch_command": [
+                "devin"
+            ],
+            "mouse_handling": true,
+            "spawn_env": {}
+        },
         "Dos Console": {
             "launch_command": [
                 "cmd.exe"
