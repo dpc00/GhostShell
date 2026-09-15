@@ -1136,6 +1136,35 @@ def _tune_profile_panel_html(term):
     )
 
 
+def _close_menu_panel_html():
+    """Minihtml body for the "Tab Close" toolbar link's expanded state --
+    the three differently-destructive session-ending actions, revealed
+    behind one extra click rather than sitting bare in the always-visible
+    toolbar row (see the reasoning above _add_close_toolbar's `items`
+    list). Captions match the existing Tab Context menu / Command Palette
+    entries for these same commands exactly, so there is only one
+    vocabulary to learn regardless of which path a user finds first.
+    """
+    rows = [
+        ("close_keep_alive", "Close Tab (Keep Session Alive)",
+         "detaches -- keeps running in the background, recoverable via "
+         "'Ai: Recover Session...'"),
+        ("kill_session", "Kill Session (Keep Tab Open)",
+         "ends the process now; the tab and its transcript stay open to read"),
+        ("end_session", "End Session (Kill + Close)",
+         "ends the process now and closes the tab"),
+    ]
+    return (
+        "<br>&mdash; end or detach this session &mdash;<br>"
+        + "<br>".join(
+            '<a href="%s">%s</a><br>'
+            '<span style="padding-left:1.4em; font-style:italic;">%s</span>'
+            % (href, caption, desc)
+            for href, caption, desc in rows
+        )
+    )
+
+
 def _add_close_toolbar(term):
     """(Re-)anchor the persistent Close Tab/Relaunch/Windows-Terminal toolbar
     to term's view, at the buffer's current end. See
@@ -1179,11 +1208,33 @@ def _add_close_toolbar(term):
                 "ai_terminal_tune_profile_set", {"key": href[len("tp_set:"):]}
             )
             return
+        if href == "close_menu":
+            t = _Terminal.from_id(v.id())
+            if t is not None:
+                t.close_menu_open = not getattr(t, "close_menu_open", False)
+                _add_close_toolbar(t)
+            return
         group, index = w.get_view_index(v)
         if href == "relaunch":
             w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
         elif href == "info":
             w.run_command("ai_terminal_session_info", {"group": group, "index": index})
+        elif href in ("close_keep_alive", "kill_session", "end_session"):
+            # Collapse the reveal before acting -- the action is already
+            # underway (or the tab/session is already gone) by the time it
+            # would matter, so there is nothing left to keep showing a
+            # confirm-style sub-menu for.
+            t = _Terminal.from_id(v.id())
+            if t is not None:
+                t.close_menu_open = False
+            w.run_command(
+                {
+                    "close_keep_alive": "ai_terminal_close_keep_alive",
+                    "kill_session": "ai_terminal_kill_session",
+                    "end_session": "ai_terminal_end_session",
+                }[href],
+                {"group": group, "index": index},
+            )
 
     # Plain text, no leading symbol: every dingbat/emoji tried (⏹ ⏏ ↗ ↻ 🔄)
     # had some glyph-support quirk in minihtml -- a tofu box, dim/inconsistent
@@ -1246,6 +1297,22 @@ def _add_close_toolbar(term):
             else "Settings ▼"
         )
         items.append(("tune_profile", settings_label, settings_label))
+    # Tab Close reveal: since 2026-09-15 the native window-close commands
+    # (Ctrl+W, File > Close File, Ctrl+F4, right-click Close Tab) are
+    # blocked outright for ai_terminal tabs -- see
+    # AiTerminalTabCloseInterceptor -- so this is the one place left to
+    # actually end or detach a session without going to Tab Context menu /
+    # Command Palette. Kill Session/End Session/Close Tab (Keep Session
+    # Alive) still don't get one-click toolbar buttons of their own
+    # (2026-09-10's mis-click reasoning above still holds for three
+    # differently-destructive actions sitting bare in a row) -- gated
+    # behind this one extra reveal click instead, which is the toolbar
+    # equivalent of the menu's right-click travel distance, just visible
+    # and discoverable instead of hidden.
+    close_menu_label = (
+        "Tab Close ▲" if getattr(term, "close_menu_open", False) else "Tab Close ▼"
+    )
+    items.append(("close_menu", close_menu_label, close_menu_label))
     sep = "   |   "
     try:
         cols, _rows = _measure(view, profile_name=term.profile_name)
@@ -1272,6 +1339,8 @@ def _add_close_toolbar(term):
     panel_html = ""
     if term.profile_name and getattr(term, "tune_profile_open", False):
         panel_html = _tune_profile_panel_html(term)
+    if getattr(term, "close_menu_open", False):
+        panel_html += _close_menu_panel_html()
     # font-family: monospace so a character actually is the width _measure's
     # cols count assumed -- minihtml's default UI font isn't monospace, and
     # the cols-based line-wrap above is only valid if characters here are the
@@ -3967,30 +4036,63 @@ class AiTerminalNoopWindowCommand(sublime_plugin.WindowCommand):
 
 
 class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
-    """Turn tab-close into a graceful exit request for opted-in profiles.
+    """Ask before closing any ai_terminal tab, and turn it into a graceful
+    exit request for profiles that opt into one.
 
-    Sublime's view ``on_close`` notification is too late to save the tab: the
-    view has already been destroyed.  Native tab close is dispatched as a
-    window command first, so replace that command with a no-op after queueing
-    the profile's configured terminal input.  The ordinary PTY EOF path owns
-    the eventual view.close(), meaning the tab never disappears before the
-    child actually exits.
+    Sublime's view ``on_close`` notification is too late to ask: the view has
+    already been destroyed by the time it fires. Native tab close is
+    dispatched as a window command first, so intercept that and substitute a
+    no-op until confirmed.
 
-    This is deliberately profile-gated while it is exercised with Testing
-    Agent.  Different agents use different exit commands and may need a
-    prompt-clearing prelude; none should inherit an unverified generic value.
+    Originally this only fired for profiles with a configured
+    ``tab_close_input`` (a graceful-exit string, e.g. Testing Agent) and
+    silently let every other profile's tab close with no warning at all --
+    including this coordinator's own hosting tab, which is exactly what got
+    closed by mistake via a script's view.close() call on 2026-09-15 (see
+    memory: closing-own-tab-via-sublime-mcp). ``view.close()`` bypasses
+    window commands entirely -- same class of gap as mouse-X tab-close
+    (sublimehq/sublime_text#1922) -- so this hook alone can't catch every
+    close path; sublime-mcp's close tool now goes through
+    window.run_command() specifically so it lands here instead.
+
+    Every detachable ai_terminal tab now gets a plain yes/no gate regardless
+    of profile; profiles with ``tab_close_input`` additionally get the
+    graceful-exit flow (send the exit string, wait for the agent to quit on
+    its own) once confirmed.
     """
 
-    _CLOSE_COMMANDS = {"close_file", "close_by_index"}
+    # "close" is what Ctrl+W and File > Close File actually dispatch (NOT
+    # close_file -- that's only Ctrl+F4). Confirmed 2026-09-15 via
+    # sublime.load_resource("Packages/Default/Default (Windows).sublime-keymap")
+    # and Main.sublime-menu -- prior comments/memory in this codebase
+    # claiming Ctrl+W fires close_file were wrong, and this hook had
+    # consequently never actually fired for either Ctrl+W or the File menu
+    # since it was written.
+    _CLOSE_COMMANDS = {"close", "close_file", "close_by_index"}
 
     @staticmethod
     def _target_view(window, command_name, args):
         if command_name == "close_by_index":
             args = args or {}
             try:
-                views = window.views_in_group(int(args["group"]))
-                return views[int(args["index"])]
-            except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+                group = int(args["group"])
+                index = int(args["index"])
+            except (KeyError, TypeError, ValueError):
+                print("[ai_terminal] tab-close target view lookup failed for args %r:\n%s"
+                      % (args, traceback.format_exc()))
+                return None
+            # -1 is Sublime's own sentinel for "current" on both group and
+            # index (this is what the stock Tab Context menu's "Close Tab"
+            # entry actually sends) -- views_in_group(-1) is not "active
+            # group" via the public API, so resolve the sentinel explicitly
+            # rather than letting it silently fail to find anything.
+            if group == -1:
+                group = window.active_group()
+            try:
+                if index == -1:
+                    return window.active_view_in_group(group)
+                return window.views_in_group(group)[index]
+            except (AttributeError, TypeError, ValueError, IndexError):
                 print("[ai_terminal] tab-close target view lookup failed for args %r:\n%s"
                       % (args, traceback.format_exc()))
                 return None
@@ -4008,25 +4110,49 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
 
         profile = _profile_settings(getattr(term, "profile_name", None))
         exit_input = profile.get("tab_close_input") if profile else None
-        if not isinstance(exit_input, str) or not exit_input:
-            return None
 
-        if not getattr(term, "_tab_close_requested", False):
-            confirmed = sublime.ok_cancel_dialog(
-                "End %s session?\n\n"
-                "The tab will remain open until the agent exits."
-                % (term.profile_name or "agent"),
-                "Exit Agent",
-                "Close Agent Session",
-            )
-            if not confirmed:
-                return ("ai_terminal_noop_window", {})
-            term._tab_close_requested = True
-            term.send_string(exit_input)
-            sublime.status_message(
-                "Ai terminal: waiting for %s to exit"
-                % (term.profile_name or "process")
-            )
+        if isinstance(exit_input, str) and exit_input:
+            if not getattr(term, "_tab_close_requested", False):
+                confirmed = sublime.ok_cancel_dialog(
+                    "End %s session?\n\n"
+                    "The tab will remain open until the agent exits."
+                    % (term.profile_name or "agent"),
+                    "Exit Agent",
+                    "Close Agent Session",
+                )
+                if not confirmed:
+                    return ("ai_terminal_noop_window", {})
+                term._tab_close_requested = True
+                term.send_string(exit_input)
+                sublime.status_message(
+                    "Ai terminal: waiting for %s to exit"
+                    % (term.profile_name or "process")
+                )
+            # Repeat close attempts while shutdown is pending stay swallowed
+            # -- the eventual real close happens via the PTY EOF path, not
+            # here -- so this always returns noop once requested, unlike the
+            # plain-confirm branch below which resolves in a single pass.
+            return ("ai_terminal_noop_window", {})
+
+        # No configured graceful-exit command for this profile: block the
+        # native window-command close outright, no dialog at all. Tried a
+        # native sublime.yes_no_cancel_dialog here first (2026-09-15) -- it
+        # works, but a native OS-modal dialog can lose focus and end up
+        # hidden behind other windows on Windows while it blocks all of
+        # Sublime, with zero in-app indication it's even pending (confirmed
+        # live the same day; see memory:
+        # ghostshell-close-dialog-can-hide-behind-windows). Ending or
+        # detaching a session is reachable through controls this plugin
+        # fully owns instead and that can't hide behind another window:
+        # Tab Context menu / Command Palette's Close & Keep Alive / Kill
+        # Session / End Session (AiTerminalCloseKeepAliveCommand /
+        # AiTerminalKillSessionCommand / AiTerminalEndSessionCommand) --
+        # an in-tab toolbar equivalent is the natural next step here.
+        sublime.status_message(
+            "Ai terminal: window close is disabled for ai_terminal tabs -- "
+            "use this tab's Close & Keep Alive / Kill Session / End Session "
+            "controls (Tab Context menu or Command Palette) instead"
+        )
         return ("ai_terminal_noop_window", {})
 
 
@@ -5374,6 +5500,27 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         # there is no signal here to decide a kill on -- see conversation
         # 2026-09-09 for the confirmation-dialog approach this replaced.
         threading.Thread(target=term.kill, daemon=True).start()
+
+        # Every OTHER way to reach this point (Close & Keep Alive, Kill
+        # Session, End Session, AiTerminalTabCloseInterceptor's blocked
+        # window commands) sets _expected_termination_reason first and/or
+        # shows its own status message. Since 2026-09-15,
+        # AiTerminalTabCloseInterceptor blocks every native window-close
+        # command outright, so the ONLY remaining unannounced path here is
+        # mouse-X (sublimehq/sublime_text#1922 -- structurally uncatchable).
+        # Without this, a mouse-X close silently orphans a live session with
+        # zero indication anything is still running -- the user only finds
+        # out by noticing a tab is missing and going looking for it. Not a
+        # persistent/sticky notice (a modal here would have the exact
+        # hide-behind-other-windows problem the close dialog was dropped
+        # for -- see memory: ghostshell-close-dialog-can-hide-behind-windows)
+        # but at least an immediate one.
+        if getattr(term, "_expected_termination_reason", None) is None and _is_broker_pty(term.pty):
+            sublime.status_message(
+                "Ai terminal: %s tab closed -- session still running in the "
+                "background. Use 'Ai: Recover Session...' to get it back."
+                % (term.profile_name or "agent")
+            )
 
     # ─── pre-empt ST's internal view.show on focus/hover ───────────────────
     #
@@ -9588,6 +9735,7 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                     "cwd": record.get("cwd") or "",
                     "child": child or "",
                     "profile_name": record.get("profile_name"),
+                    "child_pid": record.get("child_pid"),
                 })
         except Exception as exc:
             error = str(exc)
@@ -9677,9 +9825,11 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                 getattr(term, "pty", None), "_cwd", ""
             )
             profile = (broker or {}).get("profile_name") if broker else None
+            child_pid = (broker or {}).get("child_pid")
+            pipe_detail = f"{pipe_name}  ·  pid {child_pid}" if child_pid else pipe_name
             rows.append([
                 f"{name or profile or pipe_name} — {state}",
-                pipe_name,
+                pipe_detail,
                 cwd or "",
             ])
 
@@ -9706,6 +9856,196 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
 
     def _reattach(self, term):
         _revive_terminal_client(term, self.window)
+
+
+class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
+    """Show every detachable ai_terminal session right now -- attached to a
+    live tab in this window, attached elsewhere, frozen, or fully orphaned
+    -- in one quick panel. Shares all its discovery machinery with
+    AiTerminalRecoverSessionCommand, which deliberately excludes sessions
+    that already have a usable tab (that command's job is repairing broken
+    ones specifically); this one is the plain inventory view instead: "what
+    is actually running right now, orphaned or not" (the Sessions main menu
+    entry this exists for, added 2026-09-15, was specifically asked for as
+    something broader than Recover Session's narrower scope).
+
+    Picking a row focuses its tab if it already has a usable one in this
+    window, otherwise reattaches/revives it exactly like Recover Session
+    does for the same states.
+    """
+
+    def run(self):
+        threading.Thread(target=self._discover, daemon=True).start()
+
+    def _discover(self):
+        terms = AiTerminalRecoverSessionCommand._local_terms()
+        brokers = []
+        error = None
+        try:
+            for record in _registered_brokers():
+                pipe_name = record.get("pipe_name")
+                if not pipe_name:
+                    continue
+                child = record.get("child_argv") or []
+                if isinstance(child, list):
+                    child = " ".join(str(part) for part in child)
+                brokers.append({
+                    "pipe_name": pipe_name,
+                    "cwd": record.get("cwd") or "",
+                    "child": child or "",
+                    "profile_name": record.get("profile_name"),
+                    "child_pid": record.get("child_pid"),
+                })
+        except Exception as exc:
+            error = str(exc)
+        if not brokers:
+            try:
+                brokers = AiTerminalRecoverSessionCommand._running_brokers()
+            except Exception as exc:
+                if error is None:
+                    error = str(exc)
+        terms_by_pipe = {
+            getattr(getattr(term, "pty", None), "pipe_name", None): term
+            for term in terms
+            if getattr(getattr(term, "pty", None), "pipe_name", None)
+        }
+        pipe_free_by_pipe = {}
+        for broker in brokers:
+            pipe_free_by_pipe[broker["pipe_name"]] = _pipe_instance_free(broker["pipe_name"])
+        # A local term with no matching broker record still needs its own
+        # pipe_free check -- e.g. a just-spawned session that hasn't hit the
+        # on-disk registry yet, or a stale gc-retained _Terminal object left
+        # behind by a completed Windows Terminal hand-off (its view is
+        # already closed, but the object lingers until GC clears it -- see
+        # AiTerminalRecoverSessionCommand._local_terms). Checked here, off
+        # the main thread, same reason broker pipes are (WaitNamedPipeW can
+        # block up to ~150ms each).
+        for pipe_name in terms_by_pipe:
+            if pipe_name not in pipe_free_by_pipe:
+                pipe_free_by_pipe[pipe_name] = _pipe_instance_free(pipe_name)
+        sublime.set_timeout(
+            lambda: self._show(terms_by_pipe, brokers, pipe_free_by_pipe, error), 0
+        )
+
+    def _show(self, terms_by_pipe, brokers, pipe_free_by_pipe, error=None):
+        def _open_view(term):
+            """The term's view, only if it's still a real, valid, windowed
+            tab -- not just a non-None attribute. A Windows Terminal
+            hand-off (_handoff_term_to_windows_terminal) closes this tab's
+            view once the broker's pipe is handed to WT's relay; a stale
+            gc-retained _Terminal object can outlive that close, so
+            `term.view` being non-None alone does NOT mean there is
+            anything left here to revive into -- confirmed live 2026-09-15:
+            without this check, such a session showed as "frozen tab" and
+            clicking it built a broken, unresponsive empty tab, because the
+            broker's one connection slot was already held by WT.
+            """
+            if term is None:
+                return None
+            view = getattr(term, "view", None)
+            try:
+                if view is not None and view.is_valid():
+                    return view
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] list sessions: view usability check failed:\n%s"
+                      % traceback.format_exc())
+            return None
+
+        sessions = []
+        seen_pipes = set()
+        for broker in brokers:
+            pipe_name = broker["pipe_name"]
+            if pipe_name in seen_pipes:
+                continue
+            seen_pipes.add(pipe_name)
+            sessions.append((pipe_name, terms_by_pipe.get(pipe_name), broker))
+        # Local terms with no matching broker record (process discovery
+        # failed, or a just-spawned session hasn't hit the on-disk registry
+        # yet) still belong in a full inventory, unlike Recover Session
+        # which only cares about broker-confirmed orphans.
+        for pipe_name, term in terms_by_pipe.items():
+            if pipe_name not in seen_pipes:
+                sessions.append((pipe_name, term, None))
+                seen_pipes.add(pipe_name)
+
+        if not sessions:
+            detail = f" ({error})" if error else ""
+            sublime.status_message("Ai terminal: no sessions running" + detail)
+            return
+
+        active = self.window.active_view()
+        rows = []
+        for pipe_name, term, broker in sessions:
+            # open_view: a genuinely still-existing view object for this
+            # term, regardless of window() -- distinct from "no view object
+            # at all" (a fully-stale term, or no term). windowed further
+            # narrows that to "actually placed in a window right now."
+            # Keeping these separate is what fixes the 2026-09-15 bug: a
+            # stale gc-retained term left behind by a completed Windows
+            # Terminal hand-off has no view object at all, so it must fall
+            # through to the pipe_free check below (busy elsewhere vs.
+            # orphaned) instead of being mislabeled "frozen tab" (which
+            # implies a real view exists to revive into -- it doesn't).
+            open_view = _open_view(term)
+            windowed = bool(open_view and open_view.window())
+            pipe_free = pipe_free_by_pipe.get(pipe_name, True)
+            try:
+                name = open_view.name() if open_view is not None else None
+            except (RuntimeError, AttributeError):
+                print("[ai_terminal] list sessions: view.name() failed:\n%s"
+                      % traceback.format_exc())
+                name = None
+            if windowed:
+                state = "active tab, this window" if open_view is active else "open tab, elsewhere"
+            elif open_view is not None:
+                # A real view object, just not in a window at this instant
+                # (e.g. mid-close) -- still worth revival, unlike a fully
+                # stale term with no view object at all.
+                state = "frozen tab"
+            elif not pipe_free:
+                state = "detached -- open elsewhere (e.g. Windows Terminal)"
+            else:
+                state = "orphaned"
+            cwd = broker.get("cwd") if broker else getattr(
+                getattr(term, "pty", None), "_cwd", ""
+            )
+            profile = (broker or {}).get("profile_name") if broker else None
+            child_pid = (broker or {}).get("child_pid")
+            pipe_detail = f"{pipe_name}  ·  pid {child_pid}" if child_pid else pipe_name
+            rows.append([
+                f"{name or profile or pipe_name} — {state}",
+                pipe_detail,
+                cwd or "",
+            ])
+
+        def _picked(index):
+            if index < 0 or index >= len(sessions):
+                return
+            pipe_name, term, broker = sessions[index]
+            open_view = _open_view(term)
+            if open_view is not None and open_view.window():
+                if open_view is not active:
+                    self.window.focus_view(open_view)
+                return
+            if not pipe_free_by_pipe.get(pipe_name, True):
+                # Busy elsewhere (e.g. a Windows Terminal hand-off) --
+                # inform, don't touch anything: attaching/reviving here
+                # would just build a second, broken client fighting for the
+                # broker's one connection slot (confirmed live 2026-09-15).
+                sublime.status_message(
+                    "Ai Terminal: %s is open elsewhere (e.g. a Windows "
+                    "Terminal hand-off) -- close that window first if you "
+                    "want it back here." % pipe_name
+                )
+                return
+            if open_view is not None:
+                # A real, still-valid view with a dead pty: revive in place
+                # rather than building a second tab for the same pipe.
+                _revive_terminal_client(term, self.window)
+                return
+            _attach_recovered_session(self.window, pipe_name, broker or {})
+
+        self.window.show_quick_panel(rows, _picked)
 
 
 class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.ApplicationCommand):

@@ -759,7 +759,7 @@ def _split_argv(argv):
     return argv[:i], argv[i + 1:]
 
 
-def _publish_registry(path, pipe_name, profile_name, cwd, child_argv):
+def _publish_registry(path, pipe_name, profile_name, cwd, child_argv, child_pid=None):
     if not path:
         return
     folder = os.path.dirname(os.path.abspath(path))
@@ -771,6 +771,7 @@ def _publish_registry(path, pipe_name, profile_name, cwd, child_argv):
         "cwd": cwd,
         "child_argv": child_argv,
         "broker_pid": os.getpid(),
+        "child_pid": child_pid,
         "created_at": time.time(),
     }
     with open(temporary, "w", encoding="utf-8") as handle:
@@ -846,7 +847,8 @@ def main():
     threading.Thread(target=ctl.run_forever, daemon=True).start()
 
     _publish_registry(
-        args.registry_file, args.pipe_name, args.profile_name, cwd, child_argv
+        args.registry_file, args.pipe_name, args.profile_name, cwd, child_argv,
+        child_pid=pty.pid,
     )
 
     print("[agent_broker] serving \\\\.\\pipe\\%s (+ -in, -ctl) -- Ctrl+C to stop and kill the child"
