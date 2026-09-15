@@ -7370,6 +7370,47 @@ class AiTerminalQueueInputCommand(sublime_plugin.WindowCommand):
             term.queue_input(string)
 
 
+class AiTerminalQueueInputToCommand(sublime_plugin.WindowCommand):
+    """Queue a string into a SPECIFIC ai_terminal tab, addressed explicitly
+    by name (partial, case-insensitive) or index into window.views() --
+    unlike AiTerminalQueueInputCommand above, which only ever guesses
+    "active view, else the first ai_terminal view found."
+
+    Exists because that guess is genuinely ambiguous with more than one
+    ai_terminal tab open in the same window (a coordinating agent's own
+    hosting tab is itself an ai_terminal view, so it can be the "active"
+    one and wrongly swallow input meant for a different tab) -- confirmed
+    live 2026-09-14, resolved only by hand-walking the internal terminal
+    registry instead of anything callable directly. This is that
+    resolution, made a real, reusable, one-call primitive: any external
+    caller (another agent, a script, `run_command` via sublime-mcp) can
+    now target a tab by name/index with no risk of hitting the wrong one.
+
+    No key/menu/palette binding; invoked programmatically.
+    """
+
+    def run(self, string="", name="", index=-1):
+        view = None
+        views = self.window.views()
+        if index >= 0:
+            if 0 <= index < len(views):
+                view = views[index]
+        elif name:
+            needle = name.lower()
+            for v in views:
+                if v.settings().get(_VIEW_SETTING, False) and needle in (v.name() or "").lower():
+                    view = v
+                    break
+        if view is None or not view.settings().get(_VIEW_SETTING, False):
+            sublime.status_message(
+                "Ai terminal: no matching tab found for queue_input_to target"
+            )
+            return
+        term = _Terminal.from_id(view.id())
+        if term:
+            term.queue_input(string)
+
+
 # Host-only blank lines above AND below the TUI (not sent to the PTY).
 # Pad *below* alone left rest_y=0, so ST could only pan dy>0 (one direction).
 # Pad *above* gives headroom for dy<0 (finger-down / content-down). Rest
