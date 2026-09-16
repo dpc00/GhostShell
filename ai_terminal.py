@@ -4009,6 +4009,14 @@ _BROKER_PIPE_SETTING = "ai_terminal_broker_pipe"
 _BROKER_PROFILE_SETTING = "ai_terminal_broker_profile"
 _BROKER_CWD_SETTING = "ai_terminal_broker_cwd"
 
+# Friendly alias of the pipe name (same value) plus the child process's own
+# pid, for external tools (sublime-mcp's get_sheets, AgentIDE) reading
+# view.settings() directly instead of also having to open the broker
+# registry file themselves. Pid is stamped in once the broker's registry
+# record actually reports it -- see _stamp_broker_pid_when_known.
+_SESSION_ID_SETTING = "ai_terminal_session_id"
+_CHILD_PID_SETTING = "ai_terminal_child_pid"
+
 # Sublime restores views before their final layout is necessarily available.
 # Reattaching a detachable terminal during that window can measure an inactive
 # tab as one row and immediately send that bogus geometry to the surviving
@@ -6774,10 +6782,36 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
         view.settings().set(_BROKER_PIPE_SETTING, pty.pipe_name)
         view.settings().set(_BROKER_PROFILE_SETTING, profile_name)
         view.settings().set(_BROKER_CWD_SETTING, path)
+        view.settings().set(_SESSION_ID_SETTING, pty.pipe_name)
+        _stamp_broker_pid_when_known(view, pty.pipe_name)
     with _term_lock():
         _term_registry()[view.id()] = term
     _add_close_toolbar(term)
     term.start_reader()
+
+
+def _stamp_broker_pid_when_known(view, pipe_name, tries=20):
+    """The broker writes its own registry record (with child_pid) shortly
+    after spawn, not synchronously with pty.start() returning -- poll it
+    briefly so external tools reading this view's settings get a real pid
+    instead of none. Gives up silently after ~2s (tries*100ms); the pid
+    just stays unset, same as before this existed."""
+    try:
+        if not view.is_valid():
+            return
+    except (RuntimeError, AttributeError):
+        return
+    record = _read_broker_registry_record(pipe_name)
+    child_pid = (record or {}).get("child_pid")
+    if child_pid:
+        try:
+            view.settings().set(_CHILD_PID_SETTING, child_pid)
+        except (RuntimeError, AttributeError):
+            pass
+        return
+    if tries > 0:
+        sublime.set_timeout(
+            lambda: _stamp_broker_pid_when_known(view, pipe_name, tries - 1), 100)
 
 
 def _maybe_reattach_broker(view, _confirm=False):
@@ -6807,6 +6841,8 @@ def _maybe_reattach_broker(view, _confirm=False):
             pipe_name = registered[0]["pipe_name"]
             view.settings().set(_BROKER_PIPE_SETTING, pipe_name)
             print(f"[ai_terminal] recovered stale restored broker identity as {pipe_name!r}")
+        view.settings().set(_SESSION_ID_SETTING, pipe_name)
+        _stamp_broker_pid_when_known(view, pipe_name)
 
         vid = view.id()
         if vid in _BROKER_CONNECTING:
