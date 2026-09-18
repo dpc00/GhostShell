@@ -775,6 +775,13 @@ class GhosttyParser:
             else:
                 s.history.append(rstrip_cells(cells))
 
+        # Native ghostty's max_scrollback is not a strict row count, so a
+        # full rebuild (first sync after a broker replay, resize, reset) can
+        # import more rows than the cap. The incremental path trims per line
+        # via _retire_line; the rebuild appends directly, so trim here.
+        if not notify and not s.trim_paused:
+            s._enforce_history_cap()
+
         self._last_scrollback_rows = scrollback_rows
         s.dirty = True
 
