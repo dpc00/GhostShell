@@ -1594,9 +1594,9 @@ try:
     )
     from .terminal.mouse import (
         BTN_RELEASE_X10 as _BTN_RELEASE_X10,
-        encode_click as _encode_click,
+        BTN_WHEEL_DOWN as _BTN_WHEEL_DOWN,
+        BTN_WHEEL_UP as _BTN_WHEEL_UP,
         encode_mouse as _encode_mouse,
-        encode_wheel as _encode_wheel,
         st_button_to_proto as _st_button_to_proto,
         view_point_to_cell as _view_point_to_cell,
     )
@@ -1687,9 +1687,9 @@ except ImportError as _term_imp_err:
         )
         from terminal.mouse import (
             BTN_RELEASE_X10 as _BTN_RELEASE_X10,
-            encode_click as _encode_click,
+            BTN_WHEEL_DOWN as _BTN_WHEEL_DOWN,
+            BTN_WHEEL_UP as _BTN_WHEEL_UP,
             encode_mouse as _encode_mouse,
-            encode_wheel as _encode_wheel,
             st_button_to_proto as _st_button_to_proto,
             view_point_to_cell as _view_point_to_cell,
         )
@@ -5663,6 +5663,32 @@ _MOUSE_DBLCLICK_MS = 700
 _WHEEL_AVOID_BOTTOM_ROWS = 4
 
 
+def _encode_pty_mouse(
+    term, button, col, row, press=True, motion=False, shift=False, meta=False, ctrl=False
+):
+    """Encode one mouse report via libghostty-vt. Empty if filtered.
+
+    Falls back to mouse.py only if the parser encoder is missing.
+    """
+    encode = getattr(getattr(term, "parser", None), "encode_mouse", None)
+    if encode is not None:
+        try:
+            seq = encode(
+                button, col, row,
+                press=press, motion=motion,
+                shift=shift, meta=meta, ctrl=ctrl,
+            )
+        except (RuntimeError, ValueError, TypeError, OSError):
+            seq = None
+        if seq is not None:
+            return seq
+    return _encode_mouse(
+        button, col, row, press=press, motion=motion,
+        sgr=bool(getattr(getattr(term, "screen", None), "mouse_sgr", True)),
+        shift=shift, meta=meta, ctrl=ctrl,
+    )
+
+
 def _mouse_force_release(term, view_id):
     """Emit SGR/X10 release for any held button and clear hold state."""
     if not _mouse_handling_enabled(term):
@@ -5673,10 +5699,9 @@ def _mouse_force_release(term, view_id):
         return
     btn, col, row = hold[0], hold[1], hold[2]
     try:
-        sgr = term.screen.mouse_sgr
-        term.send_string(
-            _encode_mouse(btn, col, row, press=False, sgr=sgr)
-        )
+        seq = _encode_pty_mouse(term, btn, col, row, press=False)
+        if seq:
+            term.send_string(seq)
         _MOUSE_LAST_CLICK[view_id] = (col, row, time.time())
     except (AttributeError, OSError):
         print("[ai_terminal] mouse force-release failed:\n%s" % traceback.format_exc())
@@ -5696,13 +5721,16 @@ def _schedule_mouse_release(view, gen, delay_ms):
     sublime.set_timeout(_fire, int(delay_ms))
 
 
-def _send_full_click(term, view_id, proto, col, row, sgr):
+def _send_full_click(term, view_id, proto, col, row, sgr=None):
     """Press+release one click and remember it for double-tap detection."""
     if not _mouse_handling_enabled(term):
         return
     _mouse_force_release(term, view_id)
-    term.send_string(_encode_click(proto, col, row, sgr=sgr))
+    press = _encode_pty_mouse(term, proto, col, row, press=True)
+    release = _encode_pty_mouse(term, proto, col, row, press=False)
+    term.send_string((press or "") + (release or ""))
     _MOUSE_LAST_CLICK[view_id] = (col, row, time.time())
+
 
 
 # Copy-first tap arm: view_id not needed — stored on term.
@@ -5855,10 +5883,11 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
         ):
             _send_full_click(term, vid, proto, col, row, sgr)
             return True
-        seq = _encode_mouse(proto, col, row, press=True, sgr=sgr)
+        seq = _encode_pty_mouse(term, proto, col, row, press=True)
         gen = 1
         _MOUSE_HOLD[vid] = (proto, col, row, gen, now, False)
-        term.send_string(seq)
+        if seq:
+            term.send_string(seq)
         _schedule_mouse_release(view, gen, _MOUSE_TAP_RELEASE_MS)
         return True
 
@@ -5883,10 +5912,11 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
         return True
 
     # Cell changed → drag motion (scroll-thumb grab).
-    seq = _encode_mouse(proto, col, row, press=True, motion=True, sgr=sgr)
+    seq = _encode_pty_mouse(term, proto, col, row, press=True, motion=True)
     gen = gen_prev + 1
     _MOUSE_HOLD[vid] = (proto, col, row, gen, t0, True)
-    term.send_string(seq)
+    if seq:
+        term.send_string(seq)
     _schedule_mouse_release(view, gen, _MOUSE_DRAG_RELEASE_MS)
     return True
 
@@ -5954,10 +5984,11 @@ def _route_mouse_wheel(view, term, amount):
     parts.append(arrow * n)
     if term.screen.mouse_tracking:
         col, row = _wheel_locus(view, term)
-        sgr = term.screen.mouse_sgr
+        btn = _BTN_WHEEL_UP if see_older else _BTN_WHEEL_DOWN
         parts.append(
             "".join(
-                _encode_wheel(see_older, col, row, sgr=sgr) for _ in range(n)
+                _encode_pty_mouse(term, btn, col, row, press=True) or ""
+                for _ in range(n)
             )
         )
     if n >= 3:
@@ -10523,9 +10554,11 @@ def _hover_poll_tick():
     _hover_last_cell[vid] = cell
     col, row = cell
     try:
-        sgr = term.screen.mouse_sgr
-        seq = _encode_mouse(_BTN_RELEASE_X10, col, row, press=True, motion=True, sgr=sgr)
-        term.send_string(seq)
+        seq = _encode_pty_mouse(
+            term, _BTN_RELEASE_X10, col, row, press=True, motion=True
+        )
+        if seq:
+            term.send_string(seq)
     except Exception as e:
         print(f"[ai_terminal] hover motion send failed: {e}")
 

@@ -388,12 +388,13 @@ class AlternateScreenTests(unittest.TestCase):
 @unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
 class ParserCloseTests(unittest.TestCase):
     """GhosttyParser.close() frees the terminal, render state, and (if
-    ever created) the key encoder/event -- previously nothing did, so a
-    closed tab leaked all of it until Sublime restarted. No tearDown here:
-    each test is responsible for its own single close() call, since a
-    second real free of an already-freed native handle (not exercised by
-    these tests, which test the idempotency guard, not double-freeing
+    ever created) the key/mouse encoder/event -- previously nothing did,
+    so a closed tab leaked all of it until Sublime restarted. No tearDown
+    here: each test is responsible for its own single close() call, since
+    a second real free of an already-freed native handle (not exercised
+    by these tests, which test the idempotency guard, not double-freeing
     past it) would be the actual bug this class exists to catch."""
+
 
     def test_close_is_safe_with_no_keys_ever_encoded(self):
         from terminal.screen import Screen
@@ -413,6 +414,64 @@ class ParserCloseTests(unittest.TestCase):
         parser = GhosttyParser(Screen(80, 24))
         parser.close()
         parser.close()  # must not double-free; no exception is the assertion
+
+    def test_close_frees_the_lazily_created_mouse_encoder_too(self):
+        from terminal.screen import Screen
+        parser = GhosttyParser(Screen(80, 24))
+        parser.encode_mouse(0, 1, 1)
+        self.assertTrue(hasattr(parser, "_mouse_encoder"))
+        parser.close()
+
+
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class NativeMouseEncodeTests(unittest.TestCase):
+    """GhosttyParser.encode_mouse respects live DECSET tracking/format."""
+
+    def setUp(self):
+        from terminal.screen import Screen
+        self.parser = GhosttyParser(Screen(80, 24))
+
+    def tearDown(self):
+        self.parser.close()
+
+    def test_no_tracking_encodes_empty(self):
+        self.assertEqual(self.parser.encode_mouse(0, 3, 4), "")
+
+    def test_sgr_click_after_decset_1000_1006(self):
+        self.parser.feed("\x1b[?1000h\x1b[?1006h")
+        self.assertEqual(self.parser.encode_mouse(0, 3, 4), "\x1b[<0;3;4M")
+        self.assertEqual(
+            self.parser.encode_mouse(0, 3, 4, press=False),
+            "\x1b[<0;3;4m",
+        )
+
+    def test_normal_mode_drops_motion(self):
+        self.parser.feed("\x1b[?1000h\x1b[?1006h")
+        self.assertEqual(
+            self.parser.encode_mouse(0, 1, 1, motion=True),
+            "",
+        )
+
+    def test_any_event_mode_reports_motion(self):
+        self.parser.feed("\x1b[?1003h\x1b[?1006h")
+        self.assertEqual(
+            self.parser.encode_mouse(0, 1, 1, motion=True),
+            "\x1b[<32;1;1M",
+        )
+
+    def test_same_cell_motion_is_deduped_natively(self):
+        self.parser.feed("\x1b[?1003h\x1b[?1006h")
+        self.assertEqual(
+            self.parser.encode_mouse(0, 2, 2, motion=True),
+            "\x1b[<32;2;2M",
+        )
+        self.assertEqual(self.parser.encode_mouse(0, 2, 2, motion=True), "")
+        self.assertEqual(
+            self.parser.encode_mouse(0, 3, 2, motion=True),
+            "\x1b[<32;3;2M",
+        )
+
+
 
 
 

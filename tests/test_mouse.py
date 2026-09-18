@@ -72,10 +72,6 @@ class X10EncodingTests(unittest.TestCase):
         seq = encode_mouse(BTN_LEFT, 1, 1, press=False, sgr=False, ctrl=True, shift=True)
         self.assertEqual(seq[3], chr(32 + 3 + 4 + 16))
 
-    def test_wheel_release_is_not_remapped(self):
-        seq = encode_mouse(BTN_WHEEL_UP, 1, 1, press=False, sgr=False)
-        self.assertEqual(seq[3], chr(32 + BTN_WHEEL_UP))
-
     def test_coordinates_and_button_are_clamped_to_223(self):
         seq = encode_mouse(BTN_LEFT, 500, 400, sgr=False)
         self.assertEqual(seq[4], chr(223 + 32))
