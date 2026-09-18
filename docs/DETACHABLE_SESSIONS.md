@@ -47,6 +47,13 @@ The broker replay buffer is recovery context, not a full transcript. Its
 default is 2 MiB and it is clamped to 1–256 MiB. Change
 `broker_scrollback_bytes` globally or on an individual profile if necessary.
 
+After a Sublime restart, reconnect still consumes that tee snapshot (raw
+bytes plus a replay boundary) and materializes host scrollback from
+libghostty rather than from the restored view's plain text. The same ring
+is mirrored to a circular `<pipe>.scrollback` file beside the registry
+record. The file is not a resume source after the broker process dies,
+and it has no separate setting.
+
 ## User recovery commands
 
 `Ai Terminal: Recover Session...` is the one recovery command -- it used to
