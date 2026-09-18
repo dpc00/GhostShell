@@ -386,6 +386,31 @@ class AlternateScreenTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class BrokerBootstrapHistoryTests(unittest.TestCase):
+    """finish_bootstrap must import native scrollback, not leave it empty."""
+
+    def setUp(self):
+        from terminal.screen import Screen
+
+        self.screen = Screen(20, 4, history_cap=10)
+        self.parser = GhosttyParser(self.screen)
+
+    def tearDown(self):
+        self.parser.close()
+
+    def test_finish_bootstrap_imports_scrolled_off_rows(self):
+        for i in range(6):
+            self.parser.feed_bootstrap("L%d\r\n" % i)
+        self.assertEqual(list(self.screen.history), [])
+
+        self.parser.finish_bootstrap()
+
+        hist = ["".join(ch for ch, _ in row).rstrip() for row in self.screen.history]
+        self.assertEqual(hist, ["L0", "L1", "L2"])
+        self.assertEqual("".join(self.screen.grid[0]).rstrip(), "L3")
+
+
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
 class ParserCloseTests(unittest.TestCase):
     """GhosttyParser.close() frees the terminal, render state, and (if
     ever created) the key/mouse encoder/event -- previously nothing did,

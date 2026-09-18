@@ -1162,7 +1162,7 @@ def test_broker_replay_marker_is_stripped_and_orders_live_output(monkeypatch):
     ]
 
 
-def test_restored_history_temporarily_keeps_grid_tail_for_boundary_replacement():
+def test_seed_restored_history_keeps_cap_plus_grid_rows():
     screen = ai_terminal._Screen(80, 2, history_cap=3)
     count = ai_terminal._seed_restored_history(
         screen, "old-zero\none\ntwo\nthree\nlive-a\nlive-b"
@@ -1174,30 +1174,57 @@ def test_restored_history_temporarily_keeps_grid_tail_for_boundary_replacement()
     assert count == 5
 
 
-def test_replay_boundary_replaces_only_restored_active_grid_tail(monkeypatch):
+def test_empty_replay_seeds_restored_view_text(monkeypatch):
     screen = ai_terminal._Screen(8, 2, history_cap=3)
-    seeded = ai_terminal._seed_restored_history(
-        screen, "older\nold-grid"
-    )
-    screen.grid[0][:3] = list("new")
-    screen.y = 0
-
     term = ai_terminal._Terminal.__new__(ai_terminal._Terminal)
     term._lock = threading.RLock()
     term._reattach_bootstrap = True
-    term._restored_rows_seeded = seeded
+    term._bootstrap_got_bytes = False
+    term._restored_text = "older\nold-grid"
     term.screen = screen
-    term.parser = types.SimpleNamespace(finish_bootstrap=lambda: None)
+    term.parser = types.SimpleNamespace(
+        finish_bootstrap=lambda: (_ for _ in ()).throw(
+            AssertionError("empty replay must not import native history")
+        )
+    )
     scheduled = []
     monkeypatch.setattr(ai_terminal, "_schedule_render", scheduled.append)
 
     term._on_broker_replay_complete()
 
     assert ["".join(ch for ch, _attr in row) for row in screen.history] == [
-        "older"
+        "older", "old-grid"
     ]
     assert term._reattach_bootstrap is False
     assert scheduled == [term]
+
+
+def test_replay_complete_publishes_native_history_without_popping(monkeypatch):
+    screen = ai_terminal._Screen(8, 2, history_cap=3)
+    screen.history.append([("seeded", 0)])
+    term = ai_terminal._Terminal.__new__(ai_terminal._Terminal)
+    term._lock = threading.RLock()
+    term._reattach_bootstrap = True
+    term._bootstrap_got_bytes = True
+    term._restored_text = "should-not-seed"
+    term.screen = screen
+
+    def finish():
+        screen.history.clear()
+        screen.history.append([("L0", 0)])
+
+    term.parser = types.SimpleNamespace(finish_bootstrap=finish)
+    scheduled = []
+    monkeypatch.setattr(ai_terminal, "_schedule_render", scheduled.append)
+
+    term._on_broker_replay_complete()
+
+    assert ["".join(ch for ch, _attr in row) for row in screen.history] == [
+        "L0"
+    ]
+    assert term._reattach_bootstrap is False
+    assert scheduled == [term]
+
 
 
 def test_broker_replay_budget_defaults_to_2_mib_and_is_bounded(monkeypatch):
