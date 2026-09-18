@@ -2,8 +2,7 @@
 coding-agent TUIs, keyed by the command used to launch them.
 
 This is the accumulated cost of running each agent through ai_terminal --
-prompt-detection quirks (caret.py), mouse/scroll quirks (ai_terminal.py's
-_mouse_handling_enabled kill switch), and the spawn_env each one needs. It
+prompt-detection quirks (caret.py) and the spawn_env each one needs. It
 exists so that knowledge survives a fresh settings file instead of being
 re-discovered: a detection script matches an installed executable's command
 name against CATALOG and looks up the profile to offer, rather than guessing.
@@ -21,13 +20,8 @@ CATALOG = {
         "detachable": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
         },
         "notes": (
-            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 forces the classic "
-            "main-screen renderer instead of the fixed ~60-row alt-screen "
-            "matrix, so real scrollback + ST folding work. Added in Claude "
-            "Code v2.1.132, takes precedence over CLAUDE_CODE_NO_FLICKER. "
             "Often CUPs to the footer to repaint token/cost between prompt "
             "updates -- caret.py treats that as noise, not a real caret move."
         ),
@@ -45,7 +39,6 @@ CATALOG = {
         "display_name": "OpenCode",
         "launch_command": ["opencode"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -65,7 +58,6 @@ CATALOG = {
         "display_name": "Grok Build",
         "launch_command": ["grok"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
         "notes": (
             "Keeps the hardware cursor on its input row (`│ > … │` "
@@ -91,16 +83,11 @@ CATALOG = {
         "display_name": "Qwen",
         "launch_command": ["qwen"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
         "notes": (
-            "Never emits a real ANSI scroll (Screen.history stays empty), "
-            "so DEC mouse tracking's click/drag handling broke scrolling "
-            "(\"can't scroll past the top\"). This is *why* ai_terminal's "
-            "global mouse_handling kill switch defaults off; do not set "
-            "mouse_handling: true on this profile."
+            "Never emits a real ANSI scroll (Screen.history stays empty)."
         ),
     },
     "vibe": {
@@ -111,14 +98,11 @@ CATALOG = {
             "AI_TERMINAL_LOG_LINES": "1",
             "LOG_LEVEL": "DEBUG",
         },
-        "mouse_handling": True,
         "notes": (
             "Textual app: manages its own scroll region and never emits a "
             "real ANSI scroll, so history stays empty and PageUp/PageDown "
             "reach nothing -- mouse wheel is the only way to see scrolled-off "
-            "content. Opts back into the global mouse_handling kill switch "
-            "(safe here: Vibe doesn't enable DEC mouse tracking's click/drag, "
-            "which is what broke Qwen)."
+            "content."
         ),
     },
     "kimi": {
@@ -143,7 +127,6 @@ CATALOG = {
         "display_name": "Mimo",
         "launch_command": ["mimo"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -153,7 +136,6 @@ CATALOG = {
         "display_name": "jcode",
         "launch_command": ["jcode"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -178,7 +160,6 @@ CATALOG = {
         "display_name": "Antigravity",
         "launch_command": ["agy"],
         "detachable": True,
-        "page_keys_to_pty": True,
         "spawn_env": {
             "AI_TERMINAL_LOG_LINES": "1",
         },
@@ -197,7 +178,7 @@ CATALOG = {
     # observed their mouse/scroll/alt-screen behavior, so unlike the entries
     # above they carry no quirk overrides, just a bare command name and the
     # same conservative defaults every profile gets. Expect some of these to
-    # need a real entry (quirks, page_keys_to_pty, etc.) once actually used.
+    # need a real entry once actually used.
     # Deliberately excludes ambiguous/collision-prone bare names from that
     # tool's list (sg, src, continue, kilo, roo, gh-copilot) -- too easy to
     # PATH-collide with an unrelated program of the same short name.
@@ -500,12 +481,6 @@ def profile_from_entry(entry):
     # quirks must survive Sync just like launch_command and spawn_env do.
     for key in (
         "detachable",
-        "force_main_screen",
-        "home_end_native",
-        "mouse_handling",
-        "page_keys_to_pty",
-        "pin_viewport",
-        "wheel_to_pty",
     ):
         if key in entry:
             profile[key] = entry[key]

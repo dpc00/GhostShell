@@ -20,12 +20,12 @@ def test_profile_schema_reports_typos_and_wrong_types():
     errors, _warnings = validate_profiles({
         "Codex": {
             "launch_comand": ["codex"],
-            "page_keys_to_pty": "yes",
+            "detachable": "yes",
             "spawn_env": {"COUNT": 3},
         }
     })
     assert any("unknown setting 'launch_comand'" in error for error in errors)
-    assert any("page_keys_to_pty must be boolean" in error for error in errors)
+    assert any("detachable must be boolean" in error for error in errors)
     assert any("spawn_env must contain only string values" in error for error in errors)
 
 

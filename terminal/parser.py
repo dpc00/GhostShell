@@ -9,9 +9,8 @@ _GROUND, _ESC, _CSI, _OSC = 0, 1, 2, 3
 
 
 class Parser:
-    def __init__(self, screen, force_main_screen=True):
+    def __init__(self, screen):
         self.s = screen
-        self.force_main_screen = force_main_screen
         self.state = _GROUND
         self.params = ""
         # Current SGR state. _fg/_bg are 1-based colour ids (0=default);
@@ -255,9 +254,7 @@ class Parser:
                         continue
                     mode = int(part)
                     if mode == 1049:
-                        if not self.force_main_screen:
-                            s.alt_screen = enable
-                        # Still record the mode for introspection.
+                        s.alt_screen = enable
                         s.set_private_mode(mode, enable)
                     else:
                         # Track mouse (1000/1002/1003/1006), bracketed paste

@@ -24,6 +24,11 @@ LAUNCHER_CHORDS = {
     "ctrl+alt+h": "ai_terminal_history",
 }
 
+AMP_TUI_KEYS = {
+    "ctrl+.": {"key": ".", "ctrl": True},
+    "shift+enter": {"key": "enter", "shift": True},
+}
+
 
 def _keymap():
     import json
@@ -57,3 +62,12 @@ def test_launcher_chords_are_not_shadowed_by_terminal_keypass():
             "%s is also bound to ai_terminal_keypress, so it would be swallowed "
             "inside terminal views" % chord
         )
+
+
+def test_amp_tui_keys_are_forwarded_with_modifiers():
+    bindings = _keymap()
+    for chord, args in AMP_TUI_KEYS.items():
+        hits = [b for b in bindings if b.get("keys") == [chord]]
+        assert len(hits) == 1, "%s bound %d times: %r" % (chord, len(hits), hits)
+        assert hits[0].get("command") == "ai_terminal_keypress"
+        assert hits[0].get("args") == args

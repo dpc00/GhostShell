@@ -170,9 +170,9 @@ class PrivateModeTests(unittest.TestCase):
         s = _feed("\x1b[?1000:2;1006h")
         self.assertEqual(s.private_modes, {1006})
 
-    def test_alt_screen_mode_recorded_even_when_forced_to_main(self):
-        s = _feed("\x1b[?1049h", force_main_screen=True)
-        self.assertFalse(s.alt_screen)
+    def test_alt_screen_mode_is_applied_and_recorded(self):
+        s = _feed("\x1b[?1049h")
+        self.assertTrue(s.alt_screen)
         self.assertIn(1049, s.private_modes)
 
     def test_non_private_set_mode_is_dropped(self):

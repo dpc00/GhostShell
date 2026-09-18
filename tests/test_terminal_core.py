@@ -190,14 +190,11 @@ class TestParser(unittest.TestCase):
         self.assertEqual(s.grid[0][2], " ")
         self.assertEqual(s.grid[0][3], "D")
 
-    def test_force_main_screen_ignores_alt(self):
+    def test_alt_screen_mode_is_applied(self):
         s = Screen(10, 3)
-        p = Parser(s, force_main_screen=True)
+        p = Parser(s)
         p.feed("\x1b[?1049h")
-        self.assertFalse(s.alt_screen)
-        p2 = Parser(Screen(10, 3), force_main_screen=False)
-        p2.feed("\x1b[?1049h")
-        self.assertTrue(p2.s.alt_screen)
+        self.assertTrue(s.alt_screen)
 
     def test_reverse_sgr_sets_flag(self):
         s = Screen(10, 3)

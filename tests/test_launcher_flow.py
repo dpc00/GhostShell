@@ -665,7 +665,7 @@ def test_spawn_is_ready_to_answer_keyboard_probe_before_child_starts(monkeypatch
     )
     monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
     monkeypatch.setattr(
-        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+        ai_terminal, "_make_parser", lambda screen: FakeParser()
     )
     monkeypatch.setattr(ai_terminal._Terminal, "_ensure_writer", wrapped_ensure)
     monkeypatch.setattr(
@@ -755,7 +755,7 @@ def test_do_render_defers_while_synchronized_output_is_open(monkeypatch):
     )
     monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
     monkeypatch.setattr(
-        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser(screen)
+        ai_terminal, "_make_parser", lambda screen: FakeParser(screen)
     )
     monkeypatch.setattr(
         sys.modules["sublime"], "load_settings",
@@ -1033,7 +1033,7 @@ def test_kill_closes_the_parser_once_the_reader_thread_has_stopped(monkeypatch):
     )
     monkeypatch.setattr(ai_terminal, "_log_tab_text", lambda profile_name=None: False)
     monkeypatch.setattr(
-        ai_terminal, "_make_parser", lambda screen, force_main_screen: FakeParser()
+        ai_terminal, "_make_parser", lambda screen: FakeParser()
     )
     monkeypatch.setattr(
         sys.modules["sublime"], "load_settings",

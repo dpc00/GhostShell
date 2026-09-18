@@ -37,7 +37,7 @@ DLL_PATH = os.environ.get("GHOSTTY_VT_DLL") or DEFAULT_DLL_PATH
 
 def _make_parser(cols=80, rows=24):
     screen = Screen(cols, rows, history_cap=300)
-    parser = GhosttyParser(screen, force_main_screen=True, dll_path=DLL_PATH)
+    parser = GhosttyParser(screen, dll_path=DLL_PATH)
     return screen, parser
 
 

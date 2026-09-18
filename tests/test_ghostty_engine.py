@@ -26,9 +26,7 @@ from terminal.colors import (
 )
 from terminal.ghostty_engine import (
     GhosttyParser,
-    _AltScreenFilter,
     _color_id,
-    _strip_alt_screen,
 )
 
 
@@ -37,27 +35,31 @@ def _detached_parser():
     return GhosttyParser.__new__(GhosttyParser)
 
 
-class SynchronizedScrollbackTests(unittest.TestCase):
+class RawVtInputTests(unittest.TestCase):
     class _Native:
         def terminal_vt_write(self, _term, _data, _length):
             pass
 
     def _parser(self):
         parser = _detached_parser()
-        parser.force_main_screen = False
-        parser._sync_open = False
-        parser._replace_scroll = False
-        parser._replace_origin = None
         parser._g = self._Native()
         parser._term = None
         parser.s = type("ScreenStub", (), {"sync_output": False})()
+        parser._mode = lambda _mode: False
         return parser
 
-    def test_open_frame_defers_all_python_synchronization(self):
+    def test_feed_passes_vt_sequences_to_ghostty_unchanged(self):
         parser = self._parser()
-        parser._sync = lambda: self.fail("open synchronized frame must not sync")
-        parser.feed("\x1b[?2026hpartial frame")
-        self.assertTrue(parser.s.sync_output)
+        writes = []
+        parser._g.terminal_vt_write = (
+            lambda _term, data, length: writes.append(bytes(data[:length]))
+        )
+        parser._sync = lambda: None
+
+        text = "before\x1b[?1049;2004h\x1b[Hinside\x1b[?1049;2004lafter"
+        parser.feed(text)
+
+        self.assertEqual(writes, [text.encode()])
 
     def test_broker_bootstrap_advances_native_terminal_without_sync(self):
         parser = self._parser()
@@ -71,58 +73,19 @@ class SynchronizedScrollbackTests(unittest.TestCase):
 
         self.assertEqual(writes, [b"restored replay"])
 
-    def test_closing_frame_synchronizes_once(self):
+    def test_open_synchronized_frame_defers_python_sync(self):
         parser = self._parser()
-        parser._sync_open = True
+        parser._mode = lambda _mode: True
+        parser._sync = lambda: self.fail("open synchronized frame must not sync")
+        parser.feed("\x1b[?2026hpartial frame")
+        self.assertTrue(parser.s.sync_output)
+
+    def test_closed_synchronized_frame_synchronizes_once(self):
+        parser = self._parser()
         calls = []
         parser._sync = lambda: calls.append("sync")
         parser.feed("rest of frame\x1b[?2026l")
         self.assertEqual(calls, ["sync"])
-
-    def test_main_screen_home_replay_clears_stale_active_grid(self):
-        parser = self._parser()
-        parser.force_main_screen = True
-        parser._alt_screen_filter = type(
-            "PassThrough", (), {"feed": staticmethod(lambda text: text)}
-        )()
-        writes = []
-        parser._g.terminal_vt_write = (
-            lambda _term, data, length: writes.append(bytes(data[:length]))
-        )
-        parser._sync = lambda: None
-
-        parser.feed("\x1b[?2026h\x1b[Hshort repaint\x1b[?2026l")
-
-        self.assertEqual(
-            writes,
-            [b"\x1b[?2026h\x1b[H\x1b[2Jshort repaint\x1b[?2026l"],
-        )
-
-    def test_alt_screen_home_replay_is_not_modified(self):
-        parser = self._parser()
-        writes = []
-        parser._g.terminal_vt_write = (
-            lambda _term, data, length: writes.append(bytes(data[:length]))
-        )
-        parser._sync = lambda: None
-
-        parser.feed("\x1b[?2026h\x1b[Hpartial TUI repaint\x1b[?2026l")
-
-        self.assertEqual(
-            writes,
-            [b"\x1b[?2026h\x1b[Hpartial TUI repaint\x1b[?2026l"],
-        )
-
-    def test_open_home_dump_defers_native_scrollback_walk(self):
-        parser = _detached_parser()
-        parser._sync_open = True
-        parser._replace_scroll = True
-
-        def unexpected_native_read(_kind):
-            self.fail("open synchronized replay must not read scrollback")
-
-        parser._get_size = unexpected_native_read
-        parser._sync_scrollback()
 
     def test_resize_forces_full_scrollback_rebuild_on_next_sync(self):
         # Screen.resize() only clips/pads cells -- it does not reflow (no
@@ -164,70 +127,6 @@ def _style_color(tag, palette=0, rgb=(0, 0, 0)):
     elif tag == gvt.STYLE_COLOR_RGB:
         color.value.rgb = gvt.GhosttyColorRgb(*rgb)
     return color
-
-
-class StripAltScreenTests(unittest.TestCase):
-    def test_alt_screen_enter_and_exit_are_removed(self):
-        self.assertEqual(
-            _strip_alt_screen("a\x1b[?1049hb\x1b[?1049lc"), "abc"
-        )
-        self.assertEqual(_strip_alt_screen("\x1b[?47h\x1b[?1047l"), "")
-
-    def test_other_private_modes_survive(self):
-        text = "\x1b[?1000h\x1b[?2004h"
-        self.assertEqual(_strip_alt_screen(text), text)
-
-    def test_alt_screen_combined_with_another_mode_is_still_stripped(self):
-        # A prior regex only matched an isolated "?1049h" and silently let
-        # combined-parameter forms through -- confirmed live 2026-08-25.
-        self.assertEqual(_strip_alt_screen("\x1b[?1049;2004h"), "\x1b[?2004h")
-        self.assertEqual(_strip_alt_screen("\x1b[?2004;1049h"), "\x1b[?2004h")
-        self.assertEqual(_strip_alt_screen("\x1b[?1;47h"), "\x1b[?1h")
-
-    def test_text_without_private_modes_is_returned_unchanged(self):
-        text = "plain \x1b[31mred\x1b[0m"
-        self.assertIs(_strip_alt_screen(text), text)
-
-
-class AltScreenStreamFilterTests(unittest.TestCase):
-    def _assert_every_split(self, text, expected):
-        for split in range(len(text) + 1):
-            stream_filter = _AltScreenFilter()
-            actual = stream_filter.feed(text[:split])
-            actual += stream_filter.feed(text[split:])
-            actual += stream_filter.flush()
-            self.assertEqual(actual, expected, "split at byte %d" % split)
-
-    def test_enter_and_exit_work_at_every_read_boundary(self):
-        self._assert_every_split("a\x1b[?1049hb\x1b[?1049lc", "abc")
-        self._assert_every_split("a\x1b[?47hb\x1b[?1047lc", "abc")
-
-    def test_combined_modes_work_at_every_read_boundary(self):
-        self._assert_every_split(
-            "a\x1b[?1049;2004hb\x1b[?2004;1049lc",
-            "a\x1b[?2004hb\x1b[?2004lc",
-        )
-
-    def test_one_character_reads_preserve_text_and_unrelated_csi(self):
-        text = "plain \x1b[31mred\x1b[0m \x1b[?1049hinside\x1b[?1049l done"
-        stream_filter = _AltScreenFilter()
-        actual = "".join(stream_filter.feed(ch) for ch in text)
-        actual += stream_filter.flush()
-        self.assertEqual(actual, "plain \x1b[31mred\x1b[0m inside done")
-
-    def test_malformed_parameter_run_is_bounded_and_flushed_unchanged(self):
-        stream_filter = _AltScreenFilter(pending_max=8)
-        malformed = "\x1b[?123456789"
-        self.assertEqual(stream_filter.feed(malformed), malformed)
-        self.assertEqual(stream_filter.pending, "")
-
-    def test_reset_discards_an_incomplete_sequence(self):
-        stream_filter = _AltScreenFilter()
-        self.assertEqual(stream_filter.feed("before\x1b[?104"), "before")
-        self.assertEqual(stream_filter.pending, "\x1b[?104")
-        stream_filter.reset()
-        self.assertEqual(stream_filter.feed("9hafter"), "9hafter")
-        self.assertEqual(stream_filter.pending, "")
 
 
 class ColorIdTests(unittest.TestCase):
@@ -386,7 +285,7 @@ class WritePtyCallbackTests(unittest.TestCase):
     def setUp(self):
         from terminal.screen import Screen
         self.responses = []
-        self.parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        self.parser = GhosttyParser(Screen(80, 24))
         self.parser.bind_write_pty(self.responses.append)
 
     def tearDown(self):
@@ -394,7 +293,7 @@ class WritePtyCallbackTests(unittest.TestCase):
 
     def test_unbound_sink_is_a_noop_not_a_crash(self):
         from terminal.screen import Screen
-        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser = GhosttyParser(Screen(80, 24))
         try:
             parser.feed("\x1b[c")  # DA1 query, sink never bound
         finally:
@@ -436,7 +335,7 @@ class SyncOutputModeTests(unittest.TestCase):
     def setUp(self):
         from terminal.screen import Screen
         self.screen = Screen(80, 24)
-        self.parser = GhosttyParser(self.screen, force_main_screen=False)
+        self.parser = GhosttyParser(self.screen)
 
     def tearDown(self):
         self.parser._g.terminal_free(self.parser._term)
@@ -463,6 +362,30 @@ class SyncOutputModeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
+class AlternateScreenTests(unittest.TestCase):
+    def setUp(self):
+        from terminal.screen import Screen
+
+        self.screen = Screen(20, 4)
+        self.parser = GhosttyParser(self.screen)
+
+    def tearDown(self):
+        self.parser.close()
+
+    def test_decset_1049_uses_ghosttys_real_alternate_buffer(self):
+        self.parser.feed("primary")
+        self.parser.feed("\x1b[?1049halt\x1b[?2004h")
+
+        self.assertTrue(self.screen.alt_screen)
+        self.assertIn("alt", "".join(self.screen.grid[0]))
+        self.assertIn(2004, self.screen.private_modes)
+
+        self.parser.feed("\x1b[?1049l")
+        self.assertFalse(self.screen.alt_screen)
+        self.assertEqual("".join(self.screen.grid[0][:7]), "primary")
+
+
+@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
 class ParserCloseTests(unittest.TestCase):
     """GhosttyParser.close() frees the terminal, render state, and (if
     ever created) the key encoder/event -- previously nothing did, so a
@@ -474,12 +397,12 @@ class ParserCloseTests(unittest.TestCase):
 
     def test_close_is_safe_with_no_keys_ever_encoded(self):
         from terminal.screen import Screen
-        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser = GhosttyParser(Screen(80, 24))
         parser.close()  # no exception is the assertion
 
     def test_close_frees_the_lazily_created_key_encoder_too(self):
         from terminal.screen import Screen
-        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser = GhosttyParser(Screen(80, 24))
         # Allocates _key_encoder/_key_event on first use -- see encode_key.
         parser.encode_key("a")
         self.assertTrue(hasattr(parser, "_key_encoder"))
@@ -487,327 +410,10 @@ class ParserCloseTests(unittest.TestCase):
 
     def test_close_is_idempotent(self):
         from terminal.screen import Screen
-        parser = GhosttyParser(Screen(80, 24), force_main_screen=False)
+        parser = GhosttyParser(Screen(80, 24))
         parser.close()
         parser.close()  # must not double-free; no exception is the assertion
 
-
-def _cells(text):
-    return [(ch, 0) for ch in text]
-
-
-def _row_texts(rows):
-    return ["".join(ch for ch, _ in row).rstrip() for row in rows]
-
-
-def _history_lines(screen):
-    return ["".join(ch for ch, _ in row).rstrip() for row in screen.history]
-
-
-def _visible_text(screen):
-    hist = "\n".join(_history_lines(screen))
-    live = "\n".join("".join(screen.grid[r]).rstrip() for r in range(screen.rows))
-    return hist + "\n" + live
-
-
-@unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
-class HomeReplaceScrollTests(unittest.TestCase):
-    """Codex (and similar) home+dump a full transcript inside CSI ?2026.
-
-    Overflow must replace Screen.history, not append another copy. A
-    production change that went back to always-append would make LINE-00
-    appear twice after the second paint.
-    """
-
-    def setUp(self):
-        from terminal.screen import Screen
-
-        self.screen = Screen(20, 4, history_cap=200)
-        self.parser = GhosttyParser(self.screen, force_main_screen=True)
-
-    def tearDown(self):
-        self.parser._g.terminal_free(self.parser._term)
-
-    def test_2026_home_dump_does_not_duplicate_transcript_in_history(self):
-        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
-        self.parser.feed(first)
-        replay = "\x1b[?2026h\x1b[H" + first + "LINE-99\n" + "\x1b[?2026l"
-        self.parser.feed(replay)
-        self.assertEqual(_visible_text(self.screen).count("LINE-00"), 1)
-
-    def test_split_2026_home_dump_does_not_duplicate(self):
-        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
-        self.parser.feed(first)
-        self.parser.feed("\x1b[?2026h\x1b[H" + first[:40])
-        self.parser.feed(first[40:] + "LINE-99\n\x1b[?2026l")
-        self.assertEqual(_visible_text(self.screen).count("LINE-00"), 1)
-
-    def test_fifty_testing_agent_dumps_keep_one_copy(self):
-        from terminal.screen import Screen
-        from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
-
-        self.parser._g.terminal_free(self.parser._term)
-        self.screen = Screen(80, 24, history_cap=2000)
-        self.parser = GhosttyParser(self.screen, force_main_screen=True)
-        lines = []
-        for n in range(50):
-            lines.extend(make_turn_lines(n, body_lines=1))
-            self.parser.feed(encode_replay_frame(lines))
-        vis = _visible_text(self.screen)
-        self.assertEqual(vis.count("TURN-00"), 2)
-        self.assertEqual(vis.count("TURN-49"), 2)
-
-    def test_plain_scroll_without_home_still_appends(self):
-        self.parser.feed("AAA\nBBB\nCCC\nDDD\nEEE\n")
-        n1 = len(self.screen.history)
-        self.parser.feed("FFF\nGGG\n")
-        self.assertGreater(len(self.screen.history), n1)
-        joined = "\n".join(_history_lines(self.screen))
-        self.assertIn("AAA", joined)
-        self.assertIn("EEE", joined)
-
-    def test_growing_replay_dumps_keep_earliest_turn_once(self):
-        from terminal.screen import Screen
-        from tests.mock_agent_cli import encode_replay_frame, make_turn_lines
-
-        self.parser._g.terminal_free(self.parser._term)
-        self.screen = Screen(80, 24, history_cap=2000)
-        self.parser = GhosttyParser(self.screen, force_main_screen=True)
-        lines = []
-        for n in range(3):
-            lines.extend(make_turn_lines(n))
-        self.parser.feed(encode_replay_frame(lines))
-        for n in range(3, 5):
-            lines.extend(make_turn_lines(n))
-            self.parser.feed(encode_replay_frame(lines))
-        present = set(_history_lines(self.screen)) | {
-            "".join(self.screen.grid[r]).rstrip() for r in range(self.screen.rows)
-        }
-        missing = [line for line in lines if line not in present]
-        self.assertEqual(missing, [], "earliest-turn lines dropped from history+grid")
-        vis = _visible_text(self.screen)
-        self.assertEqual(vis.count("› user prompt TURN-00"), 1)
-        self.assertEqual(vis.count("TURN-00"), 29)
-
-    def test_home_dump_preserves_unrelated_prior_scrollback(self):
-        from terminal.screen import Screen
-
-        self.parser._g.terminal_free(self.parser._term)
-        self.screen = Screen(80, 4, history_cap=200)
-        self.parser = GhosttyParser(self.screen, force_main_screen=True)
-        prior = "\n".join("UNIQUE-%02d" % i for i in range(8)) + "\n"
-        self.parser.feed(prior)
-        first = "\n".join("LINE-%02d" % i for i in range(12)) + "\n"
-        self.parser.feed("\x1b[?2026h\x1b[H" + first + "\x1b[?2026l")
-        vis = _visible_text(self.screen)
-        self.assertIn("UNIQUE-00", vis)
-        self.assertEqual(vis.count("LINE-00"), 1)
-
-    def test_resize_then_home_dump_reflows_old_scrollback(self):
-        # The actual live-verified bug (2026-09-02): resizing alone changes
-        # nothing about already-retired scrollback -- old rows keep
-        # whatever wrapping they were originally drawn at unless a later
-        # synchronized home+full-transcript repaint (real resizing apps
-        # send one) is genuinely re-extracted from the native terminal,
-        # which does reflow, rather than trusted-and-skipped via a
-        # shortcut that assumed Screen.resize() had already reflowed it
-        # (it never did -- see GhosttyParser.resize()'s comment).
-        long_line = "REWRAP-ME-" + "".join(str(i % 10) for i in range(25))
-        self.assertEqual(len(long_line), 35)
-        # Screen is 20 cols (setUp): this auto-wraps across 2 physical rows
-        # with no explicit newline, so the 35-char run is never contiguous
-        # in _visible_text (a "\n" from the row join falls inside it).
-        self.parser.feed(long_line + "\n")
-        for i in range(6):
-            self.parser.feed("filler-%d\n" % i)
-        self.assertNotIn(long_line, _visible_text(self.screen))
-
-        self.parser.resize(40, 4)
-        self.parser.feed("\x1b[?2026h\x1b[H" + long_line + "\n\x1b[?2026l")
-
-        # At 40 cols the same 35 characters fit on one row -- contiguous
-        # in _visible_text only if the resize's synchronized repaint was
-        # actually re-extracted from native (reflowed) history, not
-        # skipped.
-        self.assertIn(long_line, _visible_text(self.screen))
-
-
-class ReplaceScrollMergeTests(unittest.TestCase):
-    """Home+dump history merge: keep unique old rows, drop reproduced ones.
-
-    A production change that kept the whole prior history would duplicate
-    LINE-00; one that cleared it would drop UNIQUE-A and spliced TURN-00.
-    """
-
-    def test_full_replay_keeps_one_copy(self):
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [_cells("LINE-%02d" % i) for i in range(8)]
-        new = [_cells("LINE-%02d" % i) for i in range(9)]
-        merged = merge_replace_scroll_history(old, new, splice_window=4)
-        self.assertEqual(_row_texts(merged), ["LINE-%02d" % i for i in range(9)])
-
-    def test_spliced_overflow_prefers_clean_old_row(self):
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [_cells("user prompt TURN-00"), _cells("TURN-00 L00"), _cells("TURN-00 L01")]
-        new = [
-            _cells("user prompt TURN-00ent reply line 2005"),
-            _cells("TURN-00 L00"),
-            _cells("TURN-00 L01"),
-            _cells("TURN-00 L02"),
-        ]
-        merged = merge_replace_scroll_history(old, new, splice_window=24)
-        texts = _row_texts(merged)
-        self.assertEqual(texts[0], "user prompt TURN-00")
-        self.assertNotIn("ent reply line 2005", texts[0])
-        self.assertEqual(texts.count("user prompt TURN-00"), 1)
-        self.assertEqual(texts[1:], ["TURN-00 L00", "TURN-00 L01", "TURN-00 L02"])
-
-    def test_unrelated_prior_rows_are_kept(self):
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [_cells("UNIQUE-A"), _cells("UNIQUE-B"), _cells("LINE-00"), _cells("LINE-01")]
-        new = [_cells("LINE-00"), _cells("LINE-01"), _cells("LINE-02")]
-        merged = merge_replace_scroll_history(old, new, splice_window=4)
-        self.assertEqual(
-            _row_texts(merged),
-            ["UNIQUE-A", "UNIQUE-B", "LINE-00", "LINE-01", "LINE-02"],
-        )
-
-    def test_ambiguous_repeated_match_prefers_most_recent_occurrence(self):
-        """Codex-style tools redraw from turn 0 on every single dump, so
-        "TURN-00"-shaped text is not unique across accumulated history --
-        it recurs once per prior replay cycle. Aligning to the FIRST
-        (leftmost/earliest) matching old row instead of the LAST (most
-        recent) one shifts every subsequent row comparison onto unrelated
-        old rows, which can both let real splice corruption through
-        uncorrected AND drop genuinely unique older content -- this is the
-        2026-08-27 live-reproduced root cause (ai/TODO.md), traced to a
-        `break` on the first match in the old_rows scan below.
-        """
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [
-            _cells("user prompt TURN-00"),  # 0: stale, from an earlier cycle
-            _cells("STALE-ONLY-HERE"),      # 1: unique marker after the stale copy
-            _cells("user prompt TURN-00"),  # 2: the correct, most-recent copy
-            _cells("FRESH-ONLY-HERE"),      # 3: unique marker after the fresh copy
-        ]
-        # This dump only continues the FRESH copy (its own next row is the
-        # fresh marker, not the stale one).
-        new = [
-            _cells("user prompt TURN-00"),
-            _cells("FRESH-ONLY-HERE"),
-            _cells("user prompt TURN-01"),
-        ]
-        merged = merge_replace_scroll_history(old, new, splice_window=4)
-        texts = _row_texts(merged)
-        self.assertEqual(
-            texts,
-            [
-                "user prompt TURN-00",
-                "STALE-ONLY-HERE",
-                "user prompt TURN-00",
-                "FRESH-ONLY-HERE",
-                "user prompt TURN-01",
-            ],
-        )
-
-    def test_mid_stream_start_finds_alignment_via_later_rows(self):
-        """A dump chunk boundary can land such that new_rows[0] is a
-        corrupted/unmatched row (real splice artifact, or simply mid-
-        transcript content with no prior counterpart) while later rows in
-        the SAME chunk clearly continue a run already in old_rows. Row-0-
-        only alignment (the original design) finds nothing, falls back to
-        keep=len(old_rows), and then BOTH duplicates the shared rows AND
-        never gets a chance to protect anything -- this is the real
-        2026-08-27 live-reproduced defect (ai/TODO.md), distinct from the
-        ambiguous-repeat case above: here there is no candidate match for
-        new_rows[0] AT ALL, so the fix must search evidence across
-        multiple rows, not just retry the same row-0 anchor differently.
-        """
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [
-            _cells("PRE-A"),
-            _cells("PRE-B"),
-            _cells("SHARED-01"),
-            _cells("SHARED-02"),
-            _cells("SHARED-03"),
-        ]
-        new = [
-            _cells("CORRUPT-ROW-0-no-match-anywhere"),
-            _cells("SHARED-01"),
-            _cells("SHARED-02"),
-            _cells("SHARED-03"),
-            _cells("SHARED-04"),
-        ]
-        merged = merge_replace_scroll_history(old, new, splice_window=4)
-        texts = _row_texts(merged)
-        # SHARED-01/02/03 must appear exactly once each -- the defining
-        # failure mode of row-0-only alignment is duplicating them (kept
-        # in old_rows' tail AND re-appended fresh from new_rows).
-        for shared in ("SHARED-01", "SHARED-02", "SHARED-03"):
-            self.assertEqual(
-                texts.count(shared), 1, f"{shared} must appear exactly once, got {texts}"
-            )
-        # The genuinely new tail row must be present.
-        self.assertIn("SHARED-04", texts)
-        # SHARED-03 must be immediately followed by SHARED-04 (the real
-        # continuation), not duplicated content in between.
-        self.assertEqual(texts[texts.index("SHARED-03") + 1], "SHARED-04")
-
-    def test_wrapped_replay_aligns_on_first_overflow_line(self):
-        from terminal.ghostty_engine import merge_replace_scroll_history
-
-        old = [
-            _cells("LINE-00"),
-            _cells("       LINE-01"),
-            _cells("              LINE-0"),
-            _cells("2"),
-        ]
-        new = [
-            _cells("LINE-00   LINE-10"),
-            _cells("       LINE-01   LIN"),
-            _cells("E-11          LINE-0"),
-            _cells("2"),
-            _cells(" LINE-03"),
-        ]
-        merged = merge_replace_scroll_history(old, new, splice_window=4)
-        texts = _row_texts(merged)
-        self.assertEqual(texts[0], "LINE-00")
-        self.assertEqual(sum(1 for t in texts if "LINE-00" in t), 1)
-
-
-class ReplaceScrollStateTests(unittest.TestCase):
-    def test_2026_then_home_marks_replace(self):
-        from terminal.ghostty_engine import update_replace_scroll
-
-        open_, replace = update_replace_scroll(False, False, "\x1b[?2026h\x1b[Hhello")
-        self.assertTrue(open_)
-        self.assertTrue(replace)
-
-    def test_home_after_open_batch_from_prior_feed(self):
-        from terminal.ghostty_engine import update_replace_scroll
-
-        open_, replace = update_replace_scroll(True, False, "\x1b[Hmore")
-        self.assertTrue(open_)
-        self.assertTrue(replace)
-
-    def test_replace_latches_across_chunks_until_2026_closes(self):
-        from terminal.ghostty_engine import update_replace_scroll
-
-        open_, replace = update_replace_scroll(True, True, "LINE-00\nLINE-01\n")
-        self.assertTrue(open_)
-        self.assertTrue(replace)
-
-    def test_2026_without_home_does_not_replace(self):
-        from terminal.ghostty_engine import update_replace_scroll
-
-        open_, replace = update_replace_scroll(False, False, "\x1b[?2026hspin\x1b[?2026l")
-        self.assertFalse(open_)
-        self.assertFalse(replace)
 
 
 if __name__ == "__main__":

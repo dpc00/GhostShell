@@ -12,14 +12,6 @@ def test_every_catalog_agent_generates_a_detachable_valid_profile():
         assert errors == [], (command, errors)
 
 
-def test_page_key_owners_keep_their_keys_in_generated_profiles():
-    expected = {"agy", "grok", "jcode", "mimo", "opencode", "qwen"}
-    actual = {
-        command for command, entry in CATALOG.items()
-        if profile_from_entry(entry).get("page_keys_to_pty")
-    }
-    assert actual == expected
-
 
 def test_catalog_metadata_and_legacy_log_env_are_not_generated_settings():
     profile = profile_from_entry(CATALOG["claude"])
