@@ -14,6 +14,7 @@ import argparse
 import ctypes
 import json
 import os
+import struct
 import subprocess
 import sys
 import threading
@@ -449,21 +450,152 @@ class _Pty:
             self._heap_buf = None
 
 
+_GSB_MAGIC = b"GSB1"
+_GSB_HEADER = struct.Struct("<4sIII")
+_GSB_HEADER_SIZE = _GSB_HEADER.size
+_GSB_FSYNC_BYTES = 256 * 1024
+_GSB_FSYNC_S = 1.0
+
 class _Scrollback:
-    def __init__(self, max_bytes):
-        self._max = max_bytes
+    def __init__(self, max_bytes, path=None):
+        self._max = max(0, int(max_bytes))
         self._buf = bytearray()
         self._lock = threading.Lock()
+        self._path = path
+        self._file = None
+        self._start = 0
+        self._length = 0
+        self._unsynced = 0
+        self._last_fsync = time.monotonic()
+        if path:
+            self._open_file(path)
+
+    def _open_file(self, path):
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        handle = open(path, "w+b")
+        handle.write(_GSB_HEADER.pack(_GSB_MAGIC, self._max, 0, 0))
+        if self._max:
+            handle.truncate(_GSB_HEADER_SIZE + self._max)
+        handle.flush()
+        self._file = handle
 
     def append(self, data):
+        if not data:
+            return
         with self._lock:
             self._buf.extend(data)
             if len(self._buf) > self._max:
                 del self._buf[: len(self._buf) - self._max]
+            self._append_file(data)
+            self._maybe_fsync_locked()
+
+    def _append_file(self, data):
+        if self._file is None or not self._max:
+            return
+        cap = self._max
+        if len(data) >= cap:
+            data = data[-cap:]
+            self._write_ring(0, data)
+            self._start = 0
+            self._length = cap
+            self._write_header()
+            self._unsynced += len(data)
+            return
+        pos = (self._start + self._length) % cap
+        self._write_ring(pos, data)
+        new_total = self._length + len(data)
+        if new_total > cap:
+            self._start = (self._start + new_total - cap) % cap
+            self._length = cap
+        else:
+            self._length = new_total
+        self._write_header()
+        self._unsynced += len(data)
+
+    def _write_ring(self, pos, data):
+        cap = self._max
+        first = cap - pos
+        self._file.seek(_GSB_HEADER_SIZE + pos)
+        if len(data) <= first:
+            self._file.write(data)
+            return
+        self._file.write(data[:first])
+        self._file.seek(_GSB_HEADER_SIZE)
+        self._file.write(data[first:])
+
+    def _write_header(self):
+        self._file.seek(0)
+        self._file.write(_GSB_HEADER.pack(
+            _GSB_MAGIC, self._max, self._start, self._length
+        ))
+
+    def _fsync_locked(self):
+        if self._file is None:
+            return
+        self._file.flush()
+        os.fsync(self._file.fileno())
+        self._unsynced = 0
+        self._last_fsync = time.monotonic()
+
+    def _maybe_fsync_locked(self):
+        if self._file is None:
+            return
+        if (self._unsynced >= _GSB_FSYNC_BYTES
+                or (time.monotonic() - self._last_fsync) >= _GSB_FSYNC_S):
+            self._fsync_locked()
 
     def snapshot(self):
         with self._lock:
+            self._fsync_locked()
             return bytes(self._buf)
+
+    def close(self):
+        path = None
+        with self._lock:
+            if self._file is None and not self._path:
+                return
+            if self._file is not None:
+                try:
+                    self._fsync_locked()
+                finally:
+                    self._file.close()
+                    self._file = None
+            path = self._path
+            self._path = None
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+def read_scrollback_file(path):
+    """Reconstruct snapshot bytes from a GSB1 file. Tests/debug only."""
+    with open(path, "rb") as handle:
+        header = handle.read(_GSB_HEADER_SIZE)
+        if len(header) != _GSB_HEADER_SIZE:
+            return b""
+        magic, cap, start, length = _GSB_HEADER.unpack(header)
+        if magic != _GSB_MAGIC or cap == 0 or length == 0:
+            return b""
+        length = min(length, cap)
+        start %= cap
+        payload = handle.read(cap)
+        if len(payload) < cap:
+            payload += b"\x00" * (cap - len(payload))
+        end = start + length
+        if end <= cap:
+            return payload[start:end]
+        return payload[start:] + payload[:end - cap]
+
+
+def _scrollback_path_for_registry(registry_path):
+    if not registry_path:
+        return None
+    root, _ext = os.path.splitext(registry_path)
+    return root + ".scrollback"
 
 
 def _pipe_path(name):
@@ -855,10 +987,11 @@ def _publish_registry(path, pipe_name, profile_name, cwd, child_argv, child_pid=
 def _remove_registry(path):
     if not path:
         return
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+    for target in (path, _scrollback_path_for_registry(path)):
+        try:
+            os.unlink(target)
+        except FileNotFoundError:
+            pass
 
 
 def main():
@@ -903,7 +1036,10 @@ def main():
     pty.start()
     print("[agent_broker] spawned pid=%d cwd=%s argv=%s" % (pty.pid, cwd, child_argv))
 
-    scrollback = _Scrollback(args.scrollback_bytes)
+    scrollback = _Scrollback(
+        args.scrollback_bytes,
+        path=_scrollback_path_for_registry(args.registry_file),
+    )
     out_server = _OutputServer(args.pipe_name, pty, scrollback)
     in_server = _InputServer(
         args.pipe_name, pty, on_disconnect=out_server.disconnect_client
@@ -933,6 +1069,7 @@ def main():
             time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(), pty.exit_code(),
         ))
         pty.kill()
+        scrollback.close()
         _remove_registry(args.registry_file)
     print("[agent_broker] child exited, broker stopping")
 
