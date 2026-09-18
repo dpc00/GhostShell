@@ -425,10 +425,14 @@ GhosttyTerminalColorSchemeFn = ctypes.CFUNCTYPE(
 
 # DEC private modes (ansi=false -> packed value == raw mode number,
 # see ghostty_mode_new() in modes.h: value | (ansi << 15)).
+MODE_X10_MOUSE = 9
 MODE_NORMAL_MOUSE = 1000
 MODE_BUTTON_MOUSE = 1002
 MODE_ANY_MOUSE = 1003
+MODE_UTF8_MOUSE = 1005
 MODE_SGR_MOUSE = 1006
+MODE_URXVT_MOUSE = 1015
+MODE_SGR_PIXELS = 1016
 MODE_BRACKETED_PASTE = 2004
 MODE_ALT_SCREEN_SAVE = 1049
 MODE_SYNC_OUTPUT = 2026
@@ -618,6 +622,76 @@ KEY_ENCODER_OPT_KITTY_FLAGS              = 5
 KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT      = 6
 KEY_ENCODER_OPT_BACKARROW_KEY_MODE       = 7
 
+# ---- mouse/event.h / mouse/encoder.h ----
+
+GhosttyMouseEncoder = ctypes.c_void_p
+GhosttyMouseEvent = ctypes.c_void_p
+
+MOUSE_ACTION_PRESS = 0
+MOUSE_ACTION_RELEASE = 1
+MOUSE_ACTION_MOTION = 2
+
+MOUSE_BUTTON_UNKNOWN = 0
+MOUSE_BUTTON_LEFT = 1
+MOUSE_BUTTON_RIGHT = 2
+MOUSE_BUTTON_MIDDLE = 3
+MOUSE_BUTTON_FOUR = 4
+MOUSE_BUTTON_FIVE = 5
+MOUSE_BUTTON_SIX = 6
+MOUSE_BUTTON_SEVEN = 7
+MOUSE_BUTTON_EIGHT = 8
+MOUSE_BUTTON_NINE = 9
+MOUSE_BUTTON_TEN = 10
+MOUSE_BUTTON_ELEVEN = 11
+
+MOUSE_TRACKING_NONE = 0
+MOUSE_TRACKING_X10 = 1
+MOUSE_TRACKING_NORMAL = 2
+MOUSE_TRACKING_BUTTON = 3
+MOUSE_TRACKING_ANY = 4
+
+MOUSE_FORMAT_X10 = 0
+MOUSE_FORMAT_UTF8 = 1
+MOUSE_FORMAT_SGR = 2
+MOUSE_FORMAT_URXVT = 3
+MOUSE_FORMAT_SGR_PIXELS = 4
+
+MOUSE_ENCODER_OPT_EVENT = 0
+MOUSE_ENCODER_OPT_FORMAT = 1
+MOUSE_ENCODER_OPT_SIZE = 2
+MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED = 3
+MOUSE_ENCODER_OPT_TRACK_LAST_CELL = 4
+
+
+class GhosttyMousePosition(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_float), ("y", ctypes.c_float)]
+
+
+class GhosttyMouseEncoderSize(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_size_t),
+        ("screen_width", ctypes.c_uint32),
+        ("screen_height", ctypes.c_uint32),
+        ("cell_width", ctypes.c_uint32),
+        ("cell_height", ctypes.c_uint32),
+        ("padding_top", ctypes.c_uint32),
+        ("padding_bottom", ctypes.c_uint32),
+        ("padding_right", ctypes.c_uint32),
+        ("padding_left", ctypes.c_uint32),
+    ]
+
+
+def mouse_encoder_size(screen_width, screen_height, cell_width=1, cell_height=1):
+    """Build a GhosttyMouseEncoderSize with sizeof filled in."""
+    s = GhosttyMouseEncoderSize()
+    s.size = ctypes.sizeof(GhosttyMouseEncoderSize)
+    s.screen_width = int(screen_width)
+    s.screen_height = int(screen_height)
+    s.cell_width = int(cell_width)
+    s.cell_height = int(cell_height)
+    return s
+
+
 # ---- ST key name → GhosttyKey mapping ----
 # Sublime Text key names (from Default.sublime-keymap / on_key commands) mapped
 # to GhosttyKey enum values. Single printable characters are handled separately
@@ -799,6 +873,7 @@ class Ghostty:
         )
 
         self._bind_key_encoder(sig, p, sz)
+        self._bind_mouse_encoder(sig, p, sz)
 
     def _bind_key_encoder(self, sig, p, sz):
         """Bind the key encoder + event API (key/encoder.h, key/event.h)."""
@@ -862,3 +937,72 @@ class Ghostty:
             [GhosttyKeyEvent, ctypes.c_uint32],
             None,
         )
+
+    def _bind_mouse_encoder(self, sig, p, sz):
+        """Bind the mouse encoder + event API (mouse/encoder.h, mouse/event.h)."""
+        i = ctypes.c_int
+
+        self.mouse_encoder_new = sig(
+            "ghostty_mouse_encoder_new",
+            [p, ctypes.POINTER(GhosttyMouseEncoder)],
+            GhosttyResult,
+        )
+        self.mouse_encoder_free = sig(
+            "ghostty_mouse_encoder_free", [GhosttyMouseEncoder], None
+        )
+        self.mouse_encoder_setopt = sig(
+            "ghostty_mouse_encoder_setopt",
+            [GhosttyMouseEncoder, i, p],
+            None,
+        )
+        self.mouse_encoder_setopt_from_terminal = sig(
+            "ghostty_mouse_encoder_setopt_from_terminal",
+            [GhosttyMouseEncoder, GhosttyTerminal],
+            None,
+        )
+        self.mouse_encoder_reset = sig(
+            "ghostty_mouse_encoder_reset", [GhosttyMouseEncoder], None
+        )
+        self.mouse_encoder_encode = sig(
+            "ghostty_mouse_encoder_encode",
+            [GhosttyMouseEncoder, GhosttyMouseEvent, ctypes.c_char_p, sz,
+             ctypes.POINTER(sz)],
+            GhosttyResult,
+        )
+
+        self.mouse_event_new = sig(
+            "ghostty_mouse_event_new",
+            [p, ctypes.POINTER(GhosttyMouseEvent)],
+            GhosttyResult,
+        )
+        self.mouse_event_free = sig(
+            "ghostty_mouse_event_free", [GhosttyMouseEvent], None
+        )
+        self.mouse_event_set_action = sig(
+            "ghostty_mouse_event_set_action", [GhosttyMouseEvent, i], None
+        )
+        self.mouse_event_set_button = sig(
+            "ghostty_mouse_event_set_button", [GhosttyMouseEvent, i], None
+        )
+        self.mouse_event_clear_button = sig(
+            "ghostty_mouse_event_clear_button", [GhosttyMouseEvent], None
+        )
+        self.mouse_event_set_mods = sig(
+            "ghostty_mouse_event_set_mods",
+            [GhosttyMouseEvent, ctypes.c_uint16],
+            None,
+        )
+        self.mouse_event_set_position = sig(
+            "ghostty_mouse_event_set_position",
+            [GhosttyMouseEvent, GhosttyMousePosition],
+            None,
+        )
+
+    def mouse_encoder_setopt_int(self, encoder, option, value):
+        v = ctypes.c_int(int(value))
+        self.mouse_encoder_setopt(encoder, option, ctypes.byref(v))
+
+    def mouse_encoder_setopt_bool(self, encoder, option, value):
+        v = ctypes.c_bool(bool(value))
+        self.mouse_encoder_setopt(encoder, option, ctypes.byref(v))
+

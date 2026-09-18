@@ -140,11 +140,12 @@ class GhosttyParser:
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
-        render state (+ row iterator/cells), and the key encoder/event if
-        one was ever created (lazy -- see encode_key). Idempotent, so a
-        caller doesn't need to track whether it already called this.
+        render state (+ row iterator/cells), and the key/mouse encoder
+        events if they were ever created (lazy -- see encode_key /
+        encode_mouse). Idempotent, so a caller doesn't need to track
+        whether it already called this.
 
-        Freed in reverse acquisition order (key encoder/event were created
+        Freed in reverse acquisition order (encoders/events were created
         last, if at all; the terminal was created first). The caller must
         ensure nothing else can still be calling feed()/encode_key()/etc.
         on this instance before calling this -- freeing while another
@@ -155,6 +156,12 @@ class GhosttyParser:
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        mouse_event = getattr(self, "_mouse_event", None)
+        if mouse_event is not None:
+            self._g.mouse_event_free(mouse_event)
+        mouse_encoder = getattr(self, "_mouse_encoder", None)
+        if mouse_encoder is not None:
+            self._g.mouse_encoder_free(mouse_encoder)
         key_event = getattr(self, "_key_event", None)
         if key_event is not None:
             self._g.key_event_free(key_event)
@@ -165,6 +172,7 @@ class GhosttyParser:
         self._g.render_state_row_iterator_free(self._row_iter)
         self._g.render_state_free(self._render_state)
         self._g.terminal_free(self._term)
+
 
     def feed(self, text):
         data = text.encode("utf-8", "surrogateescape")
@@ -369,6 +377,145 @@ class GhosttyParser:
         # OUT_OF_SPACE (oversized sequence) or other error: signal fallback.
         return None
 
+    def encode_mouse(
+        self,
+        button,
+        col,
+        row,
+        *,
+        press=True,
+        motion=False,
+        shift=False,
+        meta=False,
+        ctrl=False,
+    ):
+        """Encode a mouse event through libghostty-vt's mouse encoder.
+
+        Tracking mode and output format come from live DECSET on the native
+        terminal (9/1000/1002/1003 and 1005/1006/1015/1016). Returns:
+
+            str   — encoded report (empty if tracking is off or the event
+                    is filtered, e.g. motion in 1000-mode)
+            None  — encoder unavailable (caller may fall back to mouse.py)
+        """
+        from .mouse import BTN_RELEASE_X10, _PROTO_TO_GHOSTTY_BUTTON
+
+        if not hasattr(self, "_mouse_encoder"):
+            enc = gvt.GhosttyMouseEncoder()
+            rc = self._g.mouse_encoder_new(None, ctypes.byref(enc))
+            if rc != gvt.SUCCESS:
+                self._mouse_encoder = None
+                self._mouse_event = None
+            else:
+                evt = gvt.GhosttyMouseEvent()
+                rc2 = self._g.mouse_event_new(None, ctypes.byref(evt))
+                if rc2 != gvt.SUCCESS:
+                    self._g.mouse_encoder_free(enc)
+                    self._mouse_encoder = None
+                    self._mouse_event = None
+                else:
+                    self._mouse_encoder = enc
+                    self._mouse_event = evt
+
+        enc = self._mouse_encoder
+        evt = self._mouse_event
+        if enc is None or evt is None:
+            return None
+
+        proto = int(button)
+        no_button = motion and proto == BTN_RELEASE_X10
+        gbtn = None if no_button else _PROTO_TO_GHOSTTY_BUTTON.get(proto)
+        if gbtn is None and not no_button:
+            return None
+
+        if not press:
+            action = gvt.MOUSE_ACTION_RELEASE
+        elif motion:
+            action = gvt.MOUSE_ACTION_MOTION
+        else:
+            action = gvt.MOUSE_ACTION_PRESS
+
+        col = max(1, int(col))
+        row = max(1, int(row))
+
+        self._sync_mouse_encoder(enc)
+        self._g.mouse_encoder_setopt_bool(
+            enc,
+            gvt.MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+            press or (motion and not no_button),
+        )
+
+
+        self._g.mouse_event_set_action(evt, action)
+        if no_button:
+            self._g.mouse_event_clear_button(evt)
+        else:
+            self._g.mouse_event_set_button(evt, gbtn)
+        mods = 0
+        if shift:
+            mods |= gvt.MODS_SHIFT
+        if ctrl:
+            mods |= gvt.MODS_CTRL
+        if meta:
+            mods |= gvt.MODS_ALT
+        self._g.mouse_event_set_mods(evt, mods)
+        self._g.mouse_event_set_position(
+            evt, gvt.GhosttyMousePosition(float(col - 1), float(row - 1))
+        )
+
+        buf = ctypes.create_string_buffer(128)
+        written = ctypes.c_size_t(0)
+        rc = self._g.mouse_encoder_encode(
+            enc, evt, buf, len(buf), ctypes.byref(written)
+        )
+        if rc != gvt.SUCCESS:
+            return None
+        return buf.raw[: written.value].decode("latin-1")
+
+
+    def _sync_mouse_encoder(self, enc):
+        """Push current DEC mouse mode/format/size into the encoder.
+
+        setopt_from_terminal always clears last-cell dedup, so we set
+        event/format/size ourselves. Unchanged values keep last_cell.
+        """
+        if self._mode(gvt.MODE_ANY_MOUSE):
+            event = gvt.MOUSE_TRACKING_ANY
+        elif self._mode(gvt.MODE_BUTTON_MOUSE):
+            event = gvt.MOUSE_TRACKING_BUTTON
+        elif self._mode(gvt.MODE_NORMAL_MOUSE):
+            event = gvt.MOUSE_TRACKING_NORMAL
+        elif self._mode(gvt.MODE_X10_MOUSE):
+            event = gvt.MOUSE_TRACKING_X10
+        else:
+            event = gvt.MOUSE_TRACKING_NONE
+
+        if self._mode(gvt.MODE_SGR_PIXELS):
+            fmt = gvt.MOUSE_FORMAT_SGR_PIXELS
+        elif self._mode(gvt.MODE_URXVT_MOUSE):
+            fmt = gvt.MOUSE_FORMAT_URXVT
+        elif self._mode(gvt.MODE_SGR_MOUSE):
+            fmt = gvt.MOUSE_FORMAT_SGR
+        elif self._mode(gvt.MODE_UTF8_MOUSE):
+            fmt = gvt.MOUSE_FORMAT_UTF8
+        else:
+            fmt = gvt.MOUSE_FORMAT_X10
+
+        self._g.mouse_encoder_setopt_int(enc, gvt.MOUSE_ENCODER_OPT_EVENT, event)
+        self._g.mouse_encoder_setopt_int(enc, gvt.MOUSE_ENCODER_OPT_FORMAT, fmt)
+        self._g.mouse_encoder_setopt_bool(
+            enc, gvt.MOUSE_ENCODER_OPT_TRACK_LAST_CELL, True
+        )
+
+        cols, rows = int(self.s.cols), int(self.s.rows)
+        if getattr(self, "_mouse_size", None) != (cols, rows):
+            size = gvt.mouse_encoder_size(cols, rows, 1, 1)
+            self._g.mouse_encoder_setopt(
+                enc, gvt.MOUSE_ENCODER_OPT_SIZE, ctypes.byref(size)
+            )
+            self._mouse_size = (cols, rows)
+
+
     def _get(self, data_id, out):
         """terminal_get, checked: a failed read otherwise reads as a real value.
 
@@ -562,15 +709,21 @@ class GhosttyParser:
         )
         s.sync_output = self._mode(gvt.MODE_SYNC_OUTPUT)
 
-        s.private_modes.discard(1000)
-        s.private_modes.discard(1002)
-        s.private_modes.discard(1003)
-        s.private_modes.discard(1006)
-        s.private_modes.discard(2004)
-        for mode in (gvt.MODE_NORMAL_MOUSE, gvt.MODE_BUTTON_MOUSE, gvt.MODE_ANY_MOUSE,
-                     gvt.MODE_SGR_MOUSE, gvt.MODE_BRACKETED_PASTE):
+        for mode in (
+            gvt.MODE_X10_MOUSE,
+            gvt.MODE_NORMAL_MOUSE,
+            gvt.MODE_BUTTON_MOUSE,
+            gvt.MODE_ANY_MOUSE,
+            gvt.MODE_UTF8_MOUSE,
+            gvt.MODE_SGR_MOUSE,
+            gvt.MODE_URXVT_MOUSE,
+            gvt.MODE_SGR_PIXELS,
+            gvt.MODE_BRACKETED_PASTE,
+        ):
+            s.private_modes.discard(mode)
             if self._mode(mode):
                 s.private_modes.add(mode)
+
 
     def _sync_scrollback(self):
         scrollback_rows = self._get_size(gvt.TERMINAL_DATA_SCROLLBACK_ROWS)

@@ -143,7 +143,8 @@ class Screen:
     def mouse_tracking(self):
         """Highest active Xterm mouse tracking mode, or 0 if off.
 
-        1000 = click, 1002 = click+drag, 1003 = any-event (motion).
+        9 = X10, 1000 = click, 1002 = click+drag, 1003 = any-event.
+        Mirrors native DECSET via GhosttyParser; encoding uses the encoder.
         """
         modes = self.private_modes
         if 1003 in modes:
@@ -152,7 +153,10 @@ class Screen:
             return 1002
         if 1000 in modes:
             return 1000
+        if 9 in modes:
+            return 9
         return 0
+
 
     @property
     def mouse_sgr(self):
