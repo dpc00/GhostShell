@@ -36,13 +36,6 @@
     // PageUp/PageDown all confirmed correct with this off. Revert to true
     // only if scrollback loss actually reproduces again.
     "caret_footer_pinning_enabled": false,
-    // click_to_cursor_fallback_enabled: _route_click_to_cursor_fallback --
-    // synthesizes Left/Right keypresses so a mouse click repositions the
-    // app's real PTY-side cursor for agents with no DEC mouse-tracking
-    // receiver (Claude Code, Gemini, Antigravity, Codex, Kimi, Kiro, Junie).
-    // False = clicking only moves ST's local selection, same as raw PTY
-    // click-to-position has always meant for these agents.
-    "click_to_cursor_fallback_enabled": false,
     // Close a terminal tab automatically ~1.5s after its process exits
     // (crash, clean quit, or the user typing `exit`) -- a dead tab that just
     // sits there isn't normal terminal-app behavior. Default true. A profile
@@ -105,10 +98,6 @@
     // footer height wobbles does not jiggle the viewport. Default 0
     // (follow the real last line). Override per profile.
     "follow_ignore_trailing_lines": 0,
-    // Ignore the TUI's alt-screen (DECSET 1049) toggle so our renderer keeps
-    // real ST scrollback. Default true = scrollback on. Set false to let a
-    // TUI take over the view with a fixed fullscreen matrix (loses scrollback).
-    "force_main_screen": true,
     // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
     // a visible block/bar/underline/hollow glyph or reverse-video cell on top
     // of the plain rendered text. False = rely solely on the real ST caret
@@ -214,7 +203,6 @@
             "launch_command": [
                 "agy"
             ],
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Auggie": {
@@ -262,9 +250,7 @@
             "launch_command": [
                 "claude"
             ],
-            "spawn_env": {
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-            }
+            "spawn_env": {}
         },
         "Claude --chrome": {
             "follow_ignore_trailing_lines": 2,
@@ -272,11 +258,7 @@
                 "claude",
                 "--chrome"
             ],
-            "spawn_env": {
-                "CLAUDE_CODE_AI_TERMINAL_SENTINEL": "propagated",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
-                // "OLLAMA_MODEL":"glm-5.2:cloud"
-            }
+            "spawn_env": {}
         },
         "Claude → Cloud": {
             // --cloud attaches to a cloud-hosted session (the kind the
@@ -314,8 +296,7 @@
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
-                "ANTHROPIC_MODEL": "glm-5.2:cloud",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "ANTHROPIC_MODEL": "glm-5.2:cloud"
                 // "ANTHROPIC_VERTEX_PROJECT_ID": "project-67efc385-8bb5-493f-a81",
                 // "CLAUDE_CODE_USE_VERTEX": "1",
                 // "CLOUD_ML_REGION": "global",
@@ -337,8 +318,7 @@
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
-                "ANTHROPIC_MODEL": "glm-5.2:cloud",
-                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"
+                "ANTHROPIC_MODEL": "glm-5.2:cloud"
                 // "ANTHROPIC_VERTEX_PROJECT_ID": "project-67efc385-8bb5-493f-a81",
                 // "CLAUDE_CODE_USE_VERTEX": "1",
                 // "CLOUD_ML_REGION": "global",
@@ -361,7 +341,6 @@
             "launch_command": [
                 "cline"
             ],
-            "mouse_handling": true,
             "spawn_env": {}
         },
         "Cody": {
@@ -487,7 +466,6 @@
             "launch_command": [
                 "devin"
             ],
-            "mouse_handling": true,
             "spawn_env": {}
         },
         "Dos Console": {
@@ -538,8 +516,6 @@
             "launch_command": [
                 "copilot"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Grok Build": {
@@ -568,8 +544,6 @@
             "launch_command": [
                 "grok"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Grok Build --minimal": {
@@ -598,8 +572,6 @@
                 "grok",
                 "--minimal"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "jcode": {
@@ -642,8 +614,6 @@
             "launch_command": [
                 "jcode"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {
                 "OPENROUTER_API_KEY": "$secret:OPENROUTER_API_KEY"
             }
@@ -676,8 +646,6 @@
             "launch_command": [
                 "junie"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Kilo Code": {
@@ -698,8 +666,6 @@
             "launch_command": [
                 "kilocode"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Kimi": {
@@ -746,8 +712,6 @@
             "launch_command": [
                 "mimo"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "OpenCode": {
@@ -778,8 +742,6 @@
             "launch_command": [
                 "opencode",
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": {
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
@@ -800,7 +762,6 @@
                 "opencode",
                 "--mini"
             ],
-            "page_keys_to_pty": true,
             "spawn_env": {
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
@@ -829,8 +790,6 @@
                 "launch",
                 "opencode"
             ],
-            "mouse_handling": true,
-            "page_keys_to_pty": true,
             "spawn_env": { // needs more parameters at the moment mostly get from comments at old spawn env
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
@@ -858,7 +817,6 @@
                 "--",
                 "--mini"
             ],
-            "page_keys_to_pty": true,
             "spawn_env": {
                 // "ANTHROPIC_AUTH_TOKEN":"ollama",
                 // "ANTHROPIC_API_KEY":"",
@@ -941,7 +899,6 @@
             "launch_command": [
                 "qwen"
             ],
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Qwen →⇢⇨ Ollama": {
@@ -951,7 +908,6 @@
                 "launch",
                 "qwen"
             ],
-            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Vibe": {
@@ -975,7 +931,6 @@
             // (kill switch, see ai_terminal.py) because it broke Qwen; this
             // profile opts back in since Vibe needs it and doesn't enable
             // DEC mouse tracking's click/drag behavior that caused that bug.
-            "mouse_handling": true,
             "spawn_env": {
                 "LOG_LEVEL": "DEBUG"
             }
