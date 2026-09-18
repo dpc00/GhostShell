@@ -3461,6 +3461,8 @@ class _Terminal:
         # Parser failures are reported once per terminal; see _on_data.
         self._feed_failed = False
         self._reattach_bootstrap = False
+        self._bootstrap_got_bytes = False
+        self._restored_text = ""
         # None normally. Set to a short reason string right before code in
         # this file deliberately ends this tab's connection on purpose --
         # either "handoff" (Open in Windows Terminal: pty.kill() detaches,
@@ -3748,6 +3750,8 @@ class _Terminal:
         with self._lock:
             try:
                 if self._reattach_bootstrap:
+                    if data:
+                        self._bootstrap_got_bytes = True
                     self.parser.feed_bootstrap(text)
                 else:
                     self.parser.feed(text)
@@ -3785,24 +3789,21 @@ class _Terminal:
         _schedule_render(self)
 
     def _on_broker_replay_complete(self):
-        """Commit one final grid after native-only broker bootstrap."""
+        """Publish native grid and history after broker replay.
+
+        Empty replay (no bytes before the boundary) still seeds the
+        restored view text so a blank native terminal does not wipe
+        readable Sublime-restored rows.
+        """
         with self._lock:
             if not self._reattach_bootstrap:
                 return
-            self.parser.finish_bootstrap()
-            # The restored view ended with the previously rendered active
-            # grid. Replace that tail with the newly recovered native grid,
-            # while retaining every older plain-text row untouched.
-            grid_rows = [
-                [(self.screen.grid[y][x], self.screen.attrs[y][x])
-                 for x in range(self.screen.cols)]
-                for y in range(self.screen.rows)
-            ]
-            displayed = _trim_display_rows(grid_rows, self.screen.y)
-            seeded = getattr(self, "_restored_rows_seeded", 0)
-            for _ in range(min(len(displayed), seeded, len(self.screen.history))):
-                self.screen.history.pop()
-            self.screen._enforce_history_cap()
+            if getattr(self, "_bootstrap_got_bytes", False):
+                self.parser.finish_bootstrap()
+            else:
+                restored = getattr(self, "_restored_text", "") or ""
+                if restored:
+                    _seed_restored_history(self.screen, restored)
             self._reattach_bootstrap = False
         _schedule_render(self)
 
@@ -6899,7 +6900,7 @@ def _maybe_reattach_broker(view, _confirm=False):
 
 
 def _seed_restored_history(screen, restored_text):
-    """Seed restored plain rows, including the active-grid tail temporarily."""
+    """Fallback when broker replay is empty: seed restored plain rows."""
     restored_lines = restored_text.splitlines()
     keep = screen.history_cap + screen.rows
     if keep:
@@ -6910,14 +6911,12 @@ def _seed_restored_history(screen, restored_text):
 
 
 def _reattach_broker_view(view, pipe_name):
-    """Connect `view` to the broker on `pipe_name`, bootstrap mode: trusts
-    `view`'s current text as history (the docstring on
-    GhosttyParser.feed_bootstrap says why: "a restored Sublime view
-    already owns readable historical text") and only advances the native
-    VT engine during replay -- the ~10s-to-~1s reconnect speed win. This
-    no longer needs a slow-path counterpart: a resize's own scrollback
-    reflow is handled by GhosttyParser.resize()/_sync_scrollback() now,
-    not by reconnecting -- see terminal/ghostty_engine.py.
+    """Connect `view` to the broker on `pipe_name` and replay teed bytes.
+
+    feed_bootstrap advances only the native VT during the snapshot;
+    finish_bootstrap then imports native grid and scrollback. Restored
+    view text is history only if that replay is empty. Resize reflow is
+    GhosttyParser.resize()/_sync_scrollback(), not reconnect.
     """
     if not _PTY_OK or os.name != "nt":
         return
@@ -6961,9 +6960,6 @@ def _reattach_broker_view(view, pipe_name):
     restored_text = view.substr(sublime.Region(0, view.size()))
     try:
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
-        # Keep restored plain text as host scrollback. The broker bootstrap
-        # supplies the active grid; historical colours need not be rebuilt.
-        restored_rows_seeded = _seed_restored_history(screen, restored_text)
         parser = _make_parser(screen)
     except (ValueError, TypeError, IndexError, MemoryError):
         _BROKER_CONNECTING.discard(vid)
@@ -6976,7 +6972,8 @@ def _reattach_broker_view(view, pipe_name):
     )
     term = _Terminal(view, pty, screen, parser, spawn_env=extra_env, profile_name=profile_name)
     term._reattach_bootstrap = True
-    term._restored_rows_seeded = restored_rows_seeded
+    term._bootstrap_got_bytes = False
+    term._restored_text = restored_text
 
     def _finish_connected():
         _BROKER_CONNECTING.discard(vid)

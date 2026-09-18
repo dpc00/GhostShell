@@ -193,22 +193,19 @@ class GhosttyParser:
     def feed_bootstrap(self, text):
         """Advance only the native VT during broker replay.
 
-        A restored Sublime view already owns readable historical text. Avoid
-        materializing every replay chunk into Python cells; query responses
-        still work because libghostty processes the bytes normally.
+        Do not materialize Python cells per chunk. finish_bootstrap
+        publishes the native grid and scrollback once, at the replay
+        boundary. Query responses still work because libghostty
+        processes the bytes normally.
         """
         data = text.encode("utf-8", "surrogateescape")
         self._g.terminal_vt_write(self._term, data, len(data))
 
     def finish_bootstrap(self):
-        """Publish the final native grid without importing native scrollback."""
-        self._sync_grid()
-        self._last_scrollback_rows = self._get_size(
-            gvt.TERMINAL_DATA_SCROLLBACK_ROWS
-        )
-        self._sync_title()
+        """Publish native grid and scrollback after broker replay."""
+        self._last_scrollback_rows = -1
+        self._sync()
         self.s.sync_output = False
-        self.s.dirty = True
 
     def resize(self, cols, rows):
         # Screen is resized only once the terminal agreed: the two sizes must
