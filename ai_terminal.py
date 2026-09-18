@@ -2579,16 +2579,6 @@ def _broker_scrollback_bytes(profile_name=None):
     return max(1024 * 1024, min(value, 256 * 1024 * 1024))
 
 
-def _force_main_screen(profile_name=None):
-    """Whether to ignore DECSET 1049 (alt screen) for a terminal.
-
-    Global default is true (keep ST scrollback for agent CLIs). Fullscreen
-    Textual apps need the real alt-screen buffer; a profile may set
-    ``"force_main_screen": false`` to opt out.
-    """
-    return _setting_bool("force_main_screen", True, profile_name=profile_name)
-
-
 # Seconds a dead tab's final output stays visible before auto-close. Long
 # enough to read a one-line error ("file not found", "[process exited]"),
 # short enough that a normal `exit` in a shell profile still feels immediate.
@@ -2614,9 +2604,9 @@ def _log_tab_text(profile_name=None):
     return _setting_bool("log_tab_text", True, profile_name=profile_name)
 
 
-def _make_parser(screen, force_main_screen):
+def _make_parser(screen):
     """libghostty-vt is the sole VT engine. See terminal/ghostty_engine.py."""
-    return _GhosttyParser(screen, force_main_screen=force_main_screen)
+    return _GhosttyParser(screen)
 
 
 def _cols_bounds():
@@ -3874,17 +3864,6 @@ class _Terminal:
         self.send_string(data.decode("latin-1"), record=False)
 
     def resize(self, cols, rows):
-        if getattr(self.parser, "force_main_screen", False) and self._last_rows is not None:
-            # Main-screen (no-alt-screen) mode has no real viewport height --
-            # vertical space is indefinite scrollback, not a fixed fullscreen
-            # page. Forwarding a row change still reaches the child as a
-            # normal resize/SIGWINCH, so a fullscreen TUI (which thinks it's
-            # on the alt screen) repaints its whole frame; with no alt-screen
-            # erase, the old frame just scrolls into history instead of being
-            # cleared -- visible as a duplicate/garbled banner. Only column
-            # changes (real reflow) are ever forwarded; rows stay pinned to
-            # whatever we last told the child.
-            rows = self._last_rows
         if cols == self._last_cols and rows == self._last_rows:
             return
         if getattr(self, "_resize_desynced", False):
@@ -4286,15 +4265,7 @@ class _LayoutWatcher:
         # column. See terminal.layout.accepted_cols and ai/TODO.md
         # "Status-line resize/rewrap loop".
         cols = _accepted_cols(self.term._last_cols, cols)
-        # In main-screen mode term.resize() pins rows and only ever forwards
-        # column changes (see its docstring) -- so a pure row fluctuation
-        # (e.g. dragging the pane shorter) must not count as "changed" here
-        # either, or every poll re-triggers resize()/re-render for a
-        # dimension the child is never actually told about.
-        if getattr(self.term.parser, "force_main_screen", False):
-            changed = cols != self.term._last_cols
-        else:
-            changed = (cols, rows) != (self.term._last_cols, self.term._last_rows)
+        changed = (cols, rows) != (self.term._last_cols, self.term._last_rows)
         if changed:
             self.term.resize(cols, rows)
             print(f"[ai_terminal] resized PTY to {self.term._last_cols}x{self.term._last_rows}")
@@ -5054,10 +5025,9 @@ def _do_render(term):
         if _setting_bool("caret_footer_pinning_enabled", False, profile_name=_term_profile_name(term)):
             cy, cx = _adjust_display_caret(term.screen, cy, cx)
         rows = _pad_row_for_caret(rows, cy, cx)
-        # The Screen holds the tab's full pinned row count (force_main_screen
-        # pins rows -- see _LayoutWatcher._run -- so a plain shell's mostly-
+        # The Screen holds the tab's full row count, so a plain shell's mostly-
         # blank grid isn't reflowed just because there's less real content
-        # yet). Rendering all of it puts a wall of blank lines below the
+        # yet. Rendering all of it puts a wall of blank lines below the
         # cursor. Trim trailing blanks; a cursor parked two or more rows
         # below content (Claude last-row CUP + overflow \\n) is not kept.
         # Empty prompt on the next line is. See trim_display_rows.
@@ -6720,7 +6690,7 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
     # DLL, which is the slow part of bring-up.
     try:
         screen = _Screen(cols, rows, history_cap=_scrollback_size(profile_name))
-        parser = _make_parser(screen, _force_main_screen(profile_name))
+        parser = _make_parser(screen)
     except Exception as e:
         print("[ai_terminal] VT engine init failed:\n%s" % traceback.format_exc())
         sublime.error_message(f"ai_terminal: failed to initialize the VT engine:\n{e}")
@@ -6963,7 +6933,7 @@ def _reattach_broker_view(view, pipe_name):
         # Keep restored plain text as host scrollback. The broker bootstrap
         # supplies the active grid; historical colours need not be rebuilt.
         restored_rows_seeded = _seed_restored_history(screen, restored_text)
-        parser = _make_parser(screen, _force_main_screen(profile_name))
+        parser = _make_parser(screen)
     except (ValueError, TypeError, IndexError, MemoryError):
         _BROKER_CONNECTING.discard(vid)
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
@@ -9345,7 +9315,6 @@ _LIVE_TUNABLE_PROFILE_KEYS = (
 # but need a string/number editor this panel doesn't have yet, so they're
 # not offered here.
 _REATTACH_TUNABLE_PROFILE_KEYS = (
-    ("force_main_screen", "Pin the tab to a fixed alt-screen-style grid instead of real scrollback -- baked into the parser at view bring-up", True),
     ("record_asciicast", "Record this session as an asciicast -- set once when the _Terminal/SessionTextLog is constructed", True),
 )
 # NOT fixed by Respawn at all -- these belong to the real child process,
@@ -9391,7 +9360,7 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
       _tui_like/etc. all resolve these fresh on every event rather than
       caching at spawn, so picking one just flips it -- takes effect on the
       tab's very next keypress, wheel, or redraw.
-    - _REATTACH_TUNABLE_PROFILE_KEYS (currently force_main_screen): baked in
+    - _REATTACH_TUNABLE_PROFILE_KEYS: baked in
       once at view/parser bring-up, so a plain toggle would save correctly
       but do nothing visible. Picking one of these saves the value AND
       immediately respawns in the same action (see on_pick's `idx >= n_live`
@@ -9401,8 +9370,8 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
       (Keep Session Alive)" already use) and immediately reattaches a
       brand-new view/parser to that same broker pipe; rebuilding the view
       from scratch is what picks up the just-saved setting, since
-      _reattach_broker_view calls _make_parser(..., _force_main_screen(...))
-      fresh. spawn_env and launch_command are the genuine exception -- those
+      _reattach_broker_view calls _make_parser(screen) fresh. spawn_env and
+      launch_command are the genuine exception -- those
       belong to the real child process, fixed at its creation, and no amount
       of rebuilding the Sublime-side tab can change them; that really does
       need "New Session (Relaunch)" instead (which also throws the
@@ -9476,10 +9445,9 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
         # Fresh Sublime-side tab, SAME underlying agent process -- not a new
         # spawn (that's what Relaunch already does, and it throws the
         # conversation away). This only re-does the tab/view/parser bring-up
-        # (_reattach_broker_view -> _make_parser(..., _force_main_screen(...))
-        # etc.), which is exactly what picks up a just-saved
-        # _RESPAWN_REQUIRED_PROFILE_KEYS setting like force_main_screen or
-        # font_face/font_size. The real child process and its environment
+        # (_reattach_broker_view -> _make_parser(screen) etc.), which is
+        # exactly what picks up a just-saved _RESPAWN_REQUIRED_PROFILE_KEYS
+        # setting like font_face/font_size. The real child process and its environment
         # are untouched -- spawn_env genuinely can't change without a real
         # new process (see _RESPAWN_REQUIRED_PROFILE_KEYS's own comment).
         window = self.window
@@ -10636,8 +10604,7 @@ def _clamp_vp_loop():
             if not v or not v.is_valid():
                 continue
             # Every ai_terminal view: trackpad = core pan. Convert + pin.
-            # (Previously gated on alt/mouse only; force_main_screen makes
-            # alt_screen False even under Grok, and a missed mouse mode left
+            # (Previously gated on alt/mouse only; a missed mouse mode left
             # pure pan with no PTY traffic — matches empty wheel casts.)
             try:
                 v.settings().set("scroll_past_end", True)

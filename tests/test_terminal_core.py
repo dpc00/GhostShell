@@ -9,7 +9,6 @@ import unittest
 
 from terminal import (
     HOST_CURSOR_SCOPE,
-    Parser,
     Screen,
     build_text_and_regions,
     cell_needs_host_cursor,
@@ -155,87 +154,6 @@ class TestRetireLineErrors(unittest.TestCase):
         self.assertEqual(len(s.history), 1)
 
 
-class TestParser(unittest.TestCase):
-    def test_plain_text(self):
-        s = Screen(20, 5)
-        p = Parser(s)
-        p.feed("hi")
-        self.assertEqual("".join(s.grid[0][:2]), "hi")
-
-    def test_sgr_red(self):
-        s = Screen(20, 5)
-        p = Parser(s)
-        p.feed("\x1b[31mR\x1b[0m")
-        self.assertEqual(s.grid[0][0], "R")
-        self.assertNotEqual(s.attrs[0][0], 0)
-
-    def test_cup_and_erase(self):
-        s = Screen(10, 5)
-        p = Parser(s)
-        p.feed("abcdef")
-        p.feed("\x1b[1;1H")
-        p.feed("\x1b[2K")
-        self.assertEqual(s.grid[0][0], " ")
-        self.assertEqual(s.x, 0)
-        self.assertEqual(s.y, 0)
-
-    def test_ech(self):
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("ABCDE")
-        p.feed("\x1b[1;2H")
-        p.feed("\x1b[2X")
-        self.assertEqual(s.grid[0][0], "A")
-        self.assertEqual(s.grid[0][1], " ")
-        self.assertEqual(s.grid[0][2], " ")
-        self.assertEqual(s.grid[0][3], "D")
-
-    def test_alt_screen_mode_is_applied(self):
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("\x1b[?1049h")
-        self.assertTrue(s.alt_screen)
-
-    def test_reverse_sgr_sets_flag(self):
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("\x1b[7mX\x1b[0m")
-        self.assertEqual(s.grid[0][0], "X")
-        self.assertTrue(s.attrs[0][0] & REVERSE)
-
-    def test_truecolor_semicolon_rgb(self):
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("\x1b[38;2;255;0;0mR")
-        from terminal.colors import scope_name_for
-        scope = scope_name_for(s.attrs[0][0])
-        self.assertIsNotNone(scope)
-        # Quantized red should be a non-default fg on default bg.
-        self.assertTrue(scope.startswith("ai.fb."))
-        self.assertTrue(scope.endswith(".0"))
-
-    def test_truecolor_colon_rgb(self):
-        """Junie/Compose: 38:2:r:g:b without colour-space id."""
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("\x1b[38:2:255:255:255mW")
-        from terminal.colors import scope_name_for, quantize256
-        scope = scope_name_for(s.attrs[0][0])
-        # white → palette index 15 or nearby grey/white (1-based in scope)
-        fg = int(scope.split(".")[2])
-        self.assertEqual(fg, quantize256(255, 255, 255) + 1)
-
-    def test_truecolor_colon_with_colorspace(self):
-        """ISO-8613-6 empty CS: 38:2::R:G:B must not eat R as green."""
-        s = Screen(10, 3)
-        p = Parser(s)
-        p.feed("\x1b[38:2::255:128:64mX")
-        from terminal.colors import scope_name_for, quantize256
-        scope = scope_name_for(s.attrs[0][0])
-        fg = int(scope.split(".")[2])
-        self.assertEqual(fg, quantize256(255, 128, 64) + 1)
-
-
 class TestSchemeContrast(unittest.TestCase):
     def test_black_on_default_bg_becomes_readable(self):
         from terminal.colors import scheme_colors_for, hex_luma
@@ -257,8 +175,10 @@ class TestSchemeContrast(unittest.TestCase):
 class TestRender(unittest.TestCase):
     def test_coalesce_regions(self):
         s = Screen(10, 2)
-        p = Parser(s)
-        p.feed("\x1b[31mRR\x1b[0mxx")
+        red = pack_attr(fg=2)
+        s.grid[0][0], s.attrs[0][0] = "R", red
+        s.grid[0][1], s.attrs[0][1] = "R", red
+        s.grid[0][2], s.grid[0][3] = "x", "x"
         rows, _, _ = s.render_cells()
         text, regs = build_text_and_regions(rows)
         self.assertTrue(text.startswith("RRxx"))
@@ -467,30 +387,6 @@ class TestHostCursor(unittest.TestCase):
 
 
 class TestMouseModes(unittest.TestCase):
-    def test_decset_mouse_modes(self):
-        s = Screen(40, 10)
-        p = Parser(s)
-        self.assertEqual(s.mouse_tracking, 0)
-        self.assertFalse(s.mouse_sgr)
-        p.feed("\x1b[?1000h\x1b[?1006h")
-        self.assertEqual(s.mouse_tracking, 1000)
-        self.assertTrue(s.mouse_sgr)
-        p.feed("\x1b[?1002h")
-        self.assertEqual(s.mouse_tracking, 1002)
-        p.feed("\x1b[?1002l\x1b[?1000l")
-        self.assertEqual(s.mouse_tracking, 0)
-        self.assertTrue(s.mouse_sgr)  # 1006 still on
-        p.feed("\x1b[?1006l")
-        self.assertFalse(s.mouse_sgr)
-
-    def test_ris_clears_modes(self):
-        s = Screen(10, 5)
-        p = Parser(s)
-        p.feed("\x1b[?1000h\x1b[?1006h")
-        p.feed("\x1bc")
-        self.assertEqual(s.mouse_tracking, 0)
-        self.assertFalse(s.mouse_sgr)
-
     def test_encode_sgr_click(self):
         seq = encode_click(0, 5, 12, sgr=True)
         self.assertEqual(seq, "\x1b[<0;5;12M\x1b[<0;5;12m")
