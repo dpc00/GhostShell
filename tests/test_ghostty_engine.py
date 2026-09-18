@@ -409,6 +409,18 @@ class BrokerBootstrapHistoryTests(unittest.TestCase):
         self.assertEqual(hist, ["L0", "L1", "L2"])
         self.assertEqual("".join(self.screen.grid[0]).rstrip(), "L3")
 
+    def test_finish_bootstrap_respects_history_cap(self):
+        # Native ghostty does not cap scrollback by row count, so a replay
+        # longer than the cap must still leave Python history within it.
+        for i in range(2000):
+            self.parser.feed_bootstrap("L%d\r\n" % i)
+
+        self.parser.finish_bootstrap()
+
+        self.assertLessEqual(len(self.screen.history), self.screen.history_cap)
+        hist = ["".join(ch for ch, _ in row).rstrip() for row in self.screen.history]
+        self.assertEqual(hist[-1], "L1996")
+
 
 @unittest.skipUnless(_dll_available(), "ghostty-vt.dll not present")
 class ParserCloseTests(unittest.TestCase):
