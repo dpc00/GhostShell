@@ -909,6 +909,7 @@ def test_broker_reattach_does_not_pin_inactive_restored_view_to_one_row(monkeypa
     )
     monkeypatch.setattr(ai_terminal._Terminal, "from_id", classmethod(lambda cls, vid: None))
     monkeypatch.setattr(ai_terminal, "_registered_brokers", lambda profile, cwd: [])
+    monkeypatch.setattr(ai_terminal, "_stamp_broker_pid_when_known", lambda *a, **k: None)
     monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (94, 1))
     monkeypatch.setattr(
         ai_terminal, "_reattach_broker_view",
@@ -952,6 +953,7 @@ def test_broker_reattach_recovers_stale_sublime_pipe_from_external_registry(monk
     )
     monkeypatch.setattr(ai_terminal._Terminal, "from_id", classmethod(lambda cls, vid: None))
     monkeypatch.setattr(ai_terminal, "_measure", lambda view, profile_name=None: (94, 30))
+    monkeypatch.setattr(ai_terminal, "_stamp_broker_pid_when_known", lambda *a, **k: None)
     monkeypatch.setattr(
         ai_terminal, "_registered_brokers",
         lambda profile, cwd: [{"pipe_name": "live-pipe"}],
