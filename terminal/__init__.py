@@ -12,7 +12,6 @@ from .mouse import (
     st_button_to_proto,
     view_point_to_cell,
 )
-from .parser import Parser
 from .pty_env import sanitize_pty_env
 from .layout import accepted_cols, follow_line_count
 from .render import (
@@ -29,7 +28,6 @@ from .caret import adjust_display_caret, pad_row_for_caret
 
 __all__ = [
     "Screen",
-    "Parser",
     "pack_attr",
     "quantize256",
     "scope_name_for",

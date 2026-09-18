@@ -1,333 +1,22 @@
 """libghostty-vt-backed VT parser -- the sole VT engine for ai_terminal.py.
 
-Contract: __init__(screen, force_main_screen), feed(text), resize(cols, rows),
-reset() -- Screen/render.py/caret.py/mouse.py only depend on this contract
-and Screen's grid/attrs/x/y/history/private_modes/cursor_visible surface, not
+Contract: __init__(screen), feed(text), resize(cols, rows), reset() --
+Screen/render.py/caret.py/mouse.py only depend on this contract and
+Screen's grid/attrs/x/y/history/private_modes/cursor_visible surface, not
 on this module's internals. See ghostty_vt.py for the ctypes binding layer
 and DLL location.
+
+The byte stream from the child process is written to libghostty-vt
+unmodified -- no escape codes are stripped, substituted, or rewritten, and
+no scrollback splicing/merging is performed. Real alternate-screen
+buffer swapping and DECSET 2026 (synchronized output) state are both
+queried from the native terminal, not tracked or altered here.
 """
 import ctypes
-import re
 
 from . import ghostty_vt as gvt
 from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, ITALIC, UNDERLINE, XTERM256_RGB
 from .screen import BLANK
-
-
-# libghostty-vt implements real primary/alternate screen buffer swapping.
-# That means "force_main_screen" -- the user setting that keeps showing the
-# scrollback-style view instead of a fullscreen TUI's alt-screen redraw --
-# can no longer be emulated by ignoring the *mode flag*; the alternate
-# screen would genuinely hold different cell contents once entered. Instead
-# strip the alt-screen enter/exit sequences from the byte stream before
-# they ever reach the terminal, so it never leaves the primary screen.
-# CSI ? 1049/1047/47 h or l -- including when combined with another
-# private mode in the same sequence (e.g. `?1049;2004h` for alt-screen +
-# bracketed paste together). An earlier version of this regex
-# (`\x1b\[\?(1049|1047|47)[hl]`) only matched an isolated alt-screen
-# sequence and silently let combined forms through unstripped (confirmed
-# live 2026-08-25: `?1049;2004h` and `?1;47h` both leaked). _strip_alt_screen
-# below removes just the alt-screen mode numbers from the parameter list
-# and keeps the rest, so an unrelated mode toggled in the same sequence
-# still reaches the parser.
-_ALT_SCREEN_MODES = frozenset(("1049", "1047", "47"))
-_PRIVATE_MODE_RE = re.compile(r"\x1b\[\?([0-9;]+)([hl])")
-_ALT_SCREEN_PENDING_MAX = 256
-# CUP home as Codex/Qwen emit it on a full-frame repaint. Do not treat
-# CUP to an arbitrary row (`ESC[12H`) as home.
-_CUP_HOME_RE = re.compile(r"\x1b\[(?:(?:0;0|1;1|1|0)?H)")
-_SYNC_HL_RE = re.compile(r"\x1b\[\?2026([hl])")
-
-
-def _history_row_text(row):
-    return "".join(ch for ch, _attr in row).rstrip()
-
-
-def _rows_match(old_row, new_row, allow_splice):
-    a = _history_row_text(old_row)
-    b = _history_row_text(new_row)
-    if a == b:
-        return True
-    if allow_splice and a and b and (b.startswith(a) or a.startswith(b)):
-        return True
-    return False
-
-
-def _best_alignment(old_rows, new_rows, search_window, min_run=1):
-    """Find where new_rows continues old_rows, using multi-row evidence.
-
-    Anchoring on new_rows[0] alone (the original design) fails whenever
-    that specific row has no counterpart anywhere in old_rows -- which
-    happens routinely for a dump chunk that starts mid-transcript (not at
-    a repeated "turn 0"), or when row 0 is itself a splice-corrupted
-    native read. Neither case means alignment is impossible; it means the
-    evidence is elsewhere in the chunk. This searches every (old row, new
-    row) pair within `search_window` of new_rows for the LONGEST
-    contiguous run of matching rows.
-
-    Returns the match as an anchor PAIR (new_start, old_start, run_len) --
-    "new_rows[new_start + k] corresponds to old_rows[old_start + k] for
-    k in [0, run_len)" -- rather than collapsing it to a single linear
-    `keep` offset. A chunk can genuinely contain two different things back
-    to back: a handful of rows that are a plain continuation of old_rows
-    (no alignment needed, new_start == 0 has no match), followed by a
-    replay that restarts much earlier in history (old_start far less than
-    new_start). Forcing one global `old_start - new_start` offset across
-    both silently discards a correct alignment whenever that subtraction
-    goes negative (found live, 2026-08-27, see ai/TODO.md) -- the anchor
-    pair lets the caller treat rows before `new_start` as an unverified
-    continuation and only apply old-row comparison from `new_start`
-    onward, which is exactly the two different things a chunk can contain.
-
-    `k0` (the candidate start row within new_rows) is tried in increasing
-    order, and the search stops at the FIRST k0 that has at least one
-    candidate old-row match -- mirroring the original design's "anchor as
-    early as possible" behavior (needed so that genuinely-in-between rows,
-    like a wrapped line's messy first fragment, still get compared against
-    their old counterpart instead of passed through raw; preferring a
-    later, longer-but-unrelated run over an earlier weak one duplicates
-    those in-between rows instead of cleaning them up). Only WITHIN that
-    one k0 does run length disambiguate between multiple candidate old-row
-    positions (e.g. the same short/repeated line matching several old
-    positions) -- ties on run length prefer the more recent (larger
-    `old_start`). `min_run` is a floor (default 1: any match at all counts
-    as evidence) rather than a hard ambiguity filter -- the run-length
-    comparison is what resolves ambiguity within one k0.
-
-    Returns (new_start, old_start, run_len). run_len == 0 means no
-    candidate met `min_run` anywhere in the search window -- the caller's
-    explicit fallback for that case is to treat the whole of new_rows as
-    an unverified continuation (no speculative splice-cleanup, but also no
-    risk of misaligning against unrelated old content).
-    """
-    limit = min(len(new_rows), search_window)
-    for k0 in range(limit):
-        new0 = new_rows[k0]
-        if not _history_row_text(new0):
-            continue
-        best_old = None
-        best_run = 0
-        for j, row in enumerate(old_rows):
-            if not _rows_match(row, new0, allow_splice=True):
-                continue
-            run = 1
-            jj, kk = j + 1, k0 + 1
-            while (
-                jj < len(old_rows)
-                and kk < len(new_rows)
-                and _rows_match(old_rows[jj], new_rows[kk], allow_splice=True)
-            ):
-                run += 1
-                jj += 1
-                kk += 1
-            if run > best_run or (run == best_run and (best_old is None or j > best_old)):
-                best_run = run
-                best_old = j
-        if best_old is not None and best_run >= min_run:
-            return k0, best_old, best_run
-    return 0, len(old_rows), 0
-
-
-def merge_replace_scroll_history(old_rows, new_rows, splice_window):
-    """History after a home+2026 dump's native overflow is known.
-
-    CSI H overwrites the visible screen, then overflow re-scrolls that
-    dump's own text into native scrollback. A full-transcript replay
-    therefore *reproduces* a suffix of prior Python history (often the
-    whole thing), but wrap + in-place overwrite without EL means later
-    overflow rows need not equal the old rows line-for-line.
-
-    Alignment is found via multi-row evidence (see _best_alignment), not
-    by anchoring solely on new_rows[0] -- the original row-0-only design
-    silently disabled all splice-cleanup for an entire chunk whenever its
-    first row happened to have no counterpart in old_rows (e.g. a dump
-    chunk that starts mid-transcript, or row 0 itself being a splice
-    artifact), which both let real corruption through uncorrected AND
-    duplicated shared rows that a smarter search would have recognized
-    (live-reproduced and root-caused 2026-08-27, see ai/TODO.md). When no
-    reliable multi-row alignment exists, the explicit fallback keeps all
-    of old_rows and appends new_rows as an unverified continuation rather
-    than guess.
-
-    old_rows: Python history before this rebuild.
-    new_rows: native rows [origin, scrollback_rows) for this dump.
-    splice_window: screen height -- bounds each ALIGNMENT SEARCH pass (an
-    anchor should be found near the start of what's left to align, if at
-    all; searching further is wasted work). Once a trusted anchor is
-    found, the per-row splice-cleanup comparison for that segment covers
-    the full rest of that segment, not capped at splice_window -- a
-    single large Codex-style write can scroll hundreds of rows through in
-    one native sync, and a splice artifact can land anywhere in that
-    range, not just within one screen-height of the top.
-
-    A single dump can also contain MULTIPLE embedded restarts concatenated
-    back to back (a buffered PTY read catching several redraw cycles in
-    one native sync) -- one linear anchor cannot represent that, so this
-    processes new_rows in segments: find one alignment, apply it until its
-    old-row reference runs out, then re-search the remaining new_rows
-    against everything merged so far (which now includes the just-cleaned
-    segment) for the next restart. Bounded by len(new_rows) iterations --
-    each pass consumes at least one row, since `old_start` from
-    _best_alignment is always a valid index into whatever it searched.
-    (Live-reproduced and root-caused 2026-08-27, see ai/TODO.md.)
-    """
-    merged = list(old_rows)
-    remaining = list(new_rows)
-    guard = len(new_rows) + 10
-    while remaining and guard > 0:
-        guard -= 1
-        new_start, old_start, run = _best_alignment(merged, remaining, search_window=splice_window)
-        if run == 0:
-            merged.extend(remaining)
-            remaining = []
-            break
-        old_ref = merged
-        old_len = len(old_ref)
-        merged = list(old_ref[:old_start])
-        i = 0
-        n = len(remaining)
-        while i < n:
-            oi = old_start + (i - new_start)
-            if i < new_start:
-                merged.append(remaining[i])
-                i += 1
-                continue
-            if old_start <= oi < old_len:
-                a = _history_row_text(old_ref[oi])
-                b = _history_row_text(remaining[i])
-                if a and b.startswith(a) and b != a:
-                    merged.append(old_ref[oi])
-                else:
-                    merged.append(remaining[i])
-                i += 1
-                continue
-            # old_ref exhausted for this segment: stop here and re-align
-            # the rest of `remaining` against everything merged so far.
-            break
-        remaining = remaining[i:]
-    if remaining:
-        merged.extend(remaining)
-    return merged
-
-
-def update_replace_scroll(sync_open, replace, text):
-    """Return (sync_open, replace) after scanning one PTY chunk.
-
-    `replace` latches True when CUP home occurs while DECSET 2026 is
-    open, and stays set until the caller clears it after 2026 closes.
-    A split dump (home in chunk 1, overflow in chunk 2) must not append.
-    """
-    replace = bool(replace)
-    events = [(m.start(), "sync", m.group(1)) for m in _SYNC_HL_RE.finditer(text)]
-    events.extend((m.start(), "home", None) for m in _CUP_HOME_RE.finditer(text))
-    events.sort()
-    open_ = bool(sync_open)
-    for _pos, kind, val in events:
-        if kind == "sync":
-            open_ = val == "h"
-        elif kind == "home" and open_:
-            replace = True
-    return open_, replace
-
-
-def _rewrite_private_mode(params, action):
-    kept = [p for p in params.split(";") if p not in _ALT_SCREEN_MODES]
-    if not kept:
-        return ""
-    return "\x1b[?" + ";".join(kept) + action
-
-
-class _AltScreenFilter:
-    """Incrementally remove DEC alternate-screen modes from a VT stream.
-
-    PTY reads may split a CSI sequence at any byte. A regex applied to each
-    read independently therefore lets a split ``ESC[?1049h`` reach Ghostty
-    and defeats force_main_screen. This filter retains only a possible
-    unfinished private-mode sequence; all ordinary text passes immediately.
-    Malformed numeric parameter runs are bounded so they cannot grow memory
-    indefinitely.
-    """
-
-    def __init__(self, pending_max=_ALT_SCREEN_PENDING_MAX):
-        self.pending = ""
-        self.pending_max = max(4, int(pending_max))
-
-    def reset(self):
-        self.pending = ""
-
-    def flush(self):
-        pending = self.pending
-        self.pending = ""
-        return pending
-
-    def feed(self, text):
-        if not self.pending and "\x1b" not in (text or ""):
-            return text or ""
-        data = self.pending + (text or "")
-        self.pending = ""
-        if not data:
-            return ""
-
-        out = []
-        pos = 0
-        size = len(data)
-        while pos < size:
-            esc = data.find("\x1b", pos)
-            if esc < 0:
-                out.append(data[pos:])
-                break
-            out.append(data[pos:esc])
-
-            # Retain prefixes that may become ESC[?... on the next read.
-            remaining = size - esc
-            if remaining == 1 or (remaining == 2 and data[esc + 1] == "["):
-                self.pending = data[esc:]
-                break
-            if data[esc + 1] != "[":
-                out.append("\x1b")
-                pos = esc + 1
-                continue
-            if remaining == 2:
-                self.pending = data[esc:]
-                break
-            if data[esc + 2] != "?":
-                # Some other complete/incomplete CSI. Ghostty owns it; emit
-                # the ESC now and leave its own incremental parser to finish.
-                out.append("\x1b")
-                pos = esc + 1
-                continue
-
-            end = esc + 3
-            while end < size and data[end] in "0123456789;":
-                end += 1
-            if end == size:
-                candidate = data[esc:]
-                if len(candidate) <= self.pending_max:
-                    self.pending = candidate
-                else:
-                    out.append(candidate)
-                break
-
-            action = data[end]
-            if end > esc + 3 and action in "hl":
-                out.append(_rewrite_private_mode(data[esc + 3:end], action))
-                pos = end + 1
-                continue
-
-            # Not a DEC private mode set/reset sequence we rewrite. Preserve
-            # the bytes examined and continue after them without interpretation.
-            out.append(data[esc:end + 1])
-            pos = end + 1
-
-        return "".join(out)
-
-
-def _strip_alt_screen(text):
-    """Stateless compatibility helper for complete strings and unit tests."""
-    if "\x1b[?" not in text:
-        return text
-    stream_filter = _AltScreenFilter()
-    return stream_filter.feed(text) + stream_filter.flush()
 
 
 def _color_id(result, rgb):
@@ -345,11 +34,10 @@ _CURSOR_SHAPE_NAMES = {
 
 
 class GhosttyParser:
-    """__init__(screen, force_main_screen), feed(text), resize(cols, rows), reset()."""
+    """__init__(screen), feed(text), resize(cols, rows), reset()."""
 
-    def __init__(self, screen, force_main_screen=True, dll_path=None):
+    def __init__(self, screen, dll_path=None):
         self.s = screen
-        self.force_main_screen = force_main_screen
         self._g = gvt.Ghostty(gvt.load_library(dll_path))
 
         cap = screen.history_cap or 300
@@ -448,11 +136,7 @@ class GhosttyParser:
         )
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
-        self._alt_screen_filter = _AltScreenFilter()
         self._last_scrollback_rows = -1
-        self._sync_open = False
-        self._replace_scroll = False
-        self._replace_origin = None
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
@@ -471,7 +155,6 @@ class GhosttyParser:
         if getattr(self, "_closed", False):
             return
         self._closed = True
-        self._alt_screen_filter.reset()
         key_event = getattr(self, "_key_event", None)
         if key_event is not None:
             self._g.key_event_free(key_event)
@@ -484,27 +167,11 @@ class GhosttyParser:
         self._g.terminal_free(self._term)
 
     def feed(self, text):
-        if self.force_main_screen:
-            text = self._alt_screen_filter.feed(text)
-        self._sync_open, self._replace_scroll = update_replace_scroll(
-            self._sync_open, self._replace_scroll, text
-        )
-        if self.force_main_screen and self._replace_scroll:
-            # Main-screen transcript TUIs repaint from home without always
-            # erasing shorter old rows first.  After Windows ConPTY has
-            # normalized the stream, those stale active-grid tails can be
-            # scrolled into native history as splice/rolling-digit garbage.
-            # This path is already classified as a synchronized replacement;
-            # clear only the active grid at its first home.  Python history is
-            # retained/reconciled by _sync_scrollback below.
-            text = _CUP_HOME_RE.sub(
-                lambda match: match.group(0) + "\x1b[2J", text, count=1
-            )
         data = text.encode("utf-8", "surrogateescape")
         # ghostty_terminal_vt_write returns void (see its restype in
         # ghostty_vt.py) -- nothing to check here.
         self._g.terminal_vt_write(self._term, data, len(data))
-        if self._sync_open:
+        if self._mode(gvt.MODE_SYNC_OUTPUT):
             # Mode 2026 makes the native update atomic.  A resize repaint can
             # span dozens of PTY reads; syncing each intermediate read walks
             # the active grid through per-cell ctypes calls even though the
@@ -514,10 +181,6 @@ class GhosttyParser:
             self.s.sync_output = True
         else:
             self._sync()
-        # Next chunk starts clean unless 2026 is still open (split dump).
-        if not self._sync_open:
-            self._replace_scroll = False
-            self._replace_origin = None
 
     def feed_bootstrap(self, text):
         """Advance only the native VT during broker replay.
@@ -526,15 +189,6 @@ class GhosttyParser:
         materializing every replay chunk into Python cells; query responses
         still work because libghostty processes the bytes normally.
         """
-        if self.force_main_screen:
-            text = self._alt_screen_filter.feed(text)
-        self._sync_open, self._replace_scroll = update_replace_scroll(
-            self._sync_open, self._replace_scroll, text
-        )
-        if self.force_main_screen and self._replace_scroll:
-            text = _CUP_HOME_RE.sub(
-                lambda match: match.group(0) + "\x1b[2J", text, count=1
-            )
         data = text.encode("utf-8", "surrogateescape")
         self._g.terminal_vt_write(self._term, data, len(data))
 
@@ -545,8 +199,6 @@ class GhosttyParser:
             gvt.TERMINAL_DATA_SCROLLBACK_ROWS
         )
         self._sync_title()
-        self._replace_scroll = False
-        self._replace_origin = None
         self.s.sync_output = False
         self.s.dirty = True
 
@@ -578,12 +230,8 @@ class GhosttyParser:
         self._last_scrollback_rows = -1
 
     def reset(self):
-        self._alt_screen_filter.reset()
         gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
         self._last_scrollback_rows = -1
-        self._sync_open = False
-        self._replace_scroll = False
-        self._replace_origin = None
         self._sync()
 
     def bind_write_pty(self, sink):
@@ -925,24 +573,12 @@ class GhosttyParser:
                 s.private_modes.add(mode)
 
     def _sync_scrollback(self):
-        # feed() normally defers the entire sync while mode 2026 is open. Keep
-        # this guard as a safety net for direct/internal sync callers too.
-        if self._sync_open and self._replace_scroll:
-            return
-
         scrollback_rows = self._get_size(gvt.TERMINAL_DATA_SCROLLBACK_ROWS)
         last = self._last_scrollback_rows
 
         # A resize (last == -1, see GhosttyParser.resize) falls through to
         # the full extraction below rather than trusting a shortcut here --
         # deliberately reverted 2026-09-02, see resize()'s comment for why.
-        # A resize followed by a synchronized home+full-transcript repaint
-        # (_replace_scroll True, last == -1 so the `last >= 0` check below
-        # is false) instead takes the plain full-rebuild path further down,
-        # which re-extracts the *entire* capped scrollback fresh from the
-        # native terminal -- correct after a resize specifically, since a
-        # partial/incremental merge has nothing valid pinned to merge
-        # against when every row's wrapping may have just changed.
         if scrollback_rows == last:
             return
 
@@ -966,29 +602,7 @@ class GhosttyParser:
         # single line that scrolls. Any other transition (first sync, reset,
         # resize-triggered reflow/shrink) can't be trusted as a pure
         # append, so fall back to a full rebuild.
-        #
-        # A full rebuild replays rows already seen in a prior sync (reflowed
-        # or not), so it must NOT re-fire on_retire_line for them -- only the
-        # incremental-append path below notifies genuinely new lines. This
-        # mirrors Screen.resize()'s own scrollback-clip path, which rebuilds
-        # s.history by appending directly rather than through _retire_line.
-        replace_old = None
-        if self._replace_scroll and last >= 0:
-            # Home+2026 dump, possibly split across feeds: pin the
-            # origin to the first overflow of this batch and rebuild
-            # from that native range. Do not blindly clear [0, origin)
-            # -- a full-transcript replay re-creates those rows (often
-            # with a spliced tail on the first screen), but content
-            # from before this replay is not in the dump and must stay.
-            if self._replace_origin is None:
-                self._replace_origin = last
-            origin = self._replace_origin
-            if scrollback_rows <= origin:
-                return
-            replace_old = list(s.history)
-            start = origin
-            notify = False
-        elif 0 <= last < scrollback_rows:
+        if 0 <= last < scrollback_rows:
             start = last
             notify = True
         else:
@@ -996,7 +610,6 @@ class GhosttyParser:
             start = 0
             notify = False
 
-        new_rows = []
         for y in range(start, scrollback_rows):
             cells = []
             for x in range(cols):
@@ -1007,17 +620,10 @@ class GhosttyParser:
                     cells.append((" ", 0))
                     continue
                 cells.append(self._cell_from_grid_ref(ref, palette))
-            if replace_old is not None:
-                new_rows.append(rstrip_cells(cells))
-            elif notify:
+            if notify:
                 s._retire_line(cells)
             else:
                 s.history.append(rstrip_cells(cells))
-
-        if replace_old is not None:
-            s.history.clear()
-            for row in merge_replace_scroll_history(replace_old, new_rows, s.rows):
-                s.history.append(row)
 
         self._last_scrollback_rows = scrollback_rows
         s.dirty = True
