@@ -39,13 +39,11 @@ Failed, canceled, or duplicate connection attempts must create no recording
 files. A successful reattach creates a new correlated `*_reattach.cast` and
 `*_reattach.log` segment. It does not append to the pre-restart segment.
 
-The text log is a snapshot, not an append-only transcript. Each update is the
-complete text most recently painted into the Sublime tab. Snapshot publication
-uses atomic replacement when the platform permits it. On Windows, a reader may
-hold the destination without delete-sharing and make replacement impossible;
-that case falls back to an in-place rewrite so live tailing does not disable
-logging. Closing a terminal preserves the last paint; it must not replace it
-with `Screen.live_lines_text()`, which omits painted scrollback.
+The text log is append-only. Each paint contributes lines that are newly
+stable (they left the live last row, or a row changed in place). The file is
+never replaced. Closing a terminal appends the live last row; it must not
+flush `Screen.live_lines_text()`, which omits painted scrollback. A reader
+may hold the file open; appends still land.
 
 ## Cast validity
 
@@ -54,8 +52,8 @@ another. `CastRecorder.open()` does not publish its handle until the v3 header
 has been written, flushed, and fsynced. A failed header write removes an empty
 partial file. Once open, every event is serialized under the recorder lock.
 
-The cast is the raw terminal event record. The `.log` is only the latest
-rendered Sublime-tab snapshot; it is not an authoritative session transcript.
+The cast is the raw terminal event record. The `.log` is an append-only
+record of tab lines; it is not an authoritative session transcript.
 
 Continuous one-file recording across a Sublime restart requires moving cast
 ownership into `tools/agent_broker.py`. Do not simulate continuity by appending

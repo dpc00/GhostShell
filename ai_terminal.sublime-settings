@@ -114,14 +114,14 @@
     "launch_command": [
         "cmd.exe"
     ],
-    // Keep a plain-text, agent-readable transcript of every ai_terminal
-    // session under ~/data/logs/ai_terminal_session_text_logs -- one line
-    // appended the instant it permanently scrolls out of the live viewport
-    // (never a duplicate, no ANSI), plus whatever's still on-screen flushed
-    // when the tab closes. Point an agent at this file to review what
-    // happened in a past session, regardless of what CLI/agent was running
-    // in that tab -- this operates below the application layer, so it works
-    // identically for cmd, bash, PowerShell, or any of the agent profiles.
+    // Append whatever appears in an ai_terminal tab to a plain-text file
+    // under ~/data/logs/ai_terminal_session_text_logs. The file only grows:
+    // lines that leave the live last row are appended as they go, and the
+    // last row is written when the session closes. Point an agent at this
+    // file to review what showed up in that tab, regardless of which
+    // CLI/agent was running -- this operates below the application layer,
+    // so it works identically for cmd, bash, PowerShell, or any profile.
+    //
     // Off by default for a public release. Set true globally, or set
     // "log_tab_text": true on a specific profile, to opt in.
     "log_tab_text": false,

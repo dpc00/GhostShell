@@ -65,8 +65,8 @@ These artifacts answer different questions and must not be conflated:
    content when the agent provides it.
 2. **The live terminal emulator** is authoritative for current interactive
    screen state.
-3. **The tab text log** records exactly the latest Sublime tab paint. It is a
-   screen snapshot, not a guaranteed conversation transcript.
+3. **The tab text log** is an append-only file of lines that appeared on the
+   Sublime tab. It is not a guaranteed conversation transcript.
 4. **The asciicast** records terminal input/output operations for diagnosis.
    It is evidence, not canonical conversational data.
 

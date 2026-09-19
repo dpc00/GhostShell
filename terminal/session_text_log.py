@@ -1,9 +1,13 @@
-"""A live text snapshot of what was last painted on the Sublime tab.
+"""Append-only log of what has appeared on the Sublime tab.
 
-Each paint already contains the complete rendered tab (scrollback and live
-screen).  Keep that snapshot verbatim instead of trying to turn successive
-frames into an append-only transcript: appending records every input edit,
-spinner frame, and status-line redraw that the user only saw temporarily.
+The file only grows. Each paint is compared to the previous paint. Lines
+that have moved off the live last row (new stable rows, or a row that
+changed in place) are appended. The last row is live — typing, spinner,
+status — and is written when it becomes stable or when the session closes.
+
+observe() is cheap and runs on Sublime's main thread. Disk writes happen
+on a background timer after 0.5s of quiet so a hot render loop cannot
+freeze the UI. close() flushes immediately, including the live row.
 """
 import os
 import threading
@@ -14,25 +18,17 @@ from .log_paths import LOG_ROOT, makedirs_private, open_private
 
 TEXT_LOG_DIR = os.path.join(LOG_ROOT, "ai_terminal_session_text_logs")
 
-# How long to coalesce a burst of rapid changed-paint calls into a single
-# disk write. observe() itself stays cheap and runs on ST's main thread (it
-# only compares/stores the pending snapshot); the actual temp-file write +
-# os.replace() + close + reopen happens on a background threading.Timer
-# after this many seconds of quiet, so a high-throughput session (many
-# changed paints per second) does at most one real write per window instead
-# of one per paint. Found live 2026-09-14: a continuously-streaming terminal
-# tab was driving this write on every ~30ms render tick, each one blocking
-# ST's main thread for real disk I/O, causing multi-second UI freezes.
-# close() flushes any still-pending snapshot synchronously so nothing is
-# lost when a session ends mid-window.
+# observe() only queues; the timer writes. Found live 2026-09-14: a
+# streaming tab was writing on every ~30ms render tick and freezing ST.
 _WRITE_DEBOUNCE_S = 0.5
 
-# Instrumentation only -- these counters answer "how often, how expensive"
-# without needing external stack sampling. Read via session_text_log_stats();
-# process-lifetime, not per-instance, since a terminal's SessionTextLog is
-# recreated per session.
 _stats_lock = threading.Lock()
-_stats = {"observe_calls": 0, "observe_writes": 0, "write_seconds_total": 0.0, "write_seconds_max": 0.0}
+_stats = {
+    "observe_calls": 0,
+    "observe_writes": 0,
+    "write_seconds_total": 0.0,
+    "write_seconds_max": 0.0,
+}
 
 
 def session_text_log_stats():
@@ -40,19 +36,84 @@ def session_text_log_stats():
         return dict(_stats)
 
 
+# Only the top of a paint (scrollback) is stable enough to line up two
+# paints; the bottom is the live screen and changes every frame.
+_ALIGN_ROWS = 30
+_MIN_ALIGN_ROWS = 5
+
+
+def _scrolled_off_count(prev, present):
+    """How many lines left the top of the tab between two paints.
+
+    0 when the top is unchanged or the paints cannot be lined up
+    (a full redraw): callers must not guess.
+    """
+    if not prev or not present or not present[0].strip():
+        return 0
+    rows = min(_ALIGN_ROWS, len(present))
+    if prev[:rows] == present[:rows]:
+        return 0
+    for k in range(1, len(prev)):
+        m = min(rows, len(prev) - k)
+        if m < min(rows, _MIN_ALIGN_ROWS):
+            break
+        if prev[k:k + m] == present[:m]:
+            return k
+    return 0
+
+
+def _stable(lines):
+    if not lines:
+        return []
+    return lines[:-1]
+
+
+def _is_last_line_edit(prev, present):
+    return (
+        bool(prev)
+        and bool(present)
+        and len(prev) == len(present)
+        and prev[:-1] == present[:-1]
+    )
+
+
+def _is_prefix_growth(old, new):
+    return bool(old) and (new.startswith(old) or old.startswith(new))
+
+
+def _new_stable_lines(prev, present):
+    """Lines that are now off the live last row and not already implied by prev."""
+    if not prev:
+        return list(_stable(present))
+    if _is_last_line_edit(prev, present):
+        if not _is_prefix_growth(prev[-1], present[-1]):
+            return [prev[-1]]
+        return []
+    gone = _scrolled_off_count(prev, present)
+    present_stable = _stable(present)
+    prev_stable = _stable(prev[gone:])
+    out = []
+    if (
+        gone == 0
+        and prev_stable != present_stable
+        and (not present_stable or prev_stable[:1] != present_stable[:1])
+    ):
+        # Full redraw: the previous live row was on screen and is gone.
+        out.append(prev[-1])
+    for i, line in enumerate(present_stable):
+        if i >= len(prev_stable) or prev_stable[i] != line:
+            out.append(line)
+    return out
+
+
 class SessionTextLog:
     def __init__(self):
         self.file = None
         self._path = None
         self._prev = []
-        self._prev_trailing_newline = None
+        self._pending = []
         self._last_written = None
         self._lock = threading.Lock()
-        # Debounced-write state: the most recent snapshot observe() has seen
-        # but not yet written to disk, and the armed timer that will write it
-        # (or None if no write is currently scheduled). Both guarded by
-        # self._lock, same as every other field here.
-        self._pending = None
         self._write_timer = None
 
     def open(self, filename_stamp):
@@ -63,9 +124,8 @@ class SessionTextLog:
             self.file = handle
             self._path = path
             self._prev = []
-            self._prev_trailing_newline = None
+            self._pending = []
             self._last_written = None
-            self._pending = None
             self._write_timer = None
 
     def write_line(self, text):
@@ -80,34 +140,16 @@ class SessionTextLog:
             self._last_written = text
 
     def observe(self, lines, now=None, trailing_newline=True):
-        """Record the current tab paint as the pending snapshot.
-
-        ``now`` remains accepted for compatibility with older callers.
-        Blank lines and horizontal spacing are significant parts of the paint.
-
-        Cheap and safe to call from ST's main thread on every render tick:
-        this only compares against the last-seen paint and stores the result
-        for the debounced background writer in _flush_pending -- it never
-        touches disk itself. See _WRITE_DEBOUNCE_S for why.
-        """
+        """Queue newly stable tab lines. ``now`` / ``trailing_newline``
+        remain accepted for older callers; the file is line-oriented."""
         present = ["" if line is None else str(line) for line in (lines or ())]
         with _stats_lock:
             _stats["observe_calls"] += 1
         with self._lock:
-            if (
-                self.file is None
-                or (
-                    present == self._prev
-                    and trailing_newline == self._prev_trailing_newline
-                )
-            ):
+            if self.file is None or present == self._prev:
                 return
-            # Deliberately NOT updated here: self._prev/_last_written only
-            # advance once _write_snapshot_locked actually succeeds (see
-            # there), same as the old synchronous code -- so a failed write
-            # leaves _prev stale and the identical content is treated as
-            # "changed" again on the next observe(), letting it retry.
-            self._pending = (present, trailing_newline)
+            self._pending.extend(_new_stable_lines(self._prev, present))
+            self._prev = present
             if self._write_timer is None:
                 timer = threading.Timer(_WRITE_DEBOUNCE_S, self._flush_pending)
                 timer.daemon = True
@@ -115,29 +157,18 @@ class SessionTextLog:
                 timer.start()
 
     def _flush_pending(self):
-        """Write the most recent pending snapshot to disk. Runs on a
-        background threading.Timer thread, never on ST's main thread --
-        so unlike flush_now(), a write failure here is caught and printed
-        (already done inside _write_snapshot_locked) rather than raised,
-        since there is no synchronous caller left to hand it to."""
         with self._lock:
             self._write_timer = None
-            if self.file is None or self._pending is None:
+            if self.file is None or not self._pending:
                 return
-            present, trailing_newline = self._pending
-            self._pending = None
             try:
-                self._write_snapshot_locked(present, trailing_newline)
+                self._write_pending_locked()
             except OSError:
-                pass  # already printed inside _write_snapshot_locked
+                pass  # already printed inside _write_pending_locked
 
     def flush_now(self):
-        """Force any pending debounced write to happen immediately,
-        synchronously, on the calling thread -- for callers (tests, close())
-        that need the on-disk file to reflect the latest observe() call
-        right away. Unlike the background debounced path, a write failure
-        here propagates to the caller, matching observe()'s old synchronous
-        contract for whoever still wants to see it."""
+        """Write queued stable lines immediately. Does not write the live
+        last row; close() does that."""
         timer = None
         with self._lock:
             timer = self._write_timer
@@ -145,81 +176,24 @@ class SessionTextLog:
         if timer is not None:
             timer.cancel()
         with self._lock:
-            if self.file is None or self._pending is None:
+            if self.file is None or not self._pending:
                 return
-            present, trailing_newline = self._pending
-            self._pending = None
-            self._write_snapshot_locked(present, trailing_newline)
+            self._write_pending_locked()
 
-    def _write_snapshot_locked(self, present, trailing_newline):
-        """Do the actual temp-file write + os.replace() + close + reopen.
-        Caller must already hold self._lock."""
+    def _write_pending_locked(self):
+        """Caller holds self._lock. Append pending lines; never rewrite."""
+        if self.file is None or not self._pending:
+            return
         write_started = time.monotonic()
-        path = self._path
-        temp_path = path + ".tmp"
-        snapshot = "\n".join(present)
-        if present and trailing_newline:
-            snapshot += "\n"
-        replacement = None
-        fallback = None
+        payload = "".join(line + "\n" for line in self._pending)
         try:
-            replacement = open_private(
-                temp_path, "w", encoding="utf-8", newline="\n"
-            )
-            replacement.write(snapshot)
-            replacement.flush()
-            replacement.close()
-            replacement = None
-
-            self.file.close()
-            self.file = None
-            try:
-                os.replace(temp_path, path)
-            except PermissionError:
-                # Windows refuses os.replace() while some readers keep
-                # the destination open without FILE_SHARE_DELETE. Only
-                # that operation gets the in-place fallback; a permission
-                # failure creating/writing the temporary file is a real
-                # logging failure and must not truncate the old snapshot.
-                fallback = open_private(path, "w", encoding="utf-8", newline="\n")
-                fallback.write(snapshot)
-                fallback.flush()
-                fallback.close()
-                fallback = None
-                os.remove(temp_path)
-            finally:
-                self.file = open_private(
-                    path, "a", encoding="utf-8", newline="\n"
-                )
+            self.file.write(payload)
+            self.file.flush()
         except OSError:
-            print("[ai_terminal] session text log: snapshot write failed:\n%s"
-                  % traceback.format_exc())
-            if replacement is not None:
-                try:
-                    replacement.close()
-                except OSError:
-                    print("[ai_terminal] session text log cleanup: "
-                          "replacement.close() failed:\n%s" % traceback.format_exc())
-            if fallback is not None:
-                try:
-                    fallback.close()
-                except OSError:
-                    print("[ai_terminal] session text log cleanup: "
-                          "fallback.close() failed:\n%s" % traceback.format_exc())
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except OSError:
-                print("[ai_terminal] session text log cleanup: "
-                      "remove temp_path failed:\n%s" % traceback.format_exc())
-            if self.file is None:
-                try:
-                    self.file = open_private(
-                        path, "a", encoding="utf-8", newline="\n"
-                    )
-                except OSError:
-                    print("[ai_terminal] session text log: reopen after "
-                          "failure also failed:\n%s" % traceback.format_exc())
+            print(
+                "[ai_terminal] session text log: append failed:\n%s"
+                % traceback.format_exc()
+            )
             raise
         elapsed = time.monotonic() - write_started
         with _stats_lock:
@@ -227,11 +201,8 @@ class SessionTextLog:
             _stats["write_seconds_total"] += elapsed
             if elapsed > _stats["write_seconds_max"]:
                 _stats["write_seconds_max"] = elapsed
-        # Only advance on success (an exception above returns before this
-        # point) -- see the comment in observe() for why that matters.
-        self._prev = present
-        self._prev_trailing_newline = trailing_newline
-        self._last_written = present[-1] if present else None
+        self._last_written = self._pending[-1]
+        self._pending = []
 
     def flush_live_lines(self, lines):
         self.observe(lines)
@@ -240,23 +211,34 @@ class SessionTextLog:
         return
 
     def close(self):
-        try:
-            # A background write may have been scheduled but not fired yet --
-            # flush it now, synchronously, so the log reflects the true final
-            # state instead of whatever the last completed write happened to
-            # catch mid-burst.
-            self.flush_now()
-        except OSError:
-            pass  # already logged inside _write_snapshot_locked
+        timer = None
+        with self._lock:
+            timer = self._write_timer
+            self._write_timer = None
+        if timer is not None:
+            timer.cancel()
         with self._lock:
             if self.file is None:
                 return
+            if self._prev:
+                live = self._prev[-1]
+                if live != self._last_written and not (
+                    self._pending and self._pending[-1] == live
+                ):
+                    self._pending.append(live)
+            try:
+                self._write_pending_locked()
+            except OSError:
+                pass
             try:
                 self.file.close()
             except OSError:
-                print("[ai_terminal] session text log: close failed:\n%s"
-                      % traceback.format_exc())
+                print(
+                    "[ai_terminal] session text log: close failed:\n%s"
+                    % traceback.format_exc()
+                )
             self.file = None
             self._path = None
             self._prev = []
-            self._prev_trailing_newline = None
+            self._pending = []
+            self._last_written = None
