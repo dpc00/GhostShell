@@ -1,6 +1,25 @@
 # Release notes
 
 
+## 0.1.6
+
+**Bug fix:** a wide character (emoji) in a full-width TUI box made
+GhostShell send a 1-row `SIGWINCH` in a loop. The app then replayed the
+whole conversation until the prompt came back.
+
+libghostty-vt already knew the glyph was 2 cells
+(`ghostty_unicode_grapheme_width`). The Sublime line also kept Ghostty's
+spacer space, so the box was one em too wide, the H-scrollbar stole
+viewport height, and measured rows flipped 47↔48. The spacer is dropped
+now. A sub-cell jog can remain if the font's emoji advance is not
+exactly `2 × em_width`; that is not enough to pop the scrollbar.
+
+Also: `scrollback_history_size` is still lines; it is converted to bytes
+at `terminal_new` because libghostty-vt's `max_scrollback` is a byte
+budget ([ghostty#12769](https://github.com/ghostty-org/ghostty/discussions/12769)).
+The session text log is the painted tab without the 300-line cap.
+
+
 ## 0.1.5
 
 **Bug fix:** the session text log dropped anything that left the tab.
