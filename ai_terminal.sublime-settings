@@ -98,6 +98,13 @@
     // footer height wobbles does not jiggle the viewport. Default 0
     // (follow the real last line). Override per profile.
     "follow_ignore_trailing_lines": 0,
+    // Font for ai_terminal tabs only (this is the key the plugin actually
+    // reads). Must be a monospace font with full box-drawing (U+2500-
+    // U+257F), block-element (U+2580-U+259F), and misc TUI symbol coverage
+    // (U+23BF, U+23F8, U+2733, U+273B, U+2802, U+2B1D). Cascadia Code ships
+    // with Windows 10+ and has all of these. A profile can override this
+    // with its own "font_face"/"font_size".
+    "font_face": "Cascadia Code",
     // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
     // a visible block/bar/underline/hollow glyph or reverse-video cell on top
     // of the plain rendered text. False = rely solely on the real ST caret
@@ -343,19 +350,6 @@
             ],
             "spawn_env": {}
         },
-        "Cody": {
-            // Sourcegraph's Cody CLI. NOT a chat-TUI agent -- confirmed live
-            // 2026-09-04 (cast ai_2026-09-04_171354_311699): bare `cody`
-            // just prints `Usage: cody [options] [command]` help text and
-            // exits, no alt-screen, no mouse tracking. Real usage is
-            // `cody chat -m "message"` as a single command, or the api/
-            // internal JSON-RPC subcommands -- type it yourself once this
-            // profile's shell opens.
-            "launch_command": [
-                "cody"
-            ],
-            "spawn_env": {}
-        },
         "Codex": {
             "detachable": true,
             // Mouse tracking: never enables DEC ?1000/1002/1003 (34 recorded
@@ -388,6 +382,19 @@
                 // "GOOGLE_CLOUD_PROJECT":"project-67efc385-8bb5-493f-a81",
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
             }
+        },
+        "Cody": {
+            // Sourcegraph's Cody CLI. NOT a chat-TUI agent -- confirmed live
+            // 2026-09-04 (cast ai_2026-09-04_171354_311699): bare `cody`
+            // just prints `Usage: cody [options] [command]` help text and
+            // exits, no alt-screen, no mouse tracking. Real usage is
+            // `cody chat -m "message"` as a single command, or the api/
+            // internal JSON-RPC subcommands -- type it yourself once this
+            // profile's shell opens.
+            "launch_command": [
+                "cody"
+            ],
+            "spawn_env": {}
         },
         "Continue": {
             // @continuedev/cli -- real binary is `cn`, NOT "continue" or
@@ -525,25 +532,17 @@
             // asciicast sessions (2026-08-11). Real PTY-side receiver exists;
             // this is the profile mouse_handling's click/tap-to-PTY path
             // (_route_mouse_click) targets (Grok trust dialog / buttons).
-            // page_keys_to_pty: Grok paints a full TUI in place (no real
-            // ANSI scroll, force_main_screen hides 1049 so _tui_like is
-            // false). Native PageUp/PageDown then page a one-frame ST
-            // buffer and look dead. Forward them like alt-screen apps;
-            // Claude stays on the default (native ST page) because it
-            // actually fills scrollback under CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN.
-            // user note:  in Grok tab key switches to scrollback manuevering, cursor
-            // and page keys work then and manuever back into conversation, tab gets one back to command line
-            // it is actually an elegant design hard to under/over estimate it without lots of experience
-            // I wonder how many other CLI TUIs have this simple switch going on.
-            // mouse_handling: the comment above has documented confirmed
-            // mouse tracking since 2026-08-11 and the design doc
-            // (ai/TODO-archive.md:401-407) explicitly called for enabling
-            // it here, but the actual flag was never set (or got lost) --
-            // re-added 2026-09-05 after a full mouse_handling audit across
-            // every profile turned up the gap.
+            // Screen app that often never announces DEC 1049 (live cast
+            // 2026-09-19_133656: CUP repaint, no ESC[?1049h, history empty)
+            // yet still needs TUI-like keypad ownership. force_tui_like makes
+            // that explicit for host policy; page_keys_to_pty forwards bare
+            // PageUp/Down to Grok. Ctrl+PageUp/Down always move the Sublime
+            // tab (escape hatch in ai_terminal_keypress).
+            "force_tui_like": true,
             "launch_command": [
                 "grok"
             ],
+            "page_keys_to_pty": true,
             "spawn_env": {}
         },
         "Grok Build --minimal": {
@@ -714,6 +713,25 @@
             ],
             "spawn_env": {}
         },
+        "omp": {
+            // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
+            // -- a from-scratch coding-first fork/rewrite of Pi by Mario
+            // Zechner, by Can Bolukbasi. Installed 2026-09-11 via
+            // `bun install -g @oh-my-pi/pi-coding-agent` (the official
+            // omp.sh/install.ps1 Windows installer fails deterministically --
+            // filed github.com/can1357/oh-my-pi/issues/11675 -- worked around
+            // by running `bun install -g` directly with
+            // $ErrorActionPreference relaxed instead of the broken script).
+            // Binary lands at ~/.bun/bin/omp.exe, already on PATH.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED --
+            // no live session recorded yet. Safe defaults only until a real
+            // TUI walk (see agent_tui_catalog.sqlite3) captures it.
+            "detachable": true,
+            "launch_command": [
+                "omp"
+            ],
+            "spawn_env": {}
+        },
         "OpenCode": {
             "detachable": true,
             // Mouse tracking: OpenCode's own output requests ?1000/1002/
@@ -823,26 +841,6 @@
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
             }
         },
-        "omp": {
-
-            // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
-            // -- a from-scratch coding-first fork/rewrite of Pi by Mario
-            // Zechner, by Can Bolukbasi. Installed 2026-09-11 via
-            // `bun install -g @oh-my-pi/pi-coding-agent` (the official
-            // omp.sh/install.ps1 Windows installer fails deterministically --
-            // filed github.com/can1357/oh-my-pi/issues/11675 -- worked around
-            // by running `bun install -g` directly with
-            // $ErrorActionPreference relaxed instead of the broken script).
-            // Binary lands at ~/.bun/bin/omp.exe, already on PATH.
-            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED --
-            // no live session recorded yet. Safe defaults only until a real
-            // TUI walk (see agent_tui_catalog.sqlite3) captures it.
-            "detachable": true,
-            "launch_command": [
-                "omp"
-            ],
-            "spawn_env": {}
-        },
         "Pi": {
             // @earendil-works/pi-coding-agent. Confirmed across multiple
             // real sessions 2026-09-01/02, including two 400+KB long-usage
@@ -916,25 +914,13 @@
             "launch_command": [
                 "vibe"
             ],
-            // Mouse tracking: Vibe's own output requests ?1000/1003/1006h
-            // (click + any-motion, SGR coords; no 1002) -- seen across 17+
-            // recorded asciicast sessions (2026-08-11). That only proves
-            // Vibe *asks* for it -- see _mouse_handling_enabled's ConPTY-
-            // transport-ceiling comment (ai_terminal.py, root-caused
-            // 2026-09-09, independently reconfirmed live by Vibe itself
-            // reading this same codebase): this POSIX-style stdout request
-            // is swallowed by ConPTY on Windows regardless of this flag, so
-            // real click/drag inside Vibe cannot reach it through this file.
-            // Vibe (Textual) manages its own scroll region and never emits a
-            // real ANSI scroll, so the history deque stays empty and PageUp/
-            // PageDown reach nothing -- mouse wheel is the only way to see
-            // scrolled-off content. Global mouse handling is off by default
-            // (kill switch, see ai_terminal.py) because it broke Qwen; this
-            // profile opts back in since Vibe needs it and doesn't enable
-            // DEC mouse tracking's click/drag behavior that caused that bug.
-            "spawn_env": {
-                "LOG_LEVEL": "DEBUG"
-            }
+            "mouse_handling": true,
+            "page_keys_to_pty": true,
+            // Native ST wheel/scroll so the host toolbar stays reachable.
+            // Requires the host to honor this flag in clamp/pin (not only
+            // in the scroll_lines interceptor).
+            "spawn_env": {},
+            "wheel_to_pty": false
         },
         "WSL Bash": {
             "detachable": true,
@@ -1030,13 +1016,6 @@
     // garbled-character report on GitHub Copilot's tab turned out to be a
     // font coverage gap. Real key below.
     "terminal_font": "Cascadia Code",
-    // Font for ai_terminal tabs only (this is the key the plugin actually
-    // reads). Must be a monospace font with full box-drawing (U+2500-
-    // U+257F), block-element (U+2580-U+259F), and misc TUI symbol coverage
-    // (U+23BF, U+23F8, U+2733, U+273B, U+2802, U+2B1D). Cascadia Code ships
-    // with Windows 10+ and has all of these. A profile can override this
-    // with its own "font_face"/"font_size".
-    "font_face": "Cascadia Code",
     // How often (minutes) to re-poll each provider's usage/quota endpoint so
     // the figures in the launcher and menus do not go stale mid-session. The
     // sweep uses the OAuth tokens the CLIs already persisted and spends no

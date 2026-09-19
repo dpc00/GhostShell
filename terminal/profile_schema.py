@@ -8,16 +8,23 @@ different terminal behaviour several call sites later.
 
 BOOLEAN_KEYS = frozenset({
     "caret_footer_pinning_enabled",
+    "click_to_cursor_fallback_enabled",
     "close_tab_on_exit",
     "debug_status_bar_enabled",
     "detachable",
     "drag_forwards_by_default",
     "fast_caret_patch_enabled",
+    "force_tui_like",
+    "home_end_native",
     "host_cursor_paint_enabled",
     "log_tab_text",
+    "mouse_handling",
     "osc_title_updates_tab",
+    "page_keys_to_pty",
+    "pin_viewport",
     "record_asciicast",
     "user_owns_caret_enabled",
+    "wheel_to_pty",
 })
 
 NUMBER_KEYS = frozenset({

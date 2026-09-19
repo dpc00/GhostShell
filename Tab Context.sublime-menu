@@ -14,6 +14,11 @@
 				"args": { "group": -1, "index": -1 }
 			},
 			{
+				"caption": "Tune Profile Settings…",
+				"command": "ai_terminal_tune_profile",
+				"args": { "group": -1, "index": -1 }
+			},
+			{
 				"caption": "Agent Help...",
 				"command": "ai_terminal_agent_help",
 				"args": { "group": -1, "index": -1 }
