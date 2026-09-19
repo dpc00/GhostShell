@@ -26,17 +26,60 @@ from terminal.colors import (
 )
 from terminal.ghostty_engine import (
     GhosttyParser,
+    _blank_wide_spacers,
     _color_id,
+    _scrollback_bytes,
+    _SCROLLBACK_BYTES_PER_CELL,
 )
+
+
 
 
 def _detached_parser():
     """A GhosttyParser that never loaded the DLL — pure helpers only."""
     return GhosttyParser.__new__(GhosttyParser)
 
+class ScrollbackBytesTests(unittest.TestCase):
+    def test_300_lines_cover_a_full_width_row_each(self):
+        cols = 80
+        n = _scrollback_bytes(300, cols)
+        self.assertEqual(n, 300 * cols * _SCROLLBACK_BYTES_PER_CELL)
+        self.assertGreaterEqual(n, 300 * cols)
+
+    def test_zero_or_empty_still_positive(self):
+        self.assertGreaterEqual(_scrollback_bytes(0, 80), 1)
+        self.assertGreaterEqual(_scrollback_bytes(300, 0), 1)
+
+
+
+class WideSpacerTests(unittest.TestCase):
+    @staticmethod
+    def _width(text):
+        if not text:
+            return 0
+        if text == "🐍":
+            return 2
+        return 1
+
+    def test_emoji_spacer_space_becomes_empty(self):
+        row = [("A", 0), ("🐍", 0), (" ", 0), ("B", 0)]
+        out = _blank_wide_spacers(row, self._width)
+        self.assertEqual(out, [("A", 0), ("🐍", 0), ("", 0), ("B", 0)])
+        self.assertEqual("".join(ch for ch, _ in out), "A🐍B")
+
+    def test_box_with_snake_does_not_gain_an_em(self):
+        row = [("╭", 0), ("─", 0), ("🐍", 0), (" ", 0), ("─", 0), ("╮", 0)]
+        out = _blank_wide_spacers(row, self._width)
+        self.assertEqual("".join(ch for ch, _ in out), "╭─🐍─╮")
+
+    def test_plain_spaces_untouched(self):
+        row = [("a", 0), (" ", 0), ("b", 0)]
+        self.assertEqual(_blank_wide_spacers(row, self._width), row)
+
 
 class RawVtInputTests(unittest.TestCase):
     class _Native:
+
         def terminal_vt_write(self, _term, _data, _length):
             pass
 

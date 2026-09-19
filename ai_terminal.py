@@ -2560,8 +2560,11 @@ _DEFAULT_SPAWN_ENV = {
 
 
 def _scrollback_size(profile_name=None):
-    """Scrollback line cap: per-profile override (e.g. pybackup's launcher
-    profile logging past the global default) else the global setting."""
+    """Scrollback line cap: per-profile override else the global setting.
+
+    This is lines for Screen.history. ghostty_engine converts to bytes
+    for libghostty-vt's max_scrollback (a byte limit, not a row count).
+    """
     return max(
         0,
         _setting_number(

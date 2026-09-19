@@ -558,6 +558,13 @@ def main():
         action="store_true",
         help="Fullscreen SGR mouse-tracking harness with a clickable target.",
     )
+    parser.add_argument(
+        "--fill",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Print N lines then wait (scroll-grain test).",
+    )
     args = parser.parse_args()
 
     cols, rows = get_size()
@@ -572,6 +579,16 @@ def main():
         MockInkAgent(cols, rows).run()
     elif args.mouse:
         MockMouseAgent(cols, rows).run()
+    elif args.fill:
+        for i in range(args.fill):
+            _write("LINE-%05d filler for scroll-grain test\r\n" % i)
+        _write("[fill %d done]\r\n" % args.fill)
+        _log("fill-mode %d" % args.fill)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
     else:
         ReplayAgent().run()
 
