@@ -1,5 +1,19 @@
 # Release notes
 
+
+## 0.1.5
+
+**Bug fix:** the session text log dropped anything that left the tab.
+
+With `log_tab_text` on, the log rewrote the whole file as a snapshot of
+the current paint. Capped scrollback, in-place redraws, and replaced
+lines (thinking then answer) vanished. The file now only grows: lines
+are appended as they leave the live last row, and the last row is
+written when the session closes.
+
+Opt-in is unchanged (`log_tab_text`, default false). Anyone already
+logging was losing history; this release fixes that.
+
 ## 0.1.0 (initial release)
 
 GhostShell is a terminal for Sublime Text with profiles for shells and AI
