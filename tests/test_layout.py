@@ -9,7 +9,8 @@ Would fail if accepted_cols started returning last+1.
 """
 import unittest
 
-from terminal.layout import accepted_cols, follow_line_count, gutter_digit_delta
+from terminal.layout import accepted_cols, accepted_rows, follow_line_count, gutter_digit_delta
+
 
 
 class AcceptedColsTests(unittest.TestCase):
@@ -39,6 +40,34 @@ class AcceptedColsTests(unittest.TestCase):
         for measured in (32, 33, 32, 33, 32, 33):
             cols = accepted_cols(cols, measured)
         self.assertEqual(cols, 32)
+
+
+class AcceptedRowsTests(unittest.TestCase):
+    def test_first_measurement_is_used(self):
+        self.assertEqual(accepted_rows(None, 48), 48)
+
+    def test_unchanged_measurement_stays(self):
+        self.assertEqual(accepted_rows(47, 47), 47)
+
+    def test_does_not_grow_by_one_row(self):
+        self.assertEqual(accepted_rows(47, 48), 47)
+
+    def test_does_not_shrink_by_one_row(self):
+        # Unlike cols, a 1-row shrink is still SIGWINCH and dumps the TUI.
+        self.assertEqual(accepted_rows(48, 47), 48)
+
+    def test_grow_by_two_or_more_is_a_real_resize(self):
+        self.assertEqual(accepted_rows(47, 49), 49)
+        self.assertEqual(accepted_rows(40, 48), 48)
+
+    def test_shrink_by_two_or_more_is_a_real_resize(self):
+        self.assertEqual(accepted_rows(48, 40), 40)
+
+    def test_47_48_attractor_stays_on_the_applied_size(self):
+        rows = 48
+        for measured in (47, 48, 47, 48, 47, 48):
+            rows = accepted_rows(rows, measured)
+        self.assertEqual(rows, 48)
 
 
 class GutterDigitDeltaTests(unittest.TestCase):

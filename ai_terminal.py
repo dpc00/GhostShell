@@ -1576,7 +1576,8 @@ try:
     )
     from .terminal import launcher as _launcher
     from .terminal import history_scan as _history_scan
-    from .terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
+    from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
+
     from .terminal.render import (
         HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
         build_text_and_regions as _build_text_and_regions_pure,
@@ -1669,7 +1670,8 @@ except ImportError as _term_imp_err:
         )
         from terminal import launcher as _launcher
         from terminal import history_scan as _history_scan
-        from terminal.layout import accepted_cols as _accepted_cols, gutter_digit_delta as _gutter_digit_delta
+        from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
+
         from terminal.render import (
             HOST_CURSOR_SCOPE as _HOST_CURSOR_SCOPE,
             build_text_and_regions as _build_text_and_regions_pure,
@@ -4268,10 +4270,14 @@ class _LayoutWatcher:
         # column. See terminal.layout.accepted_cols and ai/TODO.md
         # "Status-line resize/rewrap loop".
         cols = _accepted_cols(self.term._last_cols, cols)
+        # 47↔48 attractor: H-bar / int(h/lh)-1. A 1-row SIGWINCH dumps
+        # the TUI transcript; ignore both directions. Real sash ≥2.
+        rows = _accepted_rows(self.term._last_rows, rows)
         changed = (cols, rows) != (self.term._last_cols, self.term._last_rows)
         if changed:
             self.term.resize(cols, rows)
             print(f"[ai_terminal] resized PTY to {self.term._last_cols}x{self.term._last_rows}")
+
 
     def dispose(self):
         if self._token is not None:
