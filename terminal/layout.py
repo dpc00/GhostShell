@@ -20,6 +20,22 @@ def accepted_cols(last_cols, measured_cols):
     return measured_cols
 
 
+def accepted_rows(last_rows, measured_rows):
+    """Return the row count the PTY should use.
+
+    A 1-row flip is the 47↔48 attractor: H-scrollbar or int(h/lh)-1
+    rounding steals ~15px of viewport height. Unlike accepted_cols,
+    both directions are ignored — a 1-row SIGWINCH makes TUIs dump the
+    whole transcript. A real sash-drag is ≥2 rows.
+    """
+    if last_rows is None:
+        return measured_rows
+    if abs(int(measured_rows) - int(last_rows)) == 1:
+        return last_rows
+    return measured_rows
+
+
+
 def gutter_digit_delta(total_lines, scrollback_cap):
     """Column-width correction to cancel ST's real gutter-digit fluctuation.
 
