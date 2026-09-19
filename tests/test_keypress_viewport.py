@@ -21,8 +21,36 @@ class PrintableKeyViewportTests(unittest.TestCase):
         branch = source[start:end]
 
         self.assertIn('was_following = bool(getattr(term, "_auto_follow", False))', branch)
-        self.assertIn('elif not was_following:', branch)
+        self.assertIn('if not was_following:', branch)
         self.assertNotIn('                else:\n                    _scroll_to_bottom', branch)
+
+
+class CtrlPageKeysNativeEscapeTests(unittest.TestCase):
+    """When bare PageUp/Down go to the TUI, Ctrl+Page must still move ST."""
+
+    def test_ctrl_page_keys_call_page_scroll_before_pty_forward(self):
+        source = open(ai_terminal.__file__, encoding="utf-8").read()
+        start = source.index("Ctrl+PageUp/PageDown: always move the Sublime tab viewport")
+        end = source.index(
+            "PageUp/PageDown: scroll ST's real scrollback like an ordinary",
+            start,
+        )
+        branch = source[start:end]
+        self.assertIn('_page_scroll(self.view, term, key == "pagedown")', branch)
+        self.assertIn('key in ("pageup", "pagedown")', branch)
+        self.assertIn("ctrl and not shift", branch)
+        # Must not be gated on page_keys_to_pty (escape hatch is unconditional).
+        self.assertNotIn("_page_keys_to_pty", branch)
+
+
+class TuiKeypressNoTypeSnapTests(unittest.TestCase):
+    def test_printable_keys_do_not_repin_tui_viewport(self):
+        source = open(ai_terminal.__file__, encoding="utf-8").read()
+        start = source.index("Bare PageUp/Down (when page_keys_to_pty) must reach the TUI")
+        end = source.index("term.send_string(code)", start)
+        block = source[start:end]
+        self.assertIn("if not tui:", block)
+        self.assertNotIn("_set_viewport(self.view, (0.0, rest)", block)
 
 
 class NearBottomAutoFollowTests(unittest.TestCase):

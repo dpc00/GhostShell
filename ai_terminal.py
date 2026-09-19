@@ -4189,7 +4189,9 @@ class _LayoutWatcher:
     """
 
     _DEBOUNCE_MS = 150
-    _POLL_MS = 250
+    # Was 250ms forever-tick. Event-driven request() + 2s poll is enough;
+    # PTY resize does not need sub-second polling when the user owns the tab.
+    _POLL_MS = 2000
 
     def __init__(self, term):
         self.term = term
@@ -4623,7 +4625,9 @@ def _measure(view, profile_name=None):
 
 # Match Terminus renderer cadence (intermission period=0.03s). Faster full
 # replaces starve ST key dispatch on Windows; slower feels laggy vs Terminus.
-_RENDER_MS = 30
+# Debounce after PTY output (was 30ms). Still event-armed, not a free-running
+# paint loop; 100ms cuts main-thread churn on bursty TUIs.
+_RENDER_MS = 100
 _RENDER_MIN_INTERVAL_MS = 30
 
 # How long a session must produce no PTY output before queue_input() will
@@ -6022,23 +6026,9 @@ def _pin_terminal_viewport(view, term):
     """
     try:
         view.settings().set("scroll_past_end", True)
-        if _tui_like(term):
-            rest = _host_rest_y(view)
-            _set_viewport(view, (0.0, rest), False)
-            return
-        ve = view.viewport_extent()
-        lh = view.line_height() or 12.0
-        # Near-fit including pads: still use rest position. Uses
-        # _real_content_height, not view.layout_extent() directly -- the
-        # latter is inflated by one line_height() on a scroll_past_end view
-        # (see _real_content_height's docstring), which made this near-fit
-        # threshold one line stricter than the identical check in the main
-        # render loop (content_fits) and could pin/follow inconsistently
-        # between the two.
-        if _real_content_height(view) - ve[1] <= lh * (2 * _HOST_SCROLL_PAD_LINES + 1):
-            _set_viewport(view, (0.0, _host_rest_y(view)), False)
-        elif term is not None and getattr(term, "_auto_follow", False):
-            _scroll_to_bottom(view)
+        # Never hard-pin after pan/scroll -- user owns the Sublime tab.
+        # Only correct the negative overshoot glitch (vp below rest).
+        _pin_viewport_rest_dip_only(view, None, term)
     except (RuntimeError, AttributeError):
         print("[ai_terminal] pin terminal viewport failed:\n%s" % traceback.format_exc())
 
@@ -7667,7 +7657,7 @@ def _pin_viewport_rest(view, rest=None, term=None):
         print("[ai_terminal] pin viewport rest failed:\n%s" % traceback.format_exc())
 
 
-def _pin_viewport_rest_dip_only(view, rest, term):
+def _pin_viewport_rest_dip_only(view, rest=None, term=None):
     """Like _pin_viewport_rest, but only corrects a NEGATIVE overshoot below
     rest -- ST's view.show() briefly parking vp[1] below rest (e.g. -20)
     when content fits the viewport, the same glitch _clamp_vp_loop's
@@ -7689,6 +7679,8 @@ def _pin_viewport_rest_dip_only(view, rest, term):
     doesn't compare against a rest value the viewport was deliberately never
     returned to.
     """
+    if rest is None:
+        rest = _host_rest_y(view)
     try:
         cur = view.viewport_position()[1]
         if cur < rest - 1.0:
@@ -7963,7 +7955,7 @@ def _resync_viewport_after_height_change(view, term):
             term._last_vp_y = view.viewport_position()[1]
             term._live_anchor_y = term._last_vp_y
         elif _tui_like(term):
-            _pin_viewport_rest(view, None, term)
+            _pin_viewport_rest_dip_only(view, None, term)
     except (RuntimeError, AttributeError):
         print("[ai_terminal] viewport height-change resync failed:\n%s"
               % traceback.format_exc())
@@ -7983,11 +7975,14 @@ def _place_auto_caret(view, term, pos):
 
 
 def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits):
-    """Where the viewport lands after a frame: pinned to rest for an app-owned
-    TUI, else following the tail while the user hasn't scrolled away and there
-    is real content below the fold."""
+    """Where the viewport lands after a frame.
+
+    App-owned TUIs used to hard-pin to rest every frame. That fought keypad /
+    touchpad tab motion. Only correct a negative overshoot (dip); the user
+    owns deliberate Sublime scroll.
+    """
     if tui_owns_scroll:
-        _pin_viewport_rest(view, rest, term)
+        _pin_viewport_rest_dip_only(view, rest, term)
     elif do_follow and not content_fits:
         _scroll_to_bottom(view)
         if term is not None:
@@ -8423,6 +8418,15 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 "move_to", {"to": "bof" if key == "home" else "eof", "extend": False}
             )
             return
+        # Ctrl+PageUp/PageDown: always move the Sublime tab viewport. Bare
+        # PageUp/Down may be routed to the TUI (page_keys_to_pty) so the app
+        # can scroll its own one-frame history; Ctrl+ keeps a host escape
+        # hatch so the toolbar/chrome can still be reached without flipping
+        # the profile gate. Combinational on the key event -- no poll loop.
+        if not alt and ctrl and not shift and key in ("pageup", "pagedown"):
+            _page_scroll(self.view, term, key == "pagedown")
+            _set_auto_follow(term, False)
+            return
         # PageUp/PageDown: scroll ST's real scrollback like an ordinary
         # terminal emulator (same motion as dragging the minimap) -- unlike
         # Home/End, no primary-screen readline-style CLI has a legitimate use
@@ -8556,48 +8560,21 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
             # host-side "optimistic" caret or force a paint before echo.
             # Pre-PTY caret/█ was the line-1 lag/flash path (July thrash); the
             # reference terminal waits on screen.cursor from the stream.
-            # Fullscreen / mouse-tracking TUIs (Junie, Grok): never yank the
-            # viewport on every printable — that fought mid-line caret and
-            # made the next char land at EOL. Pin to rest instead.
+            # Bare PageUp/Down (when page_keys_to_pty) must reach the TUI
+            # only -- do not move the Sublime viewport here. Ctrl+PageUp/Down
+            # already owns host tab motion (early return above). Typing must
+            # not yank a Ctrl+Page chrome/hunk peek either.
             tui = _tui_like(term)
             if kl in ("pageup", "pagedown"):
-                # Explicit scrollback navigation: same intent as a mouse
-                # wheel/click, which already disengage follow (see
-                # _auto_follow=False at the mouse handlers above). Without
-                # this, PageDown itself is a no-scroll key (correctly, per
-                # the comment below) but a stale True from prior typing
-                # survives it, so the very next streaming render snaps the
-                # viewport right back to the bottom -- PageDown "does
-                # nothing" from the user's perspective.
                 _set_auto_follow(term, False)
             elif kl not in _NO_SCROLL_KEYS:
-                # A printable key only needs a physical viewport write when it
-                # is returning from scrollback.  Re-writing the bottom target
-                # while already following races Sublime's layout update with
-                # the TUI's echo frame: the pre-echo calculation can be one
-                # line stale, then the render settles to the new height.  The
-                # command line visibly hops up and back on every key even
-                # though the PTY never moved it (confirmed in a Codex cast:
-                # input stays on row 42, hardware cursor parks on row 45).
-                was_following = bool(getattr(term, "_auto_follow", False))
-                _set_auto_follow(term, True)
-                if tui:
-                    # Only re-pin when drifted; set_viewport every key on Windows
-                    # forces layout work and feels like lag/jumps on Grok.
-                    try:
-                        rest = _host_rest_y(self.view)
-                        cur = self.view.viewport_position()[1]
-                        if abs(cur - rest) > 1.0:
-                            _set_viewport(self.view, (0.0, rest), False)
-                        term._last_vp_y = rest
-                        term._live_anchor_y = rest
-                    except (RuntimeError, AttributeError):
-                        print("[ai_terminal] keypress re-pin viewport failed:\n%s"
-                              % traceback.format_exc())
-                elif not was_following:
-                    _scroll_to_bottom(self.view)
-                    term._last_vp_y = self.view.viewport_position()[1]
-                    term._live_anchor_y = term._last_vp_y
+                if not tui:
+                    was_following = bool(getattr(term, "_auto_follow", False))
+                    _set_auto_follow(term, True)
+                    if not was_following:
+                        _scroll_to_bottom(self.view)
+                        term._last_vp_y = self.view.viewport_position()[1]
+                        term._live_anchor_y = term._last_vp_y
             term.send_string(code)
 
 
@@ -8867,7 +8844,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             _place_auto_caret(view, term, view.text_point(last_real, 0))
         _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         if tui_owns_scroll:
-            _pin_viewport_rest(view, rest, term)
+            _pin_viewport_rest_dip_only(view, rest, term)
         elif content_fits:
             _pin_viewport_rest_dip_only(view, rest, term)
         elif do_follow:
@@ -10488,7 +10465,10 @@ class AiTerminalDumpScreenCommand(sublime_plugin.TextCommand):
 # because a user can only be pointing at what has focus/foreground in practice
 # for this use case (hover-driven TUI widget highlighting).
 
-_HOVER_POLL_MS = 33  # ~30Hz -- reads as continuous; early-exits keep it cheap when idle
+# Was 33ms (~30Hz). That burned CPU for continuous DEC any-motion hover.
+# 500ms is enough for sparse hover highlighting; early-exits still skip work
+# when the cell has not changed or tracking is off.
+_HOVER_POLL_MS = 500
 _hover_poll_token = None
 _hover_last_cell = {}  # view_id -> (col, row) last cell a motion report was sent for
 
@@ -10584,14 +10564,13 @@ def _hover_poll_loop():
 # content fits the viewport -- it tries to "nicely" position the caret and
 # overshoots because there's nothing to scroll. Our own render clamps this, but
 # ST ALSO calls view.show internally on view focus/hover -- mouse entering the
-# view bbox triggers it BETWEEN renders. During generation a render clamps it
-# within ~110ms, but when Claude is idle there's no TUI output -> no render ->
-# the -20 persists until the next TUI frame (cursor blink ~500ms), so the user
-# sees the text dip one line for ~500ms then snap back. This loop clamps vp to
-# (0,0) whenever content fits, independent of the render clock, killing the dip
-# within 16ms. It only fires when content fits (le <= ve), so it never fights
-# the user scrolling up to read scrollback when content exceeds the viewport.
+# view bbox triggers it BETWEEN renders. Idle TUIs may leave the dip until the
+# next frame (~500ms). This loop only corrects that NEGATIVE overshoot (and
+# horizontal drift); it no longer hard-pins or converts pan into PTY scroll.
+# Interval is half a second -- not 8ms -- so it does not burn main-thread
+# bandwidth policing a tab the user is allowed to move.
 
+_CLAMP_POLL_MS = 500
 _clamp_token = None
 
 
@@ -10676,7 +10655,7 @@ def _clamp_vp_loop():
                     term._ve_h_candidate_count = 0
                 else:
                     # Differs from the confirmed height. Requires the SAME
-                    # new value on 2 consecutive ticks (16ms) before acting --
+                    # new value on 2 consecutive clamp ticks before acting --
                     # mirrors _LayoutWatcher's own debounce/confirm pattern
                     # for the identical class of bug (that one guards PTY
                     # resize against transient content-width/scrollbar
@@ -10725,52 +10704,9 @@ def _clamp_vp_loop():
                 lh = 12.0
 
             if tui_like:
-                if near_fit:
-                    # Short TUI pickers (for example Codex /hooks) are keyed
-                    # with physical arrows. Do not turn Sublime's residual
-                    # viewport drift into extra PTY arrows that pin selection.
-                    if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                        _set_viewport(v, (0.0, rest), False)
-                    continue
-                # Spawn settle: pin only until viewport sits at rest once
-                # after a short grace. Sending pan→TUI keys on the first
-                # dy_rest=-pad_height injects Up arrows into Grok at t=0.
-                armed = bool(getattr(term, "_vp_pan_armed", False))
-                if not armed:
-                    if abs(dy_rest) < 1.5 and abs(dx) < 0.5:
-                        age = time.monotonic() - float(
-                            getattr(term, "_spawn_mono", 0.0) or 0.0
-                        )
-                        if age >= 0.4:
-                            term._vp_pan_armed = True
-                    elif abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
-                        _set_viewport(v, (0.0, rest), False)
-                    continue
-                # Treat viewport displacement as an edge, not a level. ST can
-                # retain a small fractional offset (observed: 4 px) even after
-                # set_viewport_position pins the view. Re-routing that stable
-                # offset every cooldown interval floods the TUI with synthetic
-                # arrows and pins pickers such as Codex /hooks to one item.
-                # Re-arm only after the viewport actually returns to rest.
-                pan_excursion = abs(dy_rest) >= 1.5
-                pan_latched = bool(getattr(term, "_vp_pan_latched", False))
-                if pan_excursion:
-                    term._vp_pan_rest_frames = 0
-                    if not pan_latched:
-                        term._vp_pan_latched = True
-                        _vp_pan_to_tui_scroll(v, term, dy_rest)
-                elif pan_latched:
-                    # set_viewport_position can produce one rest frame before
-                    # ST rebounds to the same fractional/pixel displacement.
-                    # Require sustained rest before accepting another gesture.
-                    rest_frames = int(
-                        getattr(term, "_vp_pan_rest_frames", 0) or 0
-                    ) + 1
-                    term._vp_pan_rest_frames = rest_frames
-                    if rest_frames >= 4:
-                        term._vp_pan_latched = False
-                        term._vp_pan_rest_frames = 0
-                if abs(dy_rest) >= 0.5 or abs(dx) >= 0.5:
+                # No pan→PTY and no hard-pin. Users own Sublime tab motion
+                # (keypad / touchpad). Only fix the negative overshoot glitch.
+                if dy_rest < -0.5 or abs(dx) >= 0.5:
                     _set_viewport(v, (0.0, rest), False)
                 continue
 
@@ -10805,8 +10741,10 @@ def _clamp_vp_loop():
                 _set_viewport(v, (0.0, rest), False)
     except Exception as e:
         print(f"[ai_terminal] clamp loop error: {e}")
-    # 8ms: catch the brief pan before the next paint eats it
-    _clamp_token = sublime.set_timeout(_clamp_vp_loop, 8)
+    # Was 8ms (catch pan before paint / hard-pin TUIs). Now only dip-corrects
+    # and must not burn a main-thread tick that often; 500ms matches the
+    # idle overshoot window documented above.
+    _clamp_token = sublime.set_timeout(_clamp_vp_loop, _CLAMP_POLL_MS)
 
 
 def plugin_loaded():

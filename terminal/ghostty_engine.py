@@ -67,6 +67,29 @@ def _blank_wide_spacers(cells, width_of):
     return out
 
 
+_TEXT_VS = "\ufe0e"
+_EMOJI_VS = "\ufe0f"
+
+
+def _text_style_if_symbol(text):
+    """Force text presentation on 1-cell Misc Symbols / Dingbats.
+
+    Ghostty widths U+270E/U+2699 as 1. Windows color-emoji fallback paints
+    them ~2em, so a full-width TUI box header sticks out past the box-drawing
+    rows. U+FE0E requests text style; it is zero-width.
+    """
+
+    if not text or text.endswith((_TEXT_VS, _EMOJI_VS)):
+        return text
+    if len(text) != 1:
+        return text
+    o = ord(text)
+    if 0x2600 <= o <= 0x27BF:
+        return text + _TEXT_VS
+    return text
+
+
+
 class GhosttyParser:
     """__init__(screen), feed(text), resize(cols, rows), reset()."""
 
@@ -599,7 +622,9 @@ class GhosttyParser:
             # only trims exact (" ", 0) cells).
             if not bg and not (flags & REVERSE):
                 fg = 0
-        return (text or " "), pack_attr(fg, bg, flags)
+            return " ", pack_attr(fg, bg, flags)
+        return _text_style_if_symbol(text), pack_attr(fg, bg, flags)
+
 
     def _grapheme_width(self, text):
         """Cells occupied by `text`, via ghostty_unicode_grapheme_width."""

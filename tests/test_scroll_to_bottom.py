@@ -266,13 +266,16 @@ class HeightChangeResyncTests(unittest.TestCase):
 
         self.assertEqual(view.vp_writes, [])
 
-    def test_tui_like_view_is_repinned_to_rest(self):
+    def test_tui_like_view_keeps_deliberate_scroll_on_height_change(self):
+        # alt-screen => _tui_like. Host no longer hard-pins to rest; only a
+        # negative overshoot would be corrected. Forward scroll stays put.
         view = _FakeView(lines=20, lh=20.0, ve=(800.0, 300.0), vp=(0.0, 40.0))
-        term = _FakeTerm(auto_follow=False, alt_screen=True)  # alt-screen -> tui_like
+        term = _FakeTerm(auto_follow=False, alt_screen=True)
 
         ai_terminal._resync_viewport_after_height_change(view, term)
 
-        self.assertEqual(view.vp_writes[-1][0], (0.0, 0.0))
+        self.assertEqual(view.vp_writes, [])
+        self.assertEqual(term._last_vp_y, 40.0)
 
     def test_dead_pty_is_a_noop(self):
         view = _FakeView(lines=20, lh=20.0, ve=(800.0, 300.0), vp=(0.0, 100.0))

@@ -16,6 +16,22 @@ def test_valid_profile_schema():
     assert warnings == []
 
 
+def test_tui_routing_keys_are_valid_profile_settings():
+    errors, warnings = validate_profiles({
+        "Grok Build": {
+            "launch_command": ["grok"],
+            "page_keys_to_pty": True,
+            "mouse_handling": True,
+            "wheel_to_pty": True,
+            "force_tui_like": False,
+            "pin_viewport": True,
+            "home_end_native": False,
+        }
+    })
+    assert errors == []
+    assert warnings == []
+
+
 def test_profile_schema_reports_typos_and_wrong_types():
     errors, _warnings = validate_profiles({
         "Codex": {

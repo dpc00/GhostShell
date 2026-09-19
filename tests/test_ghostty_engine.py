@@ -29,8 +29,10 @@ from terminal.ghostty_engine import (
     _blank_wide_spacers,
     _color_id,
     _scrollback_bytes,
+    _text_style_if_symbol,
     _SCROLLBACK_BYTES_PER_CELL,
 )
+
 
 
 
@@ -75,6 +77,23 @@ class WideSpacerTests(unittest.TestCase):
     def test_plain_spaces_untouched(self):
         row = [("a", 0), (" ", 0), ("b", 0)]
         self.assertEqual(_blank_wide_spacers(row, self._width), row)
+
+
+class TextStyleIfSymbolTests(unittest.TestCase):
+    def test_pencil_and_gear_get_vs15(self):
+        self.assertEqual(_text_style_if_symbol("\u270e"), "\u270e\ufe0e")
+        self.assertEqual(_text_style_if_symbol("\u2699"), "\u2699\ufe0e")
+
+    def test_ascii_box_and_wide_emoji_untouched(self):
+        self.assertEqual(_text_style_if_symbol("A"), "A")
+        self.assertEqual(_text_style_if_symbol("\u256d"), "\u256d")
+        self.assertEqual(_text_style_if_symbol("\u2500"), "\u2500")
+        self.assertEqual(_text_style_if_symbol("\U0001f40d"), "\U0001f40d")
+
+    def test_already_marked_not_doubled(self):
+        self.assertEqual(_text_style_if_symbol("\u2699\ufe0e"), "\u2699\ufe0e")
+        self.assertEqual(_text_style_if_symbol("\u2699\ufe0f"), "\u2699\ufe0f")
+
 
 
 class RawVtInputTests(unittest.TestCase):
