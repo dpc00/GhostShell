@@ -1,6 +1,23 @@
 # Release notes
 
 
+## 0.1.7
+
+**Bug fix:** GhostShell still sent a 1-row `SIGWINCH` when Sublime's
+viewport height wobbled by ~15px (H-scrollbar or `int(h/lh)-1`).
+0.1.6 removed the extra emoji cell; the row count could still flip
+47↔48, and omp still dumped the conversation.
+
+`accepted_rows` now ignores a 1-row change in both directions, matching
+the live pin that stopped the loop. A real window drag (≥2 rows) still
+resizes the PTY.
+
+An inline OpenUri phantom after a full-width URL can still steal one em
+and pop the H-bar. That is OpenUri's `"show_open_button": "always"`,
+not this package. Set it to `"hover"` or `"never"` if those buttons
+show in a terminal tab.
+
+
 ## 0.1.6
 
 **Bug fix:** a wide character (emoji) in a full-width TUI box made
