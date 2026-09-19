@@ -51,7 +51,7 @@ def test_color_scheme_log_and_recorders_write_under_log_root(tmp_path, monkeypat
     log.flush_live_lines(["live", ""])
     log.close()
     log_path = Path(stl.TEXT_LOG_DIR) / "ai_2026-08-15_000000.log"
-    assert log_path.read_text(encoding="utf-8") == "live\n\n"
+    assert log_path.read_text(encoding="utf-8") == "retired\nlive\n\n"
 
     rdl.debug_log(b"\x1b[31mraw")
     raw = Path(rdl.DEBUG_PATH) / "raw.log"
@@ -65,179 +65,122 @@ def _open_text_log(tmp_path, monkeypatch):
     return log, tmp_path / "ai_observe.log"
 
 
-def test_observe_keeps_the_latest_complete_tab_paint(tmp_path, monkeypatch):
+def test_observe_appends_new_tab_lines(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["hello", "world"])
     log.flush_now()
-    assert path.read_text(encoding="utf-8") == "hello\nworld\n"
+    assert path.read_text(encoding="utf-8") == "hello\n"
     log.observe(["hello", "world"])
     log.flush_now()
-    assert path.read_text(encoding="utf-8") == "hello\nworld\n"
+    assert path.read_text(encoding="utf-8") == "hello\n"
     log.observe(["hello", "world", "more"])
     log.flush_now()
+    assert path.read_text(encoding="utf-8") == "hello\nworld\n"
+    log.close()
     assert path.read_text(encoding="utf-8") == "hello\nworld\nmore\n"
 
 
-def test_observe_replaces_a_line_when_it_changes_on_the_tab(tmp_path, monkeypatch):
+def test_lines_scrolled_off_the_tab_stay_in_the_log(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    lines = ["line %02d" % i for i in range(120)]
+    for end in range(40, 121):
+        log.observe(lines[end - 40:end] + ["status %d" % end])
+        if end % 3 == 0:
+            log.flush_now()
+    log.close()
+    text = path.read_text(encoding="utf-8").splitlines()
+    i = 0
+    for row in text:
+        if i < 120 and row == lines[i]:
+            i += 1
+    assert i == 120
+    assert text[-1] == "status 120"
+
+
+def test_full_redraw_keeps_both_screens(tmp_path, monkeypatch):
+    log, path = _open_text_log(tmp_path, monkeypatch)
+    log.observe(["one", "two", "three", "four", "five", "six"])
+    log.observe(["A", "B", "C", "D", "E", "F"])
+    log.close()
+    assert path.read_text(encoding="utf-8") == (
+        "one\ntwo\nthree\nfour\nfive\nsix\nA\nB\nC\nD\nE\nF\n"
+    )
+
+
+def test_typing_on_the_live_line_is_one_append(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["a"])
     log.observe(["ab"])
-    log.flush_now()
+    log.close()
     assert path.read_text(encoding="utf-8") == "ab\n"
 
 
-def test_observe_does_not_preserve_superseded_tab_frames(
-    tmp_path, monkeypatch
-):
+def test_replaced_live_line_stays_in_the_log(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     chrome = "Grok 4.6 (high)"
-    log.observe([chrome, "a"])
-    log.observe([chrome, "ab"])
+    log.observe([chrome, "thinking"])
     log.observe([chrome, "done"])
-    log.flush_now()
+    log.close()
     text = path.read_text(encoding="utf-8")
     assert text.count(chrome) == 1
-    assert "a\n" not in text
-    assert "ab\n" not in text
-    assert "done\n" in text
+    assert "thinking\n" in text
+    assert text.endswith("done\n")
 
 
 def test_observe_preserves_blank_lines_and_trailing_spaces(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
     log.observe(["top  ", "", "bottom"])
-    log.flush_now()
+    log.close()
     assert path.read_text(encoding="utf-8") == "top  \n\nbottom\n"
 
 
-def test_observe_preserves_absence_of_final_newline(tmp_path, monkeypatch):
+def test_close_flushes_the_live_row(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
-    log.observe(["exact", "paint"], trailing_newline=False)
+    log.observe(["complete paint"])
     log.close()
-    assert path.read_bytes() == b"exact\npaint"
-
-
-def test_painted_tab_passes_its_actual_final_newline_state():
-    source = Path("ai_terminal.py").read_text(encoding="utf-8")
-    start = source.index("def _log_painted_tab(term, text):")
-    end = source.index("\n\n\ndef _update_debug_status", start)
-    log_source = source[start:end]
-    assert 'trailing_newline=painted.endswith("\\n")' in log_source
-
-
-def test_text_log_close_waits_for_an_in_progress_paint(tmp_path, monkeypatch):
-    log, _path = _open_text_log(tmp_path, monkeypatch)
-    entered_replace = threading.Event()
-    release_replace = threading.Event()
-    original_replace = stl.os.replace
-
-    def blocking_replace(source, destination):
-        entered_replace.set()
-        assert release_replace.wait(2)
-        return original_replace(source, destination)
-
-    monkeypatch.setattr(stl.os, "replace", blocking_replace)
-    paint = threading.Thread(target=lambda: log.observe(["complete paint"]))
-    paint.start()
-    assert entered_replace.wait(2)
-    closing = threading.Thread(target=log.close)
-    closing.start()
-    assert closing.is_alive()
-    release_replace.set()
-    paint.join(2)
-    closing.join(2)
-    assert not paint.is_alive()
-    assert not closing.is_alive()
+    assert path.read_text(encoding="utf-8") == "complete paint\n"
     assert log.file is None
 
 
-def test_observe_atomically_replaces_the_previous_snapshot(tmp_path, monkeypatch):
+def test_append_does_not_need_the_reader_to_close(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
-    replacements = []
-    original_replace = stl.os.replace
-
-    def recording_replace(source, destination):
-        assert Path(source).read_text(encoding="utf-8") == "new\nsnapshot\n"
-        assert path.read_text(encoding="utf-8") == "old\nsnapshot\n"
-        replacements.append((source, destination))
-        return original_replace(source, destination)
-
-    log.observe(["old", "snapshot"])
-    log.flush_now()
-    monkeypatch.setattr(stl.os, "replace", recording_replace)
-    log.observe(["new", "snapshot"])
-    log.close()
-
-    assert len(replacements) == 1
-    assert path.read_text(encoding="utf-8") == "new\nsnapshot\n"
-    assert not (tmp_path / "ai_observe.log.tmp").exists()
-
-
-def test_observe_can_replace_snapshot_while_an_external_reader_is_open(
-    tmp_path, monkeypatch
-):
-    log, path = _open_text_log(tmp_path, monkeypatch)
-    log.observe(["first"])
+    log.observe(["first", "second"])
     log.flush_now()
     with path.open("r", encoding="utf-8") as reader:
         assert reader.read() == "first\n"
-        log.observe(["second"])
+        log.observe(["first", "second", "third"])
     log.close()
-    assert path.read_text(encoding="utf-8") == "second\n"
+    assert path.read_text(encoding="utf-8") == "first\nsecond\nthird\n"
 
 
-def test_failed_atomic_replace_keeps_old_snapshot_and_can_retry(
-    tmp_path, monkeypatch
-):
+def test_append_failure_keeps_already_written_lines(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
-    log.observe(["old"])
+    log.observe(["old", "keep"])
     log.flush_now()
-    original_replace = stl.os.replace
+    assert path.read_text(encoding="utf-8") == "old\n"
 
-    def fail_replace(_source, _destination):
-        raise OSError("simulated replace failure")
+    def fail_write(payload):
+        raise OSError("simulated append failure")
 
-    monkeypatch.setattr(stl.os, "replace", fail_replace)
-    log.observe(["new"])
+    monkeypatch.setattr(log.file, "write", fail_write)
+    log.observe(["old", "keep", "new"])
     try:
         log.flush_now()
-        assert False, "observe should report a failed replacement"
+        assert False, "flush_now should report a failed append"
     except OSError as error:
-        assert "simulated replace failure" in str(error)
+        assert "simulated append failure" in str(error)
 
     assert path.read_text(encoding="utf-8") == "old\n"
-    assert not (tmp_path / "ai_observe.log.tmp").exists()
-
-    monkeypatch.setattr(stl.os, "replace", original_replace)
-    log.observe(["new"])
-    log.close()
-    assert path.read_text(encoding="utf-8") == "new\n"
 
 
-def test_temp_file_permission_failure_does_not_truncate_old_snapshot(
-    tmp_path, monkeypatch
-):
+def test_file_is_never_rewritten(tmp_path, monkeypatch):
     log, path = _open_text_log(tmp_path, monkeypatch)
-    log.observe(["old"])
+    log.observe(["old", "keep"])
     log.flush_now()
-    original_open = stl.open_private
-    calls = []
-
-    def fail_temp_open(target, mode, **kwargs):
-        calls.append((target, mode))
-        if target.endswith(".tmp"):
-            raise PermissionError("simulated temp permission failure")
-        return original_open(target, mode, **kwargs)
-
-    monkeypatch.setattr(stl, "open_private", fail_temp_open)
-    log.observe(["new"])
-    try:
-        log.flush_now()
-        assert False, "observe should report a temp-file permission failure"
-    except PermissionError as error:
-        assert "simulated temp permission failure" in str(error)
-
-    assert path.read_text(encoding="utf-8") == "old\n"
-    assert not any(target == str(path) and mode == "w" for target, mode in calls)
+    log.observe(["old", "keep", "new"])
+    log.close()
+    assert path.read_text(encoding="utf-8") == "old\nkeep\nnew\n"
+    assert not (tmp_path / "ai_observe.log.tmp").exists()
 
 
 def test_terminal_close_does_not_replace_painted_snapshot_with_live_screen():

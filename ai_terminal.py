@@ -2596,7 +2596,7 @@ def _close_tab_on_exit(profile_name=None):
 
 
 def _log_tab_text(profile_name=None):
-    """Whether a plain-text snapshot of the latest tab paint should be kept.
+    """Whether tab text should be appended to a session .log file.
 
     Source is the text just written to the Sublime tab. Default true, same posture as
     record_asciicast. A profile may set ``"log_tab_text": false`` to opt out.
@@ -3601,13 +3601,12 @@ class _Terminal:
             log.close()
 
     def _close_text_log(self):
-        """Close without replacing the last complete painted-tab snapshot.
+        """Flush remaining tab lines and close the session text log.
 
-        ``_log_painted_tab`` records the exact text placed in the Sublime
-        view, including visible scrollback.  ``screen.live_lines_text()`` is
-        only the terminal's live screen, so using it as a final flush erases
-        scrollback from an otherwise-correct log when a session closes.
-        Safe to call more than once or before start().
+        ``_log_painted_tab`` already queued every painted line, including
+        visible scrollback.  ``screen.live_lines_text()`` is only the live
+        screen, so using it as a final flush would drop scrollback. Safe to
+        call more than once or before start().
         """
         log = getattr(self, "_text_log", None)
         if log is None or log.file is None:
