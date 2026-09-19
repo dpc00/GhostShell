@@ -32,6 +32,40 @@ _CURSOR_SHAPE_NAMES = {
     gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: "hollow",
 }
 
+# libghostty-vt max_scrollback is a byte budget, not a line count
+# (ghostty-org/ghostty#12769). scrollback_history_size is lines; convert
+# so native never trims before Python's history_cap. 64 bytes/cell is
+# well above the ~1.5 bytes/col seen empirically on sparse filler.
+_SCROLLBACK_BYTES_PER_CELL = 64
+
+
+def _scrollback_bytes(line_cap, cols):
+    return max(1, int(line_cap)) * max(1, int(cols)) * _SCROLLBACK_BYTES_PER_CELL
+
+
+def _blank_wide_spacers(cells, width_of):
+    """Drop Ghostty's extra column after a width-2 grapheme.
+
+    Native grid: 🐍 occupies two cells; the second is a spacer space.
+    Concatenating that space into the Sublime line adds a third em when
+    the font already paints 🐍 at ~2em, so a full-width TUI box overflows,
+    the H-scrollbar steals viewport height, and rows flip 47↔48.
+    """
+    out = list(cells)
+    i = 0
+    while i < len(out):
+        text, _attr = out[i]
+        try:
+            wide = width_of(text) >= 2
+        except (TypeError, ValueError):
+            wide = False
+        if wide and i + 1 < len(out) and out[i + 1][0] in (" ", ""):
+            out[i + 1] = ("", 0)
+            i += 2
+            continue
+        i += 1
+    return out
+
 
 class GhosttyParser:
     """__init__(screen), feed(text), resize(cols, rows), reset()."""
@@ -43,7 +77,9 @@ class GhosttyParser:
         cap = screen.history_cap or 300
         self._term = gvt.GhosttyTerminal()
         opts = gvt.GhosttyTerminalOptions(
-            cols=screen.cols, rows=screen.rows, max_scrollback=cap
+            cols=screen.cols,
+            rows=screen.rows,
+            max_scrollback=_scrollback_bytes(cap, screen.cols),
         )
         gvt.check(
             self._g.terminal_new(None, ctypes.byref(self._term), opts),
@@ -565,6 +601,19 @@ class GhosttyParser:
                 fg = 0
         return (text or " "), pack_attr(fg, bg, flags)
 
+    def _grapheme_width(self, text):
+        """Cells occupied by `text`, via ghostty_unicode_grapheme_width."""
+        fn = getattr(self._g, "unicode_grapheme_width", None)
+        if not text:
+            return 0
+        if fn is None:
+            return 1
+        cps = (ctypes.c_uint32 * len(text))(*map(ord, text))
+        w = ctypes.c_uint8()
+        fn(cps, len(text), ctypes.byref(w))
+        return int(w.value)
+
+
     def _cell_from_render_cells(self):
         """Active-grid path: render_state_row_cells_* on self._cells (fast, resolves colors)."""
         cells = self._cells
@@ -666,8 +715,11 @@ class GhosttyParser:
                     grow = s.grid[y]
                     arow = s.attrs[y]
                     x = 0
-                    while self._g.render_state_row_cells_next(self._cells) and x < cols:
-                        text, attr = self._cell_from_render_cells()
+                    pending = []
+                    while self._g.render_state_row_cells_next(self._cells) and len(pending) < cols:
+                        pending.append(self._cell_from_render_cells())
+                    pending = _blank_wide_spacers(pending, self._grapheme_width)
+                    for text, attr in pending:
                         grow[x] = text
                         arow[x] = attr
                         x += 1
@@ -675,6 +727,7 @@ class GhosttyParser:
                         grow[x] = BLANK
                         arow[x] = 0
                         x += 1
+
                     clear_row = ctypes.c_bool(False)
                     self._g.render_state_row_set(
                         self._row_iter, gvt.RENDER_STATE_ROW_OPTION_DIRTY, ctypes.byref(clear_row)
@@ -770,10 +823,12 @@ class GhosttyParser:
                     cells.append((" ", 0))
                     continue
                 cells.append(self._cell_from_grid_ref(ref, palette))
+            cells = _blank_wide_spacers(cells, self._grapheme_width)
             if notify:
                 s._retire_line(cells)
             else:
                 s.history.append(rstrip_cells(cells))
+
 
         # Native ghostty's max_scrollback is not a strict row count, so a
         # full rebuild (first sync after a broker replay, resize, reset) can

@@ -872,8 +872,30 @@ class Ghostty:
             GhosttyResult,
         )
 
+        self._bind_unicode(sig)
         self._bind_key_encoder(sig, p, sz)
         self._bind_mouse_encoder(sig, p, sz)
+
+    def _bind_unicode(self, sig):
+        """ghostty_unicode_* — same width table the terminal uses for layout."""
+        u32 = ctypes.c_uint32
+        u8 = ctypes.c_uint8
+        sz = ctypes.c_size_t
+        try:
+            self.unicode_codepoint_width = sig(
+                "ghostty_unicode_codepoint_width", [u32], u8,
+            )
+            self.unicode_grapheme_width = sig(
+                "ghostty_unicode_grapheme_width",
+                [ctypes.POINTER(u32), sz, ctypes.POINTER(u8)],
+                sz,
+            )
+        except AttributeError:
+            print("[ghostty_vt] unicode width API missing from DLL:\n%s"
+                  % traceback.format_exc())
+            self.unicode_codepoint_width = None
+            self.unicode_grapheme_width = None
+
 
     def _bind_key_encoder(self, sig, p, sz):
         """Bind the key encoder + event API (key/encoder.h, key/event.h)."""

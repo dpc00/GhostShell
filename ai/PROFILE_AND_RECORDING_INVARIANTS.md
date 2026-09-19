@@ -39,11 +39,12 @@ Failed, canceled, or duplicate connection attempts must create no recording
 files. A successful reattach creates a new correlated `*_reattach.cast` and
 `*_reattach.log` segment. It does not append to the pre-restart segment.
 
-The text log is append-only. Each paint contributes lines that are newly
-stable (they left the live last row, or a row changed in place). The file is
-never replaced. Closing a terminal appends the live last row; it must not
-flush `Screen.live_lines_text()`, which omits painted scrollback. A reader
-may hold the file open; appends still land.
+The text log is the painted Sublime tab, without the tab's 300-line
+scrollback cap. Lines that leave the top of the tab stay in the file.
+The suffix of the file is the current tab, so `tail` matches the bottom
+of the view. In-place redraws replace that suffix; they are not extra
+frames. Closing a terminal flushes; it must not flush
+`Screen.live_lines_text()`, which omits painted scrollback.
 
 ## Cast validity
 

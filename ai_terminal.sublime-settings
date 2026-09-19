@@ -824,6 +824,7 @@
             }
         },
         "omp": {
+
             // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
             // -- a from-scratch coding-first fork/rewrite of Pi by Mario
             // Zechner, by Can Bolukbasi. Installed 2026-09-11 via
@@ -966,6 +967,8 @@
     // eye against the minimap when you change the window height or font
     // size. Decreasing it may improve performance.
     // Live: changing this swaps the live deque (trims oldest if smaller).
+    // libghostty-vt max_scrollback is bytes, not lines (ghostty#12769);
+    // ghostty_engine converts this line cap at terminal_new.
     "scrollback_history_size": 300,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
