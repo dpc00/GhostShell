@@ -3,6 +3,42 @@
 Running technical notes on ai_terminal.py internals that aren't obvious from
 the code alone. Newest entries at the top.
 
+## 2026-09-18 — OpenUri on an ai_terminal tab
+
+Live, omp tab, after the 47↔48 SIGWINCH loop. OpenUri is a separate
+package (`Installed Packages/OpenUri.sublime-package`). Default
+`"show_open_button": "always"` plants a `LAYOUT_INLINE` 1em PNG after
+every URI. On a full-width TUI box that extra em is enough to pop the
+H-bar (viewport height 845→830). `"hover"` removes the parked icon;
+the H-bar dropped. Hover still opens the URI under the caret, including
+on the command line.
+
+`"draw_uri_regions": "always"` is not usable here:
+
+- The terminal color scheme has no `string` scope, so a default
+  underline is invisible.
+- `expand_uri_regions_selectors: ["markup.underline.link"]` does not
+  exist on this view; OpenUri then underlined fragments (`hell.git`,
+  `https://…`) instead of the URL.
+- Even with `region.bluish` and an empty expand list, GhostShell
+  `view.replace`s the whole buffer ~30ms. OpenUri keeps character
+  offsets from a previous paint, so blue underlines appear in random
+  places during streaming output, then vanish.
+- The command line is "typing"; OpenUri skips region paint there.
+  Per-cell `ai.fb.*` fills also cover a weak underline. Settled
+  scrollback can show a highlight; the prompt will not.
+
+User setting that matches what actually works:
+
+```js
+// Packages/User/OpenUri.sublime-settings
+{ "show_open_button": "hover" }
+```
+
+Do not try to make OpenUri mark URIs in this view. Hover is the only
+OpenUri feature that survives the render loop.
+
+
 ## 2026-08-23 — Viewport jump: compensate's arithmetic is right, the open
 question is why the same-frame follow-snap didn't override it
 

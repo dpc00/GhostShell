@@ -14,8 +14,13 @@ resizes the PTY.
 
 An inline OpenUri phantom after a full-width URL can still steal one em
 and pop the H-bar. That is OpenUri's `"show_open_button": "always"`,
-not this package. Set it to `"hover"` or `"never"` if those buttons
-show in a terminal tab.
+not this package. `"hover"` keeps the button without parking an icon
+on the line. Do not enable OpenUri `"draw_uri_regions"` on a terminal
+tab: GhostShell `view.replace`s the buffer every frame, so those
+regions land on stale offsets (random blue underlines during output).
+Hover still finds a URI under the caret. Underlines cannot show on the
+live command line (typing + per-cell `ai.fb.*` fills).
+
 
 
 ## 0.1.6
