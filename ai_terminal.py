@@ -1570,10 +1570,6 @@ try:
         profile_from_entry as _agent_profile_from_entry,
     )
     from .terminal.profile_schema import validate_profiles as _validate_profiles
-    from .terminal.usage_scan import (
-        gather_usage as _gather_usage,
-        provider_for_profile as _provider_for_profile,
-    )
     from .terminal import launcher as _launcher
     from .terminal import history_scan as _history_scan
     from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
@@ -1664,10 +1660,6 @@ except ImportError as _term_imp_err:
             profile_from_entry as _agent_profile_from_entry,
         )
         from terminal.profile_schema import validate_profiles as _validate_profiles
-        from terminal.usage_scan import (
-            gather_usage as _gather_usage,
-            provider_for_profile as _provider_for_profile,
-        )
         from terminal import launcher as _launcher
         from terminal import history_scan as _history_scan
         from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
@@ -2891,177 +2883,6 @@ def _profile_is_available(profile_name, settings=None):
     return _profile_is_available_pure(profile_name, profile, path=path)
 
 
-def _usage_scan_enabled():
-    """Provider credential/network access is controllable separately from timers.
-
-    Keep the historical default for existing installations. Only a real JSON
-    true enables scans, so malformed values cannot accidentally grant access.
-    """
-    return _settings_obj().get("usage_scan_enabled", True) is True
-
-
-def _usage_scan_lock():
-    lock = getattr(sys, "_stext_ai_usage_scan_lock", None)
-    if lock is None:
-        lock = threading.Lock()
-        sys._stext_ai_usage_scan_lock = lock
-    return lock
-
-
-def _stop_usage_scanner():
-    """Cancel between provider fetches and discard cached provider results.
-
-    Do not interrupt a provider mid-refresh: it may need to persist a rotated
-    OAuth token. The cancellation event survives plugin reloads alongside the
-    worker so a previous generation's scan cannot publish after cancellation.
-    """
-    with _usage_scan_lock():
-        cancel = getattr(sys, "_stext_ai_usage_scan_cancel", None)
-        if cancel is not None:
-            cancel.set()
-        sys._stext_ai_profile_scan = {}
-        sys._stext_ai_profile_scan_at = None
-        sys._stext_ai_usage_scan_error = None
-
-
-def _ensure_usage_scanner(force=False):
-    """Run a permitted usage sweep in the background.
-
-    ``gather_usage`` asks each provider's own usage endpoint (using the OAuth
-    tokens their CLIs persisted) so the menus show every rate-limit window
-    (5h, weekly, ...) with exact reset times, straight from the source. No
-    inference quota is spent. The sweep can take minutes when providers are
-    slow/offline, hence the thread. Startup uses cached results when available;
-    manual and periodic refreshes force a new sweep. The privacy switch gates
-    all three entry points, including forced calls.
-    """
-    if not _usage_scan_enabled():
-        _stop_usage_scanner()
-        return
-    thread = getattr(sys, "_stext_ai_usage_scan_thread", None)
-    if thread is not None and thread.is_alive():
-        return
-    # Without force, the once-per-load contract stands: a second call (e.g. a
-    # menu opening) must not re-hit every provider endpoint.
-    if not force and getattr(sys, "_stext_ai_profile_scan_at", None):
-        return
-
-    cancel = threading.Event()
-    state_lock = _usage_scan_lock()
-    sys._stext_ai_usage_scan_cancel = cancel
-
-    def run_once():
-        try:
-            scan = _gather_usage(should_cancel=cancel.is_set)
-            # Cancellation and publication must be atomic relative to each
-            # other, or a finishing worker can restore results just cleared
-            # by a settings change on the main thread.
-            with state_lock:
-                if cancel.is_set():
-                    return
-                sys._stext_ai_profile_scan = scan
-                sys._stext_ai_profile_scan_at = time.time()
-                sys._stext_ai_usage_scan_error = None
-            print("[ai_terminal] usage sweep done: %s" % {
-                k: v.get("summary") or v.get("error") for k, v in scan.items()
-            })
-            for provider, data in scan.items():
-                # e.g. rotated OAuth tokens that could not be written back:
-                # the sweep still produced usage, but the CLI is now at risk
-                # of being logged out, which the caption alone would not say.
-                if data.get("warning"):
-                    print("[ai_terminal] %s: %s" % (provider, data["warning"]))
-        except Exception as e:
-            with state_lock:
-                if cancel.is_set():
-                    return
-                sys._stext_ai_usage_scan_error = str(e)
-            # A sweep that dies wholesale (not one provider failing, which
-            # gather_usage already reports per provider) leaves the menus
-            # captioned from stale or absent data, so record the failure.
-            # `e` is unbound once the except block exits, so the status text
-            # has to be built here rather than inside the timeout's lambda.
-            message = "ai_terminal: usage sweep failed: %s" % e
-            print("[ai_terminal] usage sweep failed:\n%s" % traceback.format_exc())
-            sublime.set_timeout(lambda: sublime.status_message(message), 0)
-
-    thread = threading.Thread(
-        target=run_once, name="ai_terminal_usage_sweep", daemon=True
-    )
-    sys._stext_ai_usage_scan_thread = thread
-    thread.start()
-
-
-# Periodic re-sweep. Quota that was accurate at startup is misleading three
-# hours into a session, which is exactly when you want to know whether to
-# switch agents. The interval is a setting because the sweep hits real provider
-# endpoints; 0 disables it and falls back to load-time + manual refresh only.
-_DEFAULT_USAGE_REFRESH_MINUTES = 20
-_usage_refresh_token = None
-
-
-def _usage_refresh_interval_ms():
-    if not _usage_scan_enabled():
-        return 0
-    minutes = _setting_number(
-        "usage_refresh_minutes", _DEFAULT_USAGE_REFRESH_MINUTES, cast=float
-    )
-    if minutes <= 0:
-        return 0
-    # Floor at a minute: a tighter loop would hammer provider endpoints for no
-    # useful gain, since quota windows move on the order of hours.
-    return int(max(60.0, minutes * 60.0) * 1000)
-
-
-def _usage_refresh_tick():
-    """Re-arm and re-sweep. Runs on the main thread; the sweep itself threads."""
-    global _usage_refresh_token
-    interval = _usage_refresh_interval_ms()
-    if not interval:
-        _usage_refresh_token = None
-        return
-    try:
-        _ensure_usage_scanner(force=True)
-    except Exception as e:
-        print("[ai_terminal] periodic usage sweep failed: %s" % e)
-    _usage_refresh_token = sublime.set_timeout(_usage_refresh_tick, interval)
-
-
-def _start_usage_refresh():
-    """(Re)arm the periodic sweep, cancelling any timer from a previous load."""
-    global _usage_refresh_token
-    _stop_usage_refresh()
-    if not _usage_scan_enabled():
-        _stop_usage_scanner()
-        return
-    interval = _usage_refresh_interval_ms()
-    if interval:
-        _usage_refresh_token = sublime.set_timeout(_usage_refresh_tick, interval)
-
-
-def _stop_usage_refresh():
-    global _usage_refresh_token
-    if _usage_refresh_token:
-        try:
-            sublime.cancel_timeout(_usage_refresh_token)
-        except (RuntimeError, AttributeError):
-            print("[ai_terminal] cancel usage-refresh timer failed:\n%s"
-                  % traceback.format_exc())
-        _usage_refresh_token = None
-
-
-def _scanned_usage_for_profile(profile_name, settings=None):
-    """Background-scanned usage dict for one profile, or None."""
-    if _settings_obj(settings).get("usage_scan_enabled", True) is not True:
-        return None
-    scan = getattr(sys, "_stext_ai_profile_scan", None)
-    if not isinstance(scan, dict) or not scan:
-        return None
-    profile = _profile_settings(profile_name, settings)
-    provider = _provider_for_profile(profile)
-    return scan.get(provider) if provider else None
-
-
 def _with_reset(label, reset):
     return label + (" | resets " + reset if reset else "")
 
@@ -3069,22 +2890,12 @@ def _with_reset(label, reset):
 def _profile_availability_label(profile_name, settings=None):
     """Explain the locally known state without spending provider quota."""
     remaining, reset = _observed_usage(profile_name)
-    scanned = _scanned_usage_for_profile(profile_name, settings)
     if remaining == 0.0:
         return _with_reset("Quota exhausted", reset)
     if not _profile_is_available(profile_name, settings):
         return "Executable unavailable"
     if isinstance(remaining, (int, float)):
         return _with_reset("%g%% remaining" % remaining, reset)
-    if scanned:
-        if scanned.get("summary"):
-            return scanned["summary"]
-        if scanned.get("error"):
-            return scanned["error"]
-        if isinstance(scanned.get("remaining"), (int, float)):
-            return _with_reset(
-                "%g%% remaining" % scanned["remaining"], scanned.get("reset")
-            )
     if reset:
         return "Usage unknown | resets " + reset
     return "Installed — no usage data"
@@ -3103,18 +2914,6 @@ def _profile_menu_caption(profile_name, settings=None):
         )
     remaining, reset = _observed_usage(profile_name)
     executable_ok = _profile_is_available(profile_name, settings) or remaining == 0.0
-    if remaining is None and executable_ok:
-        # No live-observed terminal signal yet: use the startup sweep's
-        # from-the-source summary (all windows), e.g.
-        # "Codex — 5h 100% left · weekly 47% left (resets in 6d 3h)".
-        scanned = _scanned_usage_for_profile(profile_name, settings)
-        if scanned:
-            detail = scanned.get("summary") or scanned.get("error")
-            if detail:
-                return "%s — %s" % (profile_name, detail)
-            if isinstance(scanned.get("remaining"), (int, float)):
-                remaining = scanned["remaining"]
-                reset = reset or scanned.get("reset")
     return _menu_caption_pure(
         profile_name, remaining=remaining, reset=reset, executable_ok=executable_ok
     )
@@ -3262,12 +3061,6 @@ def _on_settings_change():
             msg = f"ERROR: _on_settings_change failed on terminal {t}: {e}\n{traceback.format_exc()}"
             print(f"[ai_terminal] {msg}")
             _settings_debug_log(msg)
-    # Re-arm the periodic usage sweep so a changed interval (or disabling it
-    # with 0) applies without a reload.
-    try:
-        _start_usage_refresh()
-    except Exception as e:
-        _settings_debug_log(f"ERROR: usage refresh re-arm failed: {e}")
     _settings_debug_log("<<< _on_settings_change FINISHED")
 
 
@@ -7139,44 +6932,14 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
 
 
 def _usage_annotation(name, s):
-    """Short right-aligned availability text, e.g. '82% remaining · 3m ago'.
+    """Short right-aligned availability text, e.g. '82% remaining | resets 3h'.
 
-    The age matters as much as the number: a quota figure from an hour ago is
-    worth acting on, one from last session is not, and silently showing a stale
-    percentage as if it were live is exactly the failure mode to avoid. A sweep
-    still in flight says so rather than showing nothing.
+    Uses only what the terminal itself has shown; nothing is fetched from a provider.
     """
     try:
-        label = (_profile_availability_label(name, s) or "").strip()
+        return (_profile_availability_label(name, s) or "").strip()
     except (TypeError, KeyError, AttributeError):
-        label = ""
-    at = getattr(sys, "_stext_ai_profile_scan_at", None)
-    if at:
-        return "%s · %s" % (label, _launcher.relative_age(at)) if label else \
-            _launcher.relative_age(at)
-    thread = getattr(sys, "_stext_ai_usage_scan_thread", None)
-    if thread is not None and thread.is_alive():
-        return "%s · checking…" % label if label else "checking…"
-    return label
-
-
-class AiTerminalRefreshUsageCommand(sublime_plugin.WindowCommand):
-    """Re-run the provider usage sweep now.
-
-    Command palette: "Ai: Refresh Usage & Quota". The sweep is otherwise
-    once-per-load, so this is the way to get fresh numbers after burning
-    through quota without restarting Sublime.
-    """
-
-    def run(self):
-        if not _usage_scan_enabled():
-            _stop_usage_scanner()
-            sublime.status_message(
-                "GhostShell: usage scanning is disabled. Enable usage_scan_enabled in Settings to refresh."
-            )
-            return
-        _ensure_usage_scanner(force=True)
-        sublime.status_message("Ai terminal: refreshing usage…")
+        return ""
 
 
 def _detect_catalog_profiles():
@@ -10899,8 +10662,6 @@ def plugin_loaded():
                   % traceback.format_exc())
     _hover_poll_token = sublime.set_timeout(_hover_poll_loop, _HOVER_POLL_MS)
     _start_layout_watcher()
-    _ensure_usage_scanner()
-    _start_usage_refresh()
     # Reconnect any detachable-profile tabs Sublime just restored from its
     # workspace session -- their agent_broker.py session may have survived
     # the restart even though this plugin instance is brand new.
@@ -10941,8 +10702,6 @@ def plugin_unloaded():
                   % traceback.format_exc())
         _hover_poll_token = None
     _stop_layout_watcher()
-    _stop_usage_refresh()
-    _stop_usage_scanner()
     # Deliberately do NOT kill ConPTY children on unload.  The terminal
     # process may be opencode itself (or another long-running CLI agent);
     # killing it here means a plugin reload triggered by the agent's own

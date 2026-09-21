@@ -397,15 +397,6 @@ def test_history_opens_text_sessions_as_a_file(monkeypatch):
 # ─── usage refresh command ───────────────────────────────────────────────────
 
 
-def test_refresh_usage_forces_a_sweep(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        ai_terminal, "_ensure_usage_scanner", lambda force=False: calls.append(force)
-    )
-    ai_terminal.AiTerminalRefreshUsageCommand(FakeWindow()).run()
-    assert calls == [True]
-
-
 # ─── sticky working directory (no picker, TermMate/GeminiCLI convention) ─────
 
 

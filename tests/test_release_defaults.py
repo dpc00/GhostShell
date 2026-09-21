@@ -1,7 +1,6 @@
-"""The shipped defaults must not subject a user to logging, recording or credential scans.
+"""The shipped defaults must not subject a user to logging or recording.
 
-Owner's rule (AGENTS.md rule 14): anything that records, logs, or reads another program's
-credentials is OFF in the repo's `ai_terminal.sublime-settings`. The owner turns these on
+Owner's rule (AGENTS.md rule 14): anything that records or logs is OFF in the repo's `ai_terminal.sublime-settings`. The owner turns these on
 for his own installation in his User settings, never in the shipped defaults.
 """
 import os
@@ -13,7 +12,7 @@ _SETTINGS = os.path.join(
 )
 
 # Top-level keys that must default to false in a release.
-_MUST_DEFAULT_OFF = ("log_tab_text", "record_asciicast", "usage_scan_enabled")
+_MUST_DEFAULT_OFF = ("log_tab_text", "record_asciicast")
 
 
 def _top_level_value(text, key):

@@ -1016,23 +1016,6 @@
     // garbled-character report on GitHub Copilot's tab turned out to be a
     // font coverage gap. Real key below.
     "terminal_font": "Cascadia Code",
-    // How often (minutes) to re-poll each provider's usage/quota endpoint so
-    // the figures in the launcher and menus do not go stale mid-session. The
-    // sweep uses the OAuth tokens the CLIs already persisted and spends no
-    // inference quota, but it does hit the network, so the interval is a knob.
-    // Set 0 to disable and rely on the load-time sweep plus the manual
-    // "Ai: Refresh Usage & Quota" command. Values below 1 are clamped to 1.
-    // Changes apply immediately; no reload needed.
-    "usage_refresh_minutes": 20,
-    // Master switch for credential-backed provider usage discovery. Off by
-    // default for a public release; set true to opt in to background
-    // startup/periodic/manual scans (local credential reads and token
-    // refreshes). An already-running provider fetch may finish (and persist
-    // rotated tokens) if disabled mid-sweep; subsequent fetches are
-    // cancelled. Usage observed from terminal output remains available
-    // regardless. This does not control the native DLL download or network
-    // access by launched CLIs.
-    "usage_scan_enabled": false,
     // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
     // selection outside the live prompt row permanently hold the ST caret in
     // place instead of the render loop re-snapping it to the PTY cursor every
