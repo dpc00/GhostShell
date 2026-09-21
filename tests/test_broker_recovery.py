@@ -451,7 +451,6 @@ def test_end_session_kills_and_closes_session_info_is_read_only():
     assert "send_string(" not in info_source
     assert info_source.index('"Status: %s"') < info_source.index('"Child command: %s"')
     assert '"Last output: %s" % _human_ago(' in info_source
-    assert '"Usage: %s" % _profile_availability_label(profile_name)' in info_source
 
     tab_menu = json.loads(
         (ROOT / "Tab Context.sublime-menu").read_text(encoding="utf-8")
@@ -503,7 +502,6 @@ def test_session_info_reports_inline_without_mutating_session(monkeypatch):
     ))
     monkeypatch.setattr(ai_terminal, "_is_broker_pty", lambda value: value is pty)
     monkeypatch.setattr(ai_terminal, "_read_broker_registry_record", registry)
-    monkeypatch.setattr(ai_terminal, "_profile_availability_label", lambda _: "Available")
     monkeypatch.setattr(ai_terminal.time, "time", lambda: 160.0)
     monkeypatch.setattr(ai_terminal, "_vwrite", lambda v, text: writes.append((v, text)))
 
@@ -513,7 +511,7 @@ def test_session_info_reports_inline_without_mutating_session(monkeypatch):
     assert reads == ["test-session"]
     assert len(writes) == 1 and writes[0][0] is view
     banner = writes[0][1]
-    assert "Profile: Example\nUsage: Available\nStatus: running" in banner
+    assert "Profile: Example\nStatus: running" in banner
     assert "Last output: 1 minute ago" in banner
     assert "Working directory: C:\\project" in banner
     assert "Child command: cmd.exe" in banner

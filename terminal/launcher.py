@@ -26,12 +26,10 @@ KIND_ID_SNIPPET = 8
 SHELL_PROFILES = ("Bash", "PowerShell", "Dos Console", "WSL Bash")
 
 
-def profile_kind(name, available=True, exhausted=False, shells=SHELL_PROFILES):
+def profile_kind(name, available=True, shells=SHELL_PROFILES):
     """(kind_id, letter, label) describing one profile row."""
     if not available:
         return (KIND_ID_AMBIGUOUS, "x", "Not installed")
-    if exhausted:
-        return (KIND_ID_VARIABLE, "!", "Quota exhausted")
     if name in shells:
         return (KIND_ID_NAMESPACE, "$", "Shell")
     return (KIND_ID_FUNCTION, "A", "Agent")

@@ -335,11 +335,19 @@ but omp authenticates as an authorised app registered with each provider, which 
 instead was borrow other CLIs' tokens and client ids, which is the part that cannot be shipped. omp already provides usage and
 quota correctly (`omp usage`), so it was removed rather than reworked. Removed: `terminal/usage_scan.py` (1,119 lines), the
 scanner threads and refresh timer in `ai_terminal.py` (now 240 lines shorter), the "Refresh Usage & Quota" command, palette
-entry and menu item, the `usage_refresh_minutes` and `usage_scan_enabled` settings, and 92 tests. Kept: usage that a terminal
-itself displays (`_observed_usage`, `_record_profile_usage`), which touches no credentials. Verified on a copy first, then in the
+entry and menu item, the `usage_refresh_minutes` and `usage_scan_enabled` settings, and 92 tests. First pass verified on a copy, then in the
 repo: 501 tests pass; the same 2 unrelated tests fail as before the change (`test_history_scan` antigravity variants, and
 `test_launcher_flow` history opens text sessions). `tools/check_import.py` passes. The running Sublime keeps the old code in
 memory until its next restart.
+
+**Second pass, same day: no usage display at all (owner: "the command was to remove ANY usage from the codebase").** The
+first pass had kept usage read from terminal output, which still drew "Installed — no usage data" on every row of the
+Launch Agent list, plus "64% left, resets 3h" in menu captions, a "Usage:" line in the session-info view, and a
+"quota exhausted" marker. All removed: `_observed_usage`, `_profile_is_exhausted`, `_with_reset`,
+`_record_profile_usage`, `_usage_annotation`, `usage_update_from_text`, `reset_update_from_text`, and the `exhausted`
+argument of `profile_kind`. A row now shows only availability ("Not installed" when the program is missing, nothing
+otherwise). `ai_terminal.py` is 10,629 lines (from 10,951). `tests/test_no_usage_in_code.py` scans the code and fails if
+usage or quota text or the old function names reappear. 489 tests pass; the same 2 unrelated tests still fail.
 
 ## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
 

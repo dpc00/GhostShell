@@ -171,9 +171,6 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(ai_terminal, "_resync_catalog_profiles", lambda: 0)
     # Treat every profile as installed unless a test says otherwise.
     monkeypatch.setattr(ai_terminal, "_profile_is_available", lambda n, s=None: True)
-    monkeypatch.setattr(
-        ai_terminal, "_profile_availability_label", lambda n, s=None: "80% remaining"
-    )
     ai_terminal._working_dirs.clear()
     yield settings
 
@@ -322,12 +319,12 @@ def test_no_profiles_falls_back_to_default_terminal(monkeypatch):
     assert win.commands[-1][0] == "ai_terminal_open_here"
 
 
-def test_rows_carry_usage_annotation_and_a_kind():
+def test_rows_carry_a_kind_and_no_usage_text():
     win = FakeWindow(folders=[ALPHA])
     _launcher_cmd(win).run()
-    row = win.panels[0][0][0]
-    assert "80% remaining" in row.annotation
-    assert row.kind and len(row.kind) == 3
+    for row in win.panels[0][0]:
+        assert row.annotation == "", "an installed agent shows nothing on the right"
+        assert row.kind and len(row.kind) == 3
 
 
 def test_unavailable_profile_is_listed_but_marked(monkeypatch):
@@ -339,6 +336,7 @@ def test_unavailable_profile_is_listed_but_marked(monkeypatch):
     rows = {r.trigger: r for r in win.panels[0][0]}
     assert "Codex" in rows, "unavailable profiles must stay visible"
     assert rows["Codex"].kind[1] == "x"
+    assert rows["Codex"].annotation == "Not installed"
 
 
 # ─── cross-agent history (live sweep, nothing persisted) ─────────────────────
