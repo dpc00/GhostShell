@@ -27,7 +27,7 @@ TOP_NODE_ID = "ai_terminal"
 
 # Menu items that are removed: the picker, and the "open with the default profile" items (the owner
 # does not use a default profile, and pickers are gone).
-REMOVED_COMMANDS = ("ai_terminal_launcher",)
+REMOVED_COMMANDS = ("ai_terminal_launcher", "ai_terminal_history")
 REMOVED_CAPTIONS = ("Default Profile", "Open Ai Terminal here...")
 
 

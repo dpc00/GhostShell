@@ -7,7 +7,8 @@ the checked-in menus and what the script would build ever differ.
 The same shipped menus serve every machine. An agent whose program is not installed is hidden
 at run time (AiTerminalOpenHereCommand.is_visible), so each user sees only what they have.
 """
-from .launcher import SHELL_PROFILES
+# The profiles that are shells rather than agents. They are listed apart from the agents on the menus.
+SHELL_PROFILES = ("Bash", "PowerShell", "Dos Console", "WSL Bash")
 
 # Ids of the submenu nodes: inside the Ai Terminal menu (Main.sublime-menu) ...
 AGENTS_NODE_ID = "all-agents"

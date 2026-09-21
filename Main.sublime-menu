@@ -411,13 +411,6 @@
                 "caption": "-"
             },
             {
-                "caption": "All Agent History…",
-                "command": "ai_terminal_history"
-            },
-            {
-                "caption": "-"
-            },
-            {
                 "caption": "Sessions",
                 "children": [
                     {
