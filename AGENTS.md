@@ -40,6 +40,13 @@ Read this before touching anything. These rules come from the owner. They apply 
 12. Do not record a guess as a fact. In `docs/` mark every finding VERIFIED (with file:line or a test)
     or UNVERIFIED.
 
+## This repo is the shipped package, not a workspace
+
+16. Add only what the released package needs: code, menus, keymap, settings, README, LICENSE. Do not add scripts, notes,
+    plans, batons, audits, analysis output, scratch or test files. Working notes belong outside the repo (your own
+    scratch directory, or a separate private notes folder the owner names). If something seems worth keeping in the
+    repo, ask the owner first.
+
 ## Logs and generated files
 
 13. Never create a log file, a log directory or any generated output location, and never move an existing one, without
