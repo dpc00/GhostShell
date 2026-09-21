@@ -79,22 +79,32 @@ _GLOB_SOURCES = [
     },
     {
         "agent": "Gemini (antigravity)",
-        "kind": "sqlite",
+        "kind": "text",
         "base": "home",
         "pattern": lambda base: os.path.join(
-            base, ".gemini", "antigravity", "conversations", "*.db"
+            base, ".gemini", "antigravity", "brain", "*", ".system_generated", "logs", "transcript.jsonl"
         ),
-        "title": lambda path: os.path.splitext(os.path.basename(path))[0],
+        "title": lambda path: os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path)))),
         "detail": lambda path: "",
     },
     {
         "agent": "Gemini (antigravity-cli)",
-        "kind": "sqlite",
+        "kind": "text",
         "base": "home",
         "pattern": lambda base: os.path.join(
-            base, ".gemini", "antigravity-cli", "conversations", "*.db"
+            base, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl"
         ),
-        "title": lambda path: os.path.splitext(os.path.basename(path))[0],
+        "title": lambda path: os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path)))),
+        "detail": lambda path: "",
+    },
+    {
+        "agent": "Grok",
+        "kind": "text",
+        "base": "home",
+        "pattern": lambda base: os.path.join(
+            base, ".grok", "sessions", "*", "*", "chat_history.jsonl"
+        ),
+        "title": lambda path: os.path.basename(os.path.dirname(path)),
         "detail": lambda path: "",
     },
 ]

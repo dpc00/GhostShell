@@ -1,0 +1,10 @@
+.claude/
+.idea/
+.omp/
+.ori/
+.pytest_cache/
+.tmp/
+__pycache__/
+**/__pycache__/
+tests/
+terminal/bin/

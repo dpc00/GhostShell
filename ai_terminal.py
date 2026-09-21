@@ -7423,12 +7423,81 @@ def _t3_thread_transcript(db_path, thread_id):
     return "\n".join(lines) or "(no message content stored for this thread)"
 
 
+def _generic_jsonl_transcript(jsonl_path, detail):
+    """Generic JSONL transcript reader - extracts role/content from common formats."""
+    import json
+    
+    lines = []
+    try:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    
+                    # Try Claude format: message.role, message.content
+                    if 'message' in obj:
+                        msg = obj['message']
+                        role = msg.get('role', '?')
+                        content = msg.get('content', '')
+                        if isinstance(content, str):
+                            lines.append("=== %s ===\n%s\n" % (role.upper(), content))
+                        elif isinstance(content, list):
+                            text_parts = []
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    text_parts.append(item.get('text', ''))
+                            if text_parts:
+                                lines.append("=== %s ===\n%s\n" % (role.upper(), '\n'.join(text_parts)))
+                    
+                    # Try Grok format: type=user/assistant, content field
+                    elif obj.get('type') in ('user', 'assistant'):
+                        role = obj.get('type', '?').upper()
+                        content = obj.get('content', '')
+                        if isinstance(content, str):
+                            lines.append("=== %s ===\n%s\n" % (role, content))
+                        elif isinstance(content, list):
+                            text_parts = []
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    text_parts.append(item.get('text', ''))
+                            if text_parts:
+                                lines.append("=== %s ===\n%s\n" % (role, '\n'.join(text_parts)))
+                    
+                    # Try generic role/content format
+                    elif 'role' in obj and 'content' in obj:
+                        role = obj.get('role', '?').upper()
+                        content = obj.get('content', '')
+                        if isinstance(content, str):
+                            lines.append("=== %s ===\n%s\n" % (role, content))
+                        elif isinstance(content, list):
+                            text_parts = []
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    text_parts.append(item.get('text', ''))
+                            if text_parts:
+                                lines.append("=== %s ===\n%s\n" % (role, '\n'.join(text_parts)))
+                        
+                except json.JSONDecodeError:
+                    continue
+    except IOError as e:
+        return "Error reading file: %s" % e
+    
+    return "\n".join(lines) or "(no readable conversation content found)"
+
+
 # Agent-prefix -> transcript reader, for sqlite sources that ai_terminal knows
 # how to read. Anything not listed here (an unrecognized sqlite db, e.g. a
 # Gemini conversation) falls back to a generic "here's the file" message.
 _TRANSCRIPT_READERS = {
     "Ollama": _ollama_chat_transcript,
     "T3": _t3_thread_transcript,
+    "Claude": _generic_jsonl_transcript,
+    "Codex": _generic_jsonl_transcript,
+    "Gemini": _generic_jsonl_transcript,
+    "Grok": _generic_jsonl_transcript,
 }
 
 
@@ -7469,9 +7538,23 @@ class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
         )
 
     def _open(self, sess):
+        # For JSONL text files, use the generic reader
         if sess["kind"] == "text":
-            self.window.open_file(sess["path"])
-            return
+            try:
+                text = _generic_jsonl_transcript(sess["path"], sess["detail"])
+                view = self.window.new_file()
+                view.set_scratch(True)
+                view.set_name("%s — %s" % (sess["agent"], sess["title"]))
+                view.run_command("append", {"characters": text})
+                view.set_read_only(True)
+                return
+            except Exception as e:
+                sublime.error_message(
+                    "ai_terminal: could not read %s history:\n%s" % (sess["agent"], e)
+                )
+                return
+        
+        # For sqlite databases, check if there's a specific reader
         reader = next(
             (fn for prefix, fn in _TRANSCRIPT_READERS.items()
              if sess["agent"].startswith(prefix)),
@@ -7480,17 +7563,24 @@ class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
         if reader is not None:
             try:
                 text = reader(sess["path"], sess["detail"])
+                view = self.window.new_file()
+                view.set_scratch(True)
+                view.set_name("%s — %s" % (sess["agent"], sess["title"]))
+                view.run_command("append", {"characters": text})
+                view.set_read_only(True)
+                return
             except Exception as e:
                 sublime.error_message(
                     "ai_terminal: could not read %s history:\n%s" % (sess["agent"], e)
                 )
                 return
-        else:
-            text = (
-                "%s\n\n%s is a SQLite database; ai_terminal does not know its "
-                "schema, so this just points at the file on disk.\n\nPath: %s"
-                % (sess["title"], sess["agent"], sess["path"])
-            )
+        
+        # Fallback for unrecognized databases
+        text = (
+            "%s\n\n%s is a SQLite database; ai_terminal does not know its "
+            "schema, so this just points at the file on disk.\n\nPath: %s"
+            % (sess["title"], sess["agent"], sess["path"])
+        )
         view = self.window.new_file()
         view.set_scratch(True)
         view.set_name("%s — %s" % (sess["agent"], sess["title"]))
