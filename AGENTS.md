@@ -35,3 +35,9 @@ Read this before touching anything. These rules come from the owner. They apply 
     restarted. Before restarting, check for running sessions and never kill one.
 12. Do not record a guess as a fact. In `docs/` mark every finding VERIFIED (with file:line or a test)
     or UNVERIFIED.
+
+## Logs and generated files
+
+13. Never create a log file, a log directory or any generated output location, and never move an existing one, without
+    the owner's approval. If approved, first add it to `docs/LOG_DIRECTORIES.md` with its writer, purpose, size cap and
+    retention, and keep it off by default. The owner should never have to work out what a file is or whether to keep it.
