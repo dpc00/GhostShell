@@ -15,7 +15,6 @@ DAY = 86400.0
 def test_profile_kind_distinguishes_states():
     assert launcher.profile_kind("Claude")[2] == "Agent"
     assert launcher.profile_kind("Bash")[2] == "Shell"
-    assert launcher.profile_kind("Claude", available=False)[2] == "Not installed"
 
 
 def test_shorten_path_uses_tilde():

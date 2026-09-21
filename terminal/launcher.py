@@ -11,14 +11,12 @@ import time
 
 # Sublime kind tuples are (KIND_ID, letter, display-name). The numeric ids are
 # inlined so this module stays importable without Sublime for tests.
-KIND_ID_AMBIGUOUS = 0
 KIND_ID_KEYWORD = 1
 KIND_ID_TYPE = 2
 KIND_ID_FUNCTION = 3
 KIND_ID_NAMESPACE = 4
 KIND_ID_NAVIGATION = 5
 KIND_ID_MARKUP = 6
-KIND_ID_VARIABLE = 7
 KIND_ID_SNIPPET = 8
 
 # Shells are deliberately a different colour/letter from agents so the two
@@ -26,10 +24,8 @@ KIND_ID_SNIPPET = 8
 SHELL_PROFILES = ("Bash", "PowerShell", "Dos Console", "WSL Bash")
 
 
-def profile_kind(name, available=True, shells=SHELL_PROFILES):
+def profile_kind(name, shells=SHELL_PROFILES):
     """(kind_id, letter, label) describing one profile row."""
-    if not available:
-        return (KIND_ID_AMBIGUOUS, "x", "Not installed")
     if name in shells:
         return (KIND_ID_NAMESPACE, "$", "Shell")
     return (KIND_ID_FUNCTION, "A", "Agent")

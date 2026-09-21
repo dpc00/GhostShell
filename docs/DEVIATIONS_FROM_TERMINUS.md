@@ -349,6 +349,15 @@ argument of `profile_kind`. A row now shows only availability ("Not installed" w
 otherwise). `ai_terminal.py` is 10,629 lines (from 10,951). `tests/test_no_usage_in_code.py` scans the code and fails if
 usage or quota text or the old function names reappear. 489 tests pass; the same 2 unrelated tests still fail.
 
+**Uninstalled agents hidden (owner, 2026-09-21: "if it is not installed it should not be in the list or not be
+selectable").** This reverses an earlier design, recorded in the old docstring of `_profile_items`, that kept unavailable
+profiles visible and marked because hiding them "breaks muscle memory and hides the reason". Now the Launch Agent list
+offers only installed agents (`AiTerminalLauncherCommand.run`), falling back to Open Here when none are installed, and
+the menu entries for missing agents are hidden (`is_visible` on `AiTerminalOpenHereCommand` and
+`AiTerminalOpenInEditorCommand`). The "Not installed" row marker, `profile_availability_label` and the constants that only
+existed to draw it were removed. The Cody profile and its catalog entry were removed the same day. 491 tests pass; the same
+2 unrelated tests still fail.
+
 ## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
 
 - `terminal/agent_catalog.py` (487 lines): a data table of known agent CLIs and the quirks each needs. Its docstring says it

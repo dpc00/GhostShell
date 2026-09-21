@@ -24,7 +24,7 @@ def test_profile_items_call_shape():
     ordered = sorted(names, key=lambda n: n.lower())
     assert ordered == ["Bash", "Claude", "Codex"]
     for name in ordered:
-        kind = launcher.profile_kind(name, available=True)
+        kind = launcher.profile_kind(name)
         assert len(kind) == 3
 
 

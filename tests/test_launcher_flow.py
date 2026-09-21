@@ -327,16 +327,30 @@ def test_rows_carry_a_kind_and_no_usage_text():
         assert row.kind and len(row.kind) == 3
 
 
-def test_unavailable_profile_is_listed_but_marked(monkeypatch):
+def test_unavailable_profile_is_not_listed(monkeypatch):
     monkeypatch.setattr(
         ai_terminal, "_profile_is_available", lambda n, s=None: n != "Codex"
     )
     win = FakeWindow(folders=[ALPHA])
     _launcher_cmd(win).run()
-    rows = {r.trigger: r for r in win.panels[0][0]}
-    assert "Codex" in rows, "unavailable profiles must stay visible"
-    assert rows["Codex"].kind[1] == "x"
-    assert rows["Codex"].annotation == "Not installed"
+    triggers = {r.trigger for r in win.panels[0][0]}
+    assert "Codex" not in triggers, "an agent that is not installed must not be offered"
+    assert "Claude" in triggers
+
+
+def test_no_installed_profiles_falls_back_to_open_here(monkeypatch):
+    monkeypatch.setattr(ai_terminal, "_profile_is_available", lambda n, s=None: False)
+    win = FakeWindow(folders=[ALPHA])
+    _launcher_cmd(win).run()
+    assert not win.panels
+    assert win.commands[-1][0] == "ai_terminal_open_here"
+
+
+def test_menu_entries_for_missing_agents_are_hidden(monkeypatch):
+    monkeypatch.setattr(ai_terminal, "_profile_is_available", lambda n, s=None: n != "Codex")
+    command = ai_terminal.AiTerminalOpenHereCommand(FakeWindow(folders=[ALPHA]))
+    assert command.is_visible(profile="Claude")
+    assert not command.is_visible(profile="Codex")
 
 
 # ─── cross-agent history (live sweep, nothing persisted) ─────────────────────

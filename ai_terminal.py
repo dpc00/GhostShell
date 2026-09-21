@@ -2859,13 +2859,6 @@ def _profile_is_available(profile_name, settings=None):
     return _profile_is_available_pure(profile_name, profile, path=path)
 
 
-def _profile_availability_label(profile_name, settings=None):
-    """Right-hand text for a profile row: empty when installed, else why it cannot launch."""
-    if not _profile_is_available(profile_name, settings):
-        return "Not installed"
-    return ""
-
-
 def _profile_menu_caption(profile_name, settings=None):
     """Menu caption for a profile: its name, plus "not installed" when the program is missing."""
     if not profile_name:
@@ -6794,6 +6787,9 @@ class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
     def is_enabled(self, paths=None, profile=None):
         return _profile_is_available(profile)
 
+    def is_visible(self, paths=None, profile=None):
+        return _profile_is_available(profile)
+
     def description(self, paths=None, profile=None):
         # Menu entries without an explicit "caption" render this live label,
         # e.g. "Claude — not installed" when the program is missing.
@@ -6856,6 +6852,9 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
         _pick_cwd_then(window, on_path)
 
     def is_enabled(self, profile=None, group=-1, index=-1):
+        return _profile_is_available(profile)
+
+    def is_visible(self, profile=None, group=-1, index=-1):
         return _profile_is_available(profile)
 
     def description(self, profile=None, group=-1, index=-1):
@@ -6929,21 +6928,14 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
 
 
 def _profile_items(names, s, context_dir=None):
-    """Quick-panel rows for profiles, alphabetical. Unavailable profiles are
-    not hidden (hiding breaks muscle memory and hides the reason) but are
-    marked via their kind glyph.
+    """Quick-panel rows for profiles, alphabetical, with nothing on the right.
+
+    `names` holds only installed profiles: an agent that is not installed is never
+    offered, so there is no "not installed" state to draw.
     """
     ordered = sorted(names, key=lambda n: n.lower())
     rows = [
-        _quick_panel_item(
-            name,
-            "",
-            _profile_availability_label(name, s),
-            _launcher.profile_kind(
-                name,
-                available=_profile_is_available(name, s),
-            ),
-        )
+        _quick_panel_item(name, "", "", _launcher.profile_kind(name))
         for name in ordered
     ]
     return ordered, rows
@@ -6984,7 +6976,8 @@ class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
     def run(self, paths=None, profile=None):
         _resync_catalog_profiles()
         s = sublime.load_settings(_SETTINGS_NAME)
-        names = _profile_names(s)
+        # An agent that is not installed is not offered at all.
+        names = [n for n in _profile_names(s) if _profile_is_available(n, s)]
         if not names:
             self.window.run_command("ai_terminal_open_here", {"paths": paths})
             return
