@@ -236,6 +236,12 @@ session recording. This is a pure addition.
   5,252 / 368,651 on 07-20; 5,948 / 423,061 on 08-18; 450,593 bytes now). The pipeline that writes it
   (`_init_dynamic_color_scheme`, `_repair_scheme_rules`, `_save_color_scheme`, `_durable_scheme_backup`,
   `ai_terminal.py` about lines 1755-1990) still runs with its 22 log calls silenced.
+  The earlier file (`developer_diagnostics_and_runtime_server_error_logs/color_scheme.log`, 593 lines, 2026-07-10 to 07-20)
+  shows what the pipeline does: 344 `[register]` lines ("Encountered new scope: ai.fb.146.23 (Memory registered count:
+  5143)"), 149 `[init]` lines and 100 `[flush]` lines ("Flushed 6 dynamic rules to disk. Total rules: 5149"; largest
+  flush 37 rules), written from a background thread. In other words, every new foreground/background colour pair seen
+  on screen becomes a new scope rule and is written into the on-disk colour scheme file. No error, warning or repair
+  line appears anywhere in the file.
 Both `log_tab_text` and `record_asciicast` default to `false` in the repo settings (lines 134 and 941);
 individual users switch them on.
 
