@@ -33,6 +33,7 @@ import gc
 import json
 import math
 import os
+import tempfile
 import queue
 import re
 import shutil
@@ -6081,13 +6082,50 @@ def _resolve_here_path(window, paths):
     return _sole_auto_cwd(folders or [])
 
 
-# Sticky per-window cwd override, set explicitly via the sidebar's "Set Ai
-# Terminal Working Directory" command (TermMate/GeminiCLI convention: pick
-# once, reuse silently after that — never re-ask). The fast path is keyed by
-# window id; a User-only settings file preserves the explicit choice across
-# Sublime restarts without writing configuration into the project.
+# Sticky per-window cwd override, set explicitly with the "Set Working Directory"
+# command (pick once, reuse silently after that, never re-ask). The fast path is
+# keyed by window id. The choice is also remembered across Sublime restarts in one
+# small JSON file in Sublime's cache folder. It holds machine-specific folder paths, so
+# it is deliberately not in Packages/User, which users often sync between computers.
+# If the file is missing GhostShell simply asks again.
 _working_dirs = {}
-_WORKING_DIR_SETTINGS_NAME = "ai_terminal_working_directories.sublime-settings"
+_WORKING_DIR_FILE = "working_directories.json"
+
+
+class _WorkingDirStore:
+    """The saved working directories: a JSON file in Sublime's cache folder.
+
+    Offers the get / set / save calls that the working-directory code below uses.
+    """
+
+    def __init__(self):
+        self._path = os.path.join(sublime.cache_path(), "GhostShell", _WORKING_DIR_FILE)
+        self._data = {}
+        try:
+            with open(self._path, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+        except (OSError, ValueError):
+            return
+        if isinstance(loaded, dict):
+            self._data = loaded
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def set(self, key, value):
+        self._data[key] = value
+
+    def save(self):
+        """Write the file through a temporary file, so a crash cannot leave half a file."""
+        folder = os.path.dirname(self._path)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(dir=folder, suffix=".tmp")
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(self._data, handle)
+            os.replace(temporary_path, self._path)
+        except OSError:
+            print("[ai_terminal] could not save the working directory:\n%s" % traceback.format_exc())
 
 
 def _working_dir_identity(window):
@@ -6139,7 +6177,7 @@ def _get_working_dir(window):
         _working_dirs.pop(window.id(), None)
     identities = _working_dir_identities(window)
     if identities:
-        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        saved = _WorkingDirStore()
         raw = saved.get("directories", {})
         directories = dict(raw) if isinstance(raw, dict) else {}
         stale = False
@@ -6153,7 +6191,7 @@ def _get_working_dir(window):
                         migrated = True
                 if migrated:
                     saved.set("directories", directories)
-                    sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+                    saved.save()
                 _working_dirs[window.id()] = path
                 return path
             if path:
@@ -6161,7 +6199,7 @@ def _get_working_dir(window):
                 stale = True
         if stale:
             saved.set("directories", directories)
-            sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+            saved.save()
             sublime.status_message(
                 "Ai terminal: removed a saved working directory that no longer exists"
             )
@@ -6171,20 +6209,20 @@ def _set_working_dir(window, path):
     _working_dirs[window.id()] = path
     identities = _working_dir_identities(window, selected_path=path)
     if identities:
-        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        saved = _WorkingDirStore()
         directories = saved.get("directories", {})
         directories = dict(directories) if isinstance(directories, dict) else {}
         for identity in identities:
             directories[identity] = path
         saved.set("directories", directories)
-        sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+        saved.save()
     sublime.status_message("Ai terminal: working directory set to %s" % path)
 
 def _clear_working_dir(window):
     removed = _working_dirs.pop(window.id(), None)
     identities = _working_dir_identities(window, selected_path=removed)
     if identities:
-        saved = sublime.load_settings(_WORKING_DIR_SETTINGS_NAME)
+        saved = _WorkingDirStore()
         directories = saved.get("directories", {})
         directories = dict(directories) if isinstance(directories, dict) else {}
         changed = False
@@ -6193,7 +6231,7 @@ def _clear_working_dir(window):
                 changed = True
         if changed:
             saved.set("directories", directories)
-            sublime.save_settings(_WORKING_DIR_SETTINGS_NAME)
+            saved.save()
             removed = True
     if removed:
         sublime.status_message("Ai terminal: working directory cleared")
