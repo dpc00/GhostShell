@@ -1,0 +1,263 @@
+// GhostShell terminal host — full data-flow + settings branches
+// View externally. Do NOT open the PNG in Sublime Text (can hard-freeze ST/Windows).
+// Render (if you have Graphviz):  dot -Tpng -o ghostshell-data-flow.png ghostshell-data-flow.dot
+//
+// Legend:
+//   SOURCE = external producer    SINK = external consumer
+//   GATE   = profile/global setting or DEC mode that forks a path
+//   PROC   = code / process stage
+
+digraph GhostShellTerminalHost {
+  rankdir=TB;
+  compound=true;
+  fontname="Helvetica";
+  fontsize=11;
+  labelloc="t";
+  label="GhostShell terminal host — sources, sinks, gates, and settings branches\n(Incomplete diagrams caused 'fix one TUI' edits. Every live/spawn setting below must appear as an arrow.)";
+  node [fontname="Helvetica", fontsize=9, shape=box, style="rounded,filled", fillcolor="#F5F7FB", color="#334155"];
+  edge [fontname="Helvetica", fontsize=8, color="#475569"];
+
+  // ─── SOURCES ───────────────────────────────────────────────────────────
+  subgraph cluster_sources {
+    label="SOURCES";
+    style=rounded; color="#0F766E"; bgcolor="#ECFDF5";
+    UserKB     [label="SOURCE: User keyboard", fillcolor="#A7F3D0"];
+    UserMouse  [label="SOURCE: User mouse / trackpad", fillcolor="#A7F3D0"];
+    ChildOut   [label="SOURCE: Child CLI stdout/stderr\n(via ConPTY VT)", fillcolor="#A7F3D0"];
+    SettingsFile [label="SOURCE: ai_terminal.sublime-settings\n+ User overlay + agents generated", fillcolor="#A7F3D0"];
+    Catalog    [label="SOURCE: agent_catalog.py\n+ ~/data/agent_tui_catalog.sqlite3", fillcolor="#A7F3D0"];
+    DECSET     [label="SOURCE: Child DEC private modes\n1049 alt-screen, 1000/1002/1003/1006 mouse,\n2004 bracketed paste, …", fillcolor="#A7F3D0"];
+  }
+
+  // ─── PROCESS TOPOLOGY ──────────────────────────────────────────────────
+  subgraph cluster_process {
+    label="PROCESS TOPOLOGY";
+    style=rounded; color="#1D4ED8"; bgcolor="#EFF6FF";
+    ChildProc [label="PROC: Child process\nlaunch_command + spawn_env"];
+    ConPTY    [label="PROC: Windows ConPTY / conhost"];
+    Broker    [label="PROC: GhostShell broker\nnamed pipe, detachable sessions\nbroker_scrollback_bytes"];
+    TermObj   [label="PROC: _Terminal (ai_terminal.py)\nper Sublime view"];
+    ChildProc -> ConPTY -> Broker -> TermObj;
+  }
+
+  SettingsFile -> ChildProc [label="launch_command\nspawn_env\ndetachable"];
+  Catalog -> SettingsFile [label="sync / profile defaults"];
+  ChildOut -> ConPTY;
+  ConPTY -> Broker;
+  Broker -> TermObj [label="output bytes"];
+  TermObj -> Broker [label="input bytes"];
+  Broker -> ConPTY;
+  ConPTY -> ChildProc;
+
+  // ─── VT / SCREEN ───────────────────────────────────────────────────────
+  subgraph cluster_vt {
+    label="VT PLANE (libghostty-vt)";
+    style=rounded; color="#6D28D9"; bgcolor="#F5F3FF";
+    Parser [label="PROC: GhosttyParser.feed"];
+    Screen [label="PROC: Screen\ngrid, attrs, cursor,\nhistory deque,\nalt_screen, mouse_tracking,\nprivate_modes, dirty"];
+    Parser -> Screen;
+  }
+  TermObj -> Parser;
+  DECSET -> Screen [label="modes applied by parser"];
+
+  // ─── OUTPUT / RENDER SINKS ─────────────────────────────────────────────
+  subgraph cluster_output {
+    label="OUTPUT → SUBLIME + DISK SINKS";
+    style=rounded; color="#B45309"; bgcolor="#FFFBEB";
+    Render   [label="PROC: AiTerminalRenderCommand\n~30ms"];
+    FastPatch [label="GATE: fast_caret_patch_enabled\n(diff cells vs full replace)"];
+    ViewBuf  [label="SINK: Sublime view buffer\nview.replace / patch"];
+    Colors   [label="SINK: color regions"];
+    Caret    [label="GATE→SINK: caret path\ncaret_footer_pinning_enabled\nhost_cursor_paint_enabled\nuser_owns_caret_enabled"];
+    Phantom  [label="SINK: LAYOUT_BLOCK phantom\nhost toolbar / Settings / Tab Close\n(_add_close_toolbar)"];
+    Title    [label="GATE→SINK: osc_title_updates_tab\n→ tab name"];
+    Status   [label="GATE→SINK: debug_status_bar_enabled"];
+    TextLog  [label="GATE→SINK: log_tab_text\nSessionTextLog file"];
+    Cast     [label="GATE→SINK: record_asciicast\n(spawn/reattach baked)"];
+    HistCap  [label="GATE: scrollback_history_size\nScreen history maxlen"];
+  }
+  Screen -> Render;
+  Render -> FastPatch;
+  FastPatch -> ViewBuf;
+  Render -> Colors;
+  Render -> Caret;
+  Render -> Phantom;
+  Screen -> Title;
+  Render -> Status;
+  Screen -> TextLog [label="on_retire_line"];
+  TermObj -> Cast;
+  HistCap -> Screen;
+  SettingsFile -> FastPatch;
+  SettingsFile -> Caret;
+  SettingsFile -> Title;
+  SettingsFile -> Status;
+  SettingsFile -> TextLog;
+  SettingsFile -> Cast;
+  SettingsFile -> HistCap;
+
+  // ─── _tui_like DECISION (central settings branch) ──────────────────────
+  subgraph cluster_tui {
+    label="GATE: _tui_like() — drives pin / page-key defaults / settle";
+    style=rounded; color="#DC2626"; bgcolor="#FEF2F2";
+    TuiQ [label="_tui_like ?", shape=diamond, fillcolor="#FECACA", color="#DC2626"];
+    AltQ [label="Screen.alt_screen?", shape=diamond, fillcolor="#FECACA"];
+    MouseQ [label="mouse_tracking AND\nmouse_handling AND\npin_viewport?", shape=diamond, fillcolor="#FECACA"];
+    ForceQ [label="force_tui_like?", shape=diamond, fillcolor="#FECACA"];
+    TuiYes [label="_tui_like = TRUE\nhard-pin path eligible", fillcolor="#FECACA"];
+    TuiNo  [label="_tui_like = FALSE\nstream / follow path", fillcolor="#DCFCE7", color="#16A34A"];
+
+    Screen -> AltQ;
+    AltQ -> TuiYes [label="yes (pin_viewport IGNORED)"];
+    AltQ -> MouseQ [label="no"];
+    SettingsFile -> MouseQ [label="mouse_handling\npin_viewport"];
+    Screen -> MouseQ [label="mouse_tracking"];
+    MouseQ -> TuiYes [label="all true"];
+    MouseQ -> ForceQ [label="else"];
+    SettingsFile -> ForceQ [label="force_tui_like"];
+    ForceQ -> TuiYes [label="true"];
+    ForceQ -> TuiNo [label="false"];
+    TuiQ -> AltQ [style=invis];
+  }
+
+  // ─── VIEWPORT PLANE ────────────────────────────────────────────────────
+  subgraph cluster_viewport {
+    label="HOST VIEWPORT PLANE (second brain beside VT)";
+    style=rounded; color="#CA8A04"; bgcolor="#FEFCE8";
+    Settle [label="PROC: _settle_viewport\nafter each render"];
+    PinHard [label="PROC: _pin_viewport_rest\n(y = rest, usually 0)"];
+    PinDip [label="PROC: _pin_viewport_rest_dip_only\n(only correct y < rest)"];
+    Clamp [label="PROC: _clamp_vp_loop @ 8ms"];
+    PanTui [label="PROC: _vp_pan_to_tui_scroll\npan → synthetic PTY wheel"];
+    PinTerm [label="PROC: _pin_terminal_viewport\nafter intercepted wheel"];
+    Follow [label="PROC: _scroll_to_bottom\nwhen _auto_follow"];
+    FollowIgn [label="GATE: follow_ignore_trailing_lines"];
+  }
+  TuiYes -> Settle;
+  TuiNo -> Settle;
+  Settle -> PinHard [label="tui_like &\nwheel_to_pty path"];
+  Settle -> PinDip [label="content_fits or\nwheel_to_pty false intent"];
+  Settle -> Follow [label="not tui & auto_follow"];
+  FollowIgn -> Follow;
+  Clamp -> PanTui [label="tui_like &\nwheel toward PTY"];
+  Clamp -> PinHard [label="snap back"];
+  TuiYes -> Clamp;
+  SettingsFile -> FollowIgn;
+
+  ViewBuf -> Settle [label="layout after paint"];
+  Phantom -> Clamp [label="chrome may sit\nbelow fold"];
+
+  // ─── INPUT: KEYBOARD ───────────────────────────────────────────────────
+  subgraph cluster_keys {
+    label="INPUT: KEYBOARD";
+    style=rounded; color="#0369A1"; bgcolor="#F0F9FF";
+    KeyCmd [label="PROC: ai_terminal_keypress"];
+    PageGate [label="GATE: page_keys_to_pty\n(default true if _tui_like)", shape=diamond, fillcolor="#BAE6FD"];
+    HomeGate [label="GATE: home_end_native", shape=diamond, fillcolor="#BAE6FD"];
+    PagePty [label="SINK: PageUp/Down → PTY"];
+    PageST  [label="SINK: PageUp/Down → Sublime"];
+    HomeST  [label="SINK: Home/End → Sublime"];
+    HomePty [label="SINK: Home/End → PTY"];
+    KeysPty [label="SINK: printable / arrows → PTY\nterm.send_string"];
+  }
+  UserKB -> KeyCmd;
+  KeyCmd -> PageGate;
+  KeyCmd -> HomeGate;
+  KeyCmd -> KeysPty;
+  TuiYes -> PageGate;
+  TuiNo -> PageGate;
+  SettingsFile -> PageGate;
+  SettingsFile -> HomeGate;
+  PageGate -> PagePty [label="true"];
+  PageGate -> PageST [label="false"];
+  HomeGate -> HomeST [label="true"];
+  HomeGate -> HomePty [label="false"];
+  KeysPty -> TermObj;
+  PagePty -> TermObj;
+  HomePty -> TermObj;
+
+  // ─── INPUT: MOUSE CLICK / DRAG ─────────────────────────────────────────
+  subgraph cluster_mouse {
+    label="INPUT: MOUSE CLICK / DRAG";
+    style=rounded; color="#9F1239"; bgcolor="#FFF1F2";
+    Drag [label="PROC: drag_select\nAiTerminalKeyInterceptor"];
+    MH [label="GATE: mouse_handling", shape=diamond, fillcolor="#FECDD3"];
+    Track [label="GATE: Screen.mouse_tracking\n(from DECSET)", shape=diamond, fillcolor="#FECDD3"];
+    DragFwd [label="GATE: drag_forwards_by_default\n(GLOBAL ONLY — not per-profile)", shape=diamond, fillcolor="#FECDD3"];
+    ClickFB [label="GATE: click_to_cursor_fallback_enabled"];
+    RouteClick [label="PROC: _route_mouse_click\nDEC mouse → PTY"];
+    STSelect [label="SINK: Sublime text selection"];
+    ArrowSynth [label="SINK: synthesized arrows → PTY"];
+  }
+  UserMouse -> Drag;
+  Drag -> MH;
+  SettingsFile -> MH;
+  MH -> Track [label="true"];
+  MH -> STSelect [label="false"];
+  Track -> DragFwd [label="tracking on"];
+  Track -> ClickFB [label="tracking off"];
+  SettingsFile -> ClickFB;
+  ClickFB -> ArrowSynth [label="true"];
+  DragFwd -> RouteClick [label="mouse-first plain drag"];
+  DragFwd -> STSelect [label="copy-first / modified"];
+  RouteClick -> TermObj;
+  ArrowSynth -> TermObj;
+
+  // ─── INPUT: WHEEL / TRACKPAD ───────────────────────────────────────────
+  subgraph cluster_wheel {
+    label="INPUT: WHEEL / TRACKPAD";
+    style=rounded; color="#7C2D12"; bgcolor="#FFF7ED";
+    ScrollCmd [label="PROC: scroll_lines /\nscroll_horizontally"];
+    TrackpadCmd [label="PROC: AiTerminalTrackpadScrollCommand\n(or core pan → clamp)"];
+    WT [label="GATE: wheel_to_pty\n(default = mouse_handling)", shape=diamond, fillcolor="#FED7AA"];
+    RouteWheel [label="PROC: _route_mouse_wheel → PTY"];
+    NativeScroll [label="SINK: native Sublime viewport scroll"];
+  }
+  UserMouse -> ScrollCmd;
+  UserMouse -> TrackpadCmd;
+  ScrollCmd -> WT;
+  TrackpadCmd -> WT;
+  SettingsFile -> WT;
+  MH -> WT [label="default", style=dashed];
+  WT -> RouteWheel [label="true"];
+  WT -> NativeScroll [label="false\n(interceptor returns None)"];
+  RouteWheel -> TermObj;
+  RouteWheel -> PinTerm;
+  NativeScroll -> Clamp [label="if clamp still hard-pins,\nsetting is DEAD"];
+  PinTerm -> ViewBuf [style=dashed, label="viewport write"];
+
+  // ─── SETTINGS CLASSIFICATION (apply timing) ────────────────────────────
+  subgraph cluster_apply {
+    label="SETTINGS APPLY TIMING (why toggles lie)";
+    style=rounded; color="#4B5563"; bgcolor="#F9FAFB";
+    Live [label="LIVE (re-read every event)\nmouse_handling, wheel_to_pty,\npage_keys_to_pty, home_end_native,\npin_viewport, force_tui_like,\nosc_title_updates_tab,\ncaret_footer_pinning_enabled,\nclick_to_cursor_fallback_enabled,\ndebug_status_bar_enabled,\nfast_caret_patch_enabled,\nhost_cursor_paint_enabled,\nuser_owns_caret_enabled,\nclose_tab_on_exit, log_tab_text"];
+    Reattach [label="REATTACH / RESPAWN tab\nrecord_asciicast\n(+ font_* not in toggle panel)"];
+    Relaunch [label="RELAUNCH new process only\nlaunch_command, spawn_env,\ndetachable"];
+    GlobalOnly [label="GLOBAL ONLY (profile write ignored)\ndrag_forwards_by_default"];
+  }
+  SettingsFile -> Live;
+  SettingsFile -> Reattach;
+  SettingsFile -> Relaunch;
+  SettingsFile -> GlobalOnly;
+
+  // ─── SESSION LIFECYCLE SINKS ───────────────────────────────────────────
+  subgraph cluster_life {
+    label="SESSION LIFECYCLE SINKS";
+    style=rounded; color="#115E59"; bgcolor="#F0FDFA";
+    CloseGate [label="GATE: close_tab_on_exit"];
+    Detach [label="SINK: detach broker\n(Close keep-alive / WT handoff)"];
+    Kill [label="SINK: explicit_kill"];
+    ReattachSink [label="SINK: reattach same broker\nnew view/parser"];
+  }
+  SettingsFile -> CloseGate;
+  CloseGate -> ViewBuf [label="auto-close tab"];
+  TermObj -> Detach;
+  TermObj -> Kill;
+  TermObj -> ReattachSink;
+
+  // ─── CRITICAL INVARIANT NOTE ───────────────────────────────────────────
+  Note [shape=note, fillcolor="#FEF3C7", color="#D97706",
+        label="INVARIANT FAILURE (Vibe hours):\nalt_screen ⇒ _tui_like TRUE ⇒ pin_viewport never consulted.\nwheel_to_pty:false only helps if clamp+settle also stop hard-pin.\nHost toolbar phantom is a SINK below the PTY grid — needs native scroll or reserved rows.\nFixing one profile inside a shared PROC box without a GATE = 'doing a Claude'."];
+  TuiYes -> Note [style=dashed];
+  WT -> Note [style=dashed];
+  Phantom -> Note [style=dashed];
+}
