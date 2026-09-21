@@ -87,3 +87,35 @@ in `~/data/logs/`. Each is created only when a tab reconnects to an existing bro
 path has been used in real work at least 6 times. Correction: an earlier version of this entry said the
 live restart test was unconfirmed. That came from a 2026-09-18 handoff note and was wrong. Whether
 each reattach was clean is not verified here.
+
+## 5. Input path: keys and mouse (VERIFIED)
+
+**Key name table: NOT a deviation.** `terminal/keys.py` opens with "Key name -> terminal byte sequences
+(Terminus-compatible)" and its `KEY_MAP` matches Terminus `terminus/key.py` (itself "adopted from
+TerminalView").
+
+**Win32 input mode (DEC 9001).** Terminus has no equivalent. GhostShell sends keys through
+`encode_win32_key` (`terminal/keys.py:204`, called at `ai_terminal.py:8583`) when the child has enabled
+mode 9001. Justification (code comment, `ai_terminal.py:8569-8571`): apps that enable it (confirmed:
+Qwen Code) ignore plain xterm sequences entirely, so every key silently does nothing.
+Several profile comments in `ai_terminal.sublime-settings` record other agents that turn it on.
+
+**Keys go through the libghostty-vt key encoder first** (`ai_terminal.py:8586-8592`), then the static
+table as fallback. Terminus uses only the static table. Justification (code comment): the native
+encoder syncs the live terminal state (app-cursor mode, Kitty keyboard protocol, modifyOtherKeys,
+alt-escape prefix), which the static table cannot do. The whole decision runs under `term._lock`
+because the PTY reader thread can change mode state at the same moment a key arrives.
+
+**Mouse reporting to the PTY.** Terminus has no DEC mouse encoding (a search of `terminus/*.py` found
+none); it handles URL clicks only. GhostShell has `terminal/mouse.py` (SGR and legacy X10), because agent
+TUIs enable DEC 1000/1002/1003/1006 and need real mouse reports. Basis: an audit recorded in
+`ai/TODO-archive.md` (2026-08-11) that replayed 470 recorded asciicast sessions to learn which CLIs
+enable mouse tracking, and `ai/CURSOR_SYSTEM_HISTORY.md`. GhostShell also has a click-to-cursor
+fallback (`_route_click_to_cursor_fallback`, per `ai/RECOVERY_PLAN.md`) that sends arrow keys to move
+the cursor of apps with NO mouse tracking. Since 2026-09-18 `mouse.py` uses the native
+`GhosttyMouseEncoder` and keeps the hand-written encoder only as a fallback.
+
+**Open items.** `terminal/mouse.py` imports `ctypes`; rule 5 (every ctypes line documented) has not been
+audited. The per-profile routing switches (`mouse_handling`, `wheel_to_pty`, `page_keys_to_pty`) exist
+to serve those audited per-agent differences, but Grok (2026-09-19) found some of the 16 gates
+ignored on the alt-screen path (see section 1). Justified in intent, not yet checked gate by gate.
