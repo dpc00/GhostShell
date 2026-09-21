@@ -327,13 +327,19 @@ OAuth credentials and calls the providers' servers to show quotas in the launche
 inference cost, so the launcher and menus do not show stale figures. The setting comment says it is "Off by default for a
 public release".
 
-**Defect found and fixed 2026-09-21.** The committed default was `"usage_scan_enabled": true`, contradicting that comment. The
-owner's own installation enables it in his User settings, where it belongs. The repo default is now `false`, with
-`tests/test_release_defaults.py` requiring `log_tab_text`, `record_asciicast` and `usage_scan_enabled` to be `false`.
+**Defect found 2026-09-21.** The committed default was `"usage_scan_enabled": true`, contradicting its own comment ("Off by
+default for a public release"). It was first changed to `false` (`6c348bb`).
 
-**Still open (owner's decision).** Even opt-in, a Package Control package that rewrites other tools' credential files under
-another program's client id is a trust and terms-of-service problem. Options that need no such access: show only usage seen in
-terminal output, or read but never refresh or write another tool's tokens.
+**Decision and removal (owner, 2026-09-21; commit `6cbad2c`). The whole scanner is gone.** The owner had wanted omp's method,
+but omp authenticates as an authorised app registered with each provider, which GhostShell cannot do. What GhostShell did
+instead was borrow other CLIs' tokens and client ids, which is the part that cannot be shipped. omp already provides usage and
+quota correctly (`omp usage`), so it was removed rather than reworked. Removed: `terminal/usage_scan.py` (1,119 lines), the
+scanner threads and refresh timer in `ai_terminal.py` (now 240 lines shorter), the "Refresh Usage & Quota" command, palette
+entry and menu item, the `usage_refresh_minutes` and `usage_scan_enabled` settings, and 92 tests. Kept: usage that a terminal
+itself displays (`_observed_usage`, `_record_profile_usage`), which touches no credentials. Verified on a copy first, then in the
+repo: 501 tests pass; the same 2 unrelated tests fail as before the change (`test_history_scan` antigravity variants, and
+`test_launcher_flow` history opens text sessions). `tools/check_import.py` passes. The running Sublime keeps the old code in
+memory until its next restart.
 
 ## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
 
