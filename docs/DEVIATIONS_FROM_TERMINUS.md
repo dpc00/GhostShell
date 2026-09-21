@@ -226,6 +226,16 @@ session recording. This is a pure addition.
   so 24 call sites in `ai_terminal.py` need not be deleted and tracing can be switched back on by editing one
   function. The owner recalls it logged until 2026-08-18; in this repo's git the file first appears
   (2026-08-28, `820dd09`) already as the stub, so git does not show the earlier logging period.
+  Traced 2026-09-21: it was live diagnostics writing to `~/data/logs/ai_terminal/color_scheme.log` (earlier, from
+  2026-07-10 to 07-20, to `developer_diagnostics_and_runtime_server_error_logs/color_scheme.log`). The newer file has 5
+  lines, all plugin-start heartbeats ("Initialized. Loaded 5948 registered scope rules from disk (423061 bytes)"),
+  the last at 2026-08-18 01:45. It became a stub in the unlabeled auto-backup commit `bb4a50f` (2026-08-18 18:43),
+  which also changed `ai_terminal.py` (178 lines), `screen.py`, `ghostty_engine.py`, tests and 1,343 lines of settings.
+  **Why it was silenced: NOT RECORDED** in git, `ai/`, or any transcript found (none from 2026-08-15 to 08-19 mention
+  it). What the log shows: the runtime-rewritten scheme file keeps growing (5,140 rules / 360,702 bytes on 07-10;
+  5,252 / 368,651 on 07-20; 5,948 / 423,061 on 08-18; 450,593 bytes now). The pipeline that writes it
+  (`_init_dynamic_color_scheme`, `_repair_scheme_rules`, `_save_color_scheme`, `_durable_scheme_backup`,
+  `ai_terminal.py` about lines 1755-1990) still runs with its 22 log calls silenced.
 Both `log_tab_text` and `record_asciicast` default to `false` in the repo settings (lines 134 and 941);
 individual users switch them on.
 
