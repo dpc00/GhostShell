@@ -41,3 +41,25 @@ Written 2026-09-21 from a read-only inventory (223 MB total). The owner decides;
 No agent may create a log file, log directory or output location, or move an existing one, without the owner's
 approval. Anything approved is added to this file first, with its writer, purpose, size cap and retention, and is off
 by default.
+
+## What a Package Control user would get today (VERIFIED in code, 2026-09-21)
+
+The defaults in `ai_terminal.sublime-settings` turn `log_tab_text` and `record_asciicast` off. These still happen on
+every machine, with no setting to stop them:
+
+1. **The broker log is always written to `~/data/logs/ai_terminal/agent_broker.log`** (`ai_terminal.py:866-870`,
+   path built from the user's home directory). Detachable sessions are on by default for every profile, so any
+   session creates a `data` folder in the user's home directory.
+2. **A scheme backup folder is created at `~/data/logs/ai_terminal/scheme_backups`** (`ai_terminal.py:1944-1950`),
+   with the path written in the code.
+3. **`LOG_ROOT` is `~/data/logs`** (`terminal/log_paths.py:14`), the owner's personal layout, not a Sublime location.
+4. **The colour scheme file is rewritten inside the package folder while it runs**
+   (`Packages/GhostShell/ai_terminal.sublime-color-scheme`, `_scheme_disk_paths`, `ai_terminal.py:1896`). The
+   code's own comment describes a developer layout ("junction-linked repo"). A package installed by Package
+   Control may be a zipped `.sublime-package` with no writable folder, and an upgrade replaces the package folder, which
+   would discard the scheme's accumulated rules.
+5. The broker registry location (`_broker_registry_file`) was not checked in this pass.
+
+None of these is documented as a deliberate choice. Under `AGENTS.md` rule 13 they need the owner's decision.
+Standard Sublime locations would be `sublime.cache_path()` (throwaway files) and `Packages/User` (settings the
+user owns).
