@@ -306,3 +306,41 @@ log is substantially faithful. Small gaps at wrapped lines are unexplained.
 - `color_scheme_log` is now a hook that does nothing (rule 1). It was live diagnostics until about 2026-08-18
   (owner's account), so it is retired, not always dead.
 - `settings_debug_log` has no test (rule 2).
+
+## 10. Usage and quota scanning (VERIFIED in code; the biggest trust issue found)
+
+**Terminus.** Nothing comparable.
+
+**GhostShell.** `terminal/usage_scan.py` (1,119 lines). Every `usage_refresh_minutes` (20) it reads other programs' saved
+OAuth credentials and calls the providers' servers to show quotas in the launcher and menus. Verified in the code:
+- Files read: Codex `auth.json`; Claude Code `~/.claude/.credentials.json` (access AND refresh token); also opencode, Kimi,
+  Mimo, GitHub Copilot and OpenRouter credentials.
+- Servers called: `api.anthropic.com/api/oauth/usage`, `chatgpt.com/backend-api/wham/usage`,
+  `api.github.com/copilot_internal/user`, `api.kimi.com`, `openrouter.ai/api/v1/key`, and others.
+- **It rewrites another program's login.** For Claude, when the access token has expired it performs the OAuth refresh-token
+  grant using Claude Code's own client id and a `claude-cli/2.0 (external, cli)` user agent (`_refresh_claude_token`,
+  `usage_scan.py:637`), which rotates the refresh token, and writes the new tokens back into Claude Code's
+  `.credentials.json` (`_persist_claude_oauth`). Its own docstring says a failed write "costs the user their CLI login".
+- Kimi tokens are refreshed the same way (`auth.kimi.com/api/oauth/token`).
+
+**Stated purpose (code comments).** Accurate quota windows (5h, weekly, reset times) straight from the provider, at no
+inference cost, so the launcher and menus do not show stale figures. The setting comment says it is "Off by default for a
+public release".
+
+**Defect found and fixed 2026-09-21.** The committed default was `"usage_scan_enabled": true`, contradicting that comment. The
+owner's own installation enables it in his User settings, where it belongs. The repo default is now `false`, with
+`tests/test_release_defaults.py` requiring `log_tab_text`, `record_asciicast` and `usage_scan_enabled` to be `false`.
+
+**Still open (owner's decision).** Even opt-in, a Package Control package that rewrites other tools' credential files under
+another program's client id is a trust and terms-of-service problem. Options that need no such access: show only usage seen in
+terminal output, or read but never refresh or write another tool's tokens.
+
+## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
+
+- `terminal/agent_catalog.py` (487 lines): a data table of known agent CLIs and the quirks each needs. Its docstring says it
+  exists "so that knowledge survives a fresh settings file instead of being re-discovered". Generic, no personal paths or secrets.
+- `terminal/history_scan.py` (268 lines): a read-only sweep of local agent history files, nothing written to disk, for the
+  session-recovery listing. New agents are registry entries, not code.
+- `terminal/launcher.py` (81 lines), `terminal/profile_availability.py` (125 lines): row formatting and local checks. The latter
+  states it performs no network requests, provider probes, OAuth or inference.
+Justification: these support "one launcher for many agents", which Terminus does not do. Not audited further in this pass.
