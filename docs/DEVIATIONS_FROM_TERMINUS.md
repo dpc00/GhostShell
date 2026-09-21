@@ -431,7 +431,7 @@ work in August; whether to keep them is the owner's call. Nothing has been chang
 | 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). The Settings panel cannot be reached on alt-screen tabs. **Defect** |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. `~/data/logs` path, `scheme_backups`, five recorder modules and `color_scheme_log` stub still to be moved or removed. **Open** |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
-| 11 | Agent catalog, history scan, availability checks | Data and read-only. Not audited further |
+| 11 | Agent catalog, availability checks (history scan **removed** 2026-09-21: it did not work and belongs in the AISearch repo) | Data and read-only. Not audited further |
 | 12 | `ctypes` documentation | **Rule 5 not met** (42%) |
 | 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
 | 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |

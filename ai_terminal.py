@@ -1568,8 +1568,6 @@ try:
         profile_from_entry as _agent_profile_from_entry,
     )
     from .terminal.profile_schema import validate_profiles as _validate_profiles
-    from .terminal import launcher as _launcher
-    from .terminal import history_scan as _history_scan
     from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
     from .terminal.render import (
@@ -1656,8 +1654,6 @@ except ImportError as _term_imp_err:
             profile_from_entry as _agent_profile_from_entry,
         )
         from terminal.profile_schema import validate_profiles as _validate_profiles
-        from terminal import launcher as _launcher
-        from terminal import history_scan as _history_scan
         from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
         from terminal.render import (
@@ -4862,7 +4858,6 @@ def _build_text_and_regions(rows):
     return _build_text_and_regions_pure(rows, scope_for=_scope_for)
 
 
-
 # Per-view set of colour region keys added last frame, so we can erase stale
 # scopes (whose cells scrolled away or changed attr) on the next render.
 _LAST_COLOR_KEYS = {}
@@ -5460,7 +5455,6 @@ def _send_full_click(term, view_id, proto, col, row, sgr=None):
     release = _encode_pty_mouse(term, proto, col, row, press=False)
     term.send_string((press or "") + (release or ""))
     _MOUSE_LAST_CLICK[view_id] = (col, row, time.time())
-
 
 
 # Copy-first tap arm: view_id not needed — stored on term.
@@ -6915,210 +6909,6 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
         sublime.status_message(
             "Ai terminal: synced %d detected agent profile(s)" % count
         )
-
-
-def _ollama_chat_transcript(db_path, chat_id):
-    """Best-effort plain-text dump of one Ollama chat's messages, newest last."""
-    import sqlite3
-
-    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
-    try:
-        rows = conn.execute(
-            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at",
-            (chat_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    lines = []
-    for role, content in rows:
-        if content:
-            lines.append("--- %s ---\n%s\n" % (role or "?", content))
-    return "\n".join(lines) or "(no message content stored for this chat)"
-
-
-def _t3_thread_transcript(db_path, thread_id):
-    """Best-effort plain-text dump of one T3 Code thread's messages."""
-    import sqlite3
-
-    conn = sqlite3.connect(_history_scan.read_only_uri(db_path), uri=True)
-    try:
-        rows = conn.execute(
-            "SELECT role, text FROM projection_thread_messages "
-            "WHERE thread_id = ? ORDER BY created_at",
-            (thread_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    lines = []
-    for role, text in rows:
-        if text:
-            lines.append("--- %s ---\n%s\n" % (role or "?", text))
-    return "\n".join(lines) or "(no message content stored for this thread)"
-
-
-def _generic_jsonl_transcript(jsonl_path, detail):
-    """Generic JSONL transcript reader - extracts role/content from common formats."""
-    import json
-    
-    lines = []
-    try:
-        with open(jsonl_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    
-                    # Try Claude format: message.role, message.content
-                    if 'message' in obj:
-                        msg = obj['message']
-                        role = msg.get('role', '?')
-                        content = msg.get('content', '')
-                        if isinstance(content, str):
-                            lines.append("=== %s ===\n%s\n" % (role.upper(), content))
-                        elif isinstance(content, list):
-                            text_parts = []
-                            for item in content:
-                                if isinstance(item, dict) and item.get('type') == 'text':
-                                    text_parts.append(item.get('text', ''))
-                            if text_parts:
-                                lines.append("=== %s ===\n%s\n" % (role.upper(), '\n'.join(text_parts)))
-                    
-                    # Try Grok format: type=user/assistant, content field
-                    elif obj.get('type') in ('user', 'assistant'):
-                        role = obj.get('type', '?').upper()
-                        content = obj.get('content', '')
-                        if isinstance(content, str):
-                            lines.append("=== %s ===\n%s\n" % (role, content))
-                        elif isinstance(content, list):
-                            text_parts = []
-                            for item in content:
-                                if isinstance(item, dict) and item.get('type') == 'text':
-                                    text_parts.append(item.get('text', ''))
-                            if text_parts:
-                                lines.append("=== %s ===\n%s\n" % (role, '\n'.join(text_parts)))
-                    
-                    # Try generic role/content format
-                    elif 'role' in obj and 'content' in obj:
-                        role = obj.get('role', '?').upper()
-                        content = obj.get('content', '')
-                        if isinstance(content, str):
-                            lines.append("=== %s ===\n%s\n" % (role, content))
-                        elif isinstance(content, list):
-                            text_parts = []
-                            for item in content:
-                                if isinstance(item, dict) and item.get('type') == 'text':
-                                    text_parts.append(item.get('text', ''))
-                            if text_parts:
-                                lines.append("=== %s ===\n%s\n" % (role, '\n'.join(text_parts)))
-                        
-                except json.JSONDecodeError:
-                    continue
-    except IOError as e:
-        return "Error reading file: %s" % e
-    
-    return "\n".join(lines) or "(no readable conversation content found)"
-
-
-# Agent-prefix -> transcript reader, for sqlite sources that ai_terminal knows
-# how to read. Anything not listed here (an unrecognized sqlite db, e.g. a
-# Gemini conversation) falls back to a generic "here's the file" message.
-_TRANSCRIPT_READERS = {
-    "Ollama": _ollama_chat_transcript,
-    "T3": _t3_thread_transcript,
-    "Claude": _generic_jsonl_transcript,
-    "Codex": _generic_jsonl_transcript,
-    "Gemini": _generic_jsonl_transcript,
-    "Grok": _generic_jsonl_transcript,
-}
-
-
-class AiTerminalHistoryCommand(sublime_plugin.WindowCommand):
-    """Sweep every local AI agent's history and let you open one.
-
-    Command palette: "Ai Terminal: All Agent History…". This reads live off
-    disk on every invoke (Claude Code's ~/.claude/projects/*.jsonl, Codex's
-    ~/.codex/sessions/**/*.jsonl, Gemini/Antigravity's conversation dbs,
-    Ollama's local chat db, T3 Code's state.sqlite) — nothing is cached or
-    written back, so there is no persisted record for this command itself
-    to leak.
-    """
-
-    def run(self):
-        sessions = _history_scan.scan_all()
-        if not sessions:
-            sublime.status_message("Ai terminal: no agent history found")
-            return
-
-        rows = [
-            _quick_panel_item(
-                "%s — %s" % (sess["agent"], sess["title"]),
-                sess.get("detail", ""),
-                _launcher.relative_age(sess.get("mtime")),
-                (_launcher.KIND_ID_NAVIGATION, "H", sess["agent"]),
-            )
-            for sess in sessions
-        ]
-
-        def on_done(idx):
-            if idx < 0:
-                return
-            self._open(sessions[idx])
-
-        self.window.show_quick_panel(
-            rows, on_done, placeholder="Agent history (all agents)", selected_index=0
-        )
-
-    def _open(self, sess):
-        # For JSONL text files, use the generic reader
-        if sess["kind"] == "text":
-            try:
-                text = _generic_jsonl_transcript(sess["path"], sess["detail"])
-                view = self.window.new_file()
-                view.set_scratch(True)
-                view.set_name("%s — %s" % (sess["agent"], sess["title"]))
-                view.run_command("append", {"characters": text})
-                view.set_read_only(True)
-                return
-            except Exception as e:
-                sublime.error_message(
-                    "ai_terminal: could not read %s history:\n%s" % (sess["agent"], e)
-                )
-                return
-        
-        # For sqlite databases, check if there's a specific reader
-        reader = next(
-            (fn for prefix, fn in _TRANSCRIPT_READERS.items()
-             if sess["agent"].startswith(prefix)),
-            None,
-        )
-        if reader is not None:
-            try:
-                text = reader(sess["path"], sess["detail"])
-                view = self.window.new_file()
-                view.set_scratch(True)
-                view.set_name("%s — %s" % (sess["agent"], sess["title"]))
-                view.run_command("append", {"characters": text})
-                view.set_read_only(True)
-                return
-            except Exception as e:
-                sublime.error_message(
-                    "ai_terminal: could not read %s history:\n%s" % (sess["agent"], e)
-                )
-                return
-        
-        # Fallback for unrecognized databases
-        text = (
-            "%s\n\n%s is a SQLite database; ai_terminal does not know its "
-            "schema, so this just points at the file on disk.\n\nPath: %s"
-            % (sess["title"], sess["agent"], sess["path"])
-        )
-        view = self.window.new_file()
-        view.set_scratch(True)
-        view.set_name("%s — %s" % (sess["agent"], sess["title"]))
-        view.run_command("append", {"characters": text})
-        view.set_read_only(True)
 
 
 class AiTerminalSendStringCommand(sublime_plugin.TextCommand):
