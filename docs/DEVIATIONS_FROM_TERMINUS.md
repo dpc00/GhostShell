@@ -79,5 +79,11 @@ unidirectional pipes replace one duplex pipe because a duplex pipe stalled outpu
 **Cost of the deviation (VERIFIED, from the same doc and git history).** Reattach replays up to
 2 MiB of raw bytes into the terminal parser, which is what caused the replay floods and
 resize storms recorded on 2026-09-18/19. This deviation is the source of a whole class of bugs
-Terminus does not have. It is justified by the feature, but the feature's live restart test
-(`125ef49`) has not been confirmed.
+Terminus does not have. It is justified by the feature.
+
+**Restart path exercised (VERIFIED).** Since the reattach fix `125ef49` (2026-09-18 08:12) there are 6
+`*_reattach.log` session logs and 6 `*_reattach.cast` recordings (4 on 2026-09-19, 2 on 2026-09-20)
+in `~/data/logs/`. Each is created only when a tab reconnects to an existing broker, so the restart
+path has been used in real work at least 6 times. Correction: an earlier version of this entry said the
+live restart test was unconfirmed. That came from a 2026-09-18 handoff note and was wrong. Whether
+each reattach was clean is not verified here.
