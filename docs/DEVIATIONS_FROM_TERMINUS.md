@@ -246,6 +246,16 @@ check is Claude's by-eye comparison of log against tab on 2026-09-19 (settled li
 differed), and omp found the same day that a `/usage` panel's inner rows never reached the `.log`. No scripted
 comparison has been run since the 2026-09-18 redesign. Not known to be broken; not shown to be correct.
 
+**Measured 2026-09-21 (VERIFIED, one session, read-only).** Tab 1 (the Claude tab, 304 non-blank lines) against its log
+`ai_2026-09-20_194550_007603.log` (1,992 non-blank lines): a sequence alignment of the tab against the last 700 log lines
+matches 294 of 304 tab lines (96.7%) in order. The 10 unmatched lines: 5 expected live rows (spinner, status-bar
+counters, the reply still being written) and 3 wrapped continuation lines near the top of the tab (from an earlier
+reply) that appear in the log only as quotations from tool output, so it is not known whether the log lost them or
+recorded them wrapped differently. No long consecutive duplicate lines (0), so no replay duplication. All 12 commit
+hashes mentioned in this conversation appear in the log. A second pairing checked: the Grok tab (Tab 3) against its
+log `ai_2026-09-20_205311_192523.log`: 9 of 9 lines, exact, in order. Conclusion: for these sessions the current text
+log is substantially faithful. Small gaps at wrapped lines are unexplained.
+
 **Instability (VERIFIED from git).** The text log changed design at least three times: append-only (2026-08-15,
 `3fe6767` per a Claude transcript, UNVERIFIED hash), whole-tab snapshot from 2026-08-17, then append again in
 `f378b85` (2026-09-18). Commit `3ef8262` ("Keep lines that scroll off the tab in the session text log",
