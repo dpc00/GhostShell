@@ -11,6 +11,9 @@ The Launch Agent list, the menu captions and the session-info view no longer sho
 "quota exhausted" or "no usage data". An agent row shows only whether its program is installed. Use `omp usage`
 for real quota figures. A test (`tests/test_no_usage_in_code.py`) fails if usage code is ever added back.
 
+**Changed:** an agent whose program is not installed is no longer listed on the Launch Agent list, and its menu
+entries are hidden. Previously it was listed and marked "Not installed". The Cody profile was removed.
+
 
 ## 0.1.7
 
