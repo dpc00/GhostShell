@@ -57,3 +57,27 @@ without editing code, which conflicts with the "everything editable via settings
 Terminus `scrollback_history_size` default 10000 (`render.py:123`). GhostShell caps at 300.
 Justification (UNVERIFIED, from omp/Claude 2026-09-19): 300 was tuned so the whole buffer fills the
 minimap. Not yet checked against the code comment.
+
+## 4. Detachable sessions via a standalone broker (VERIFIED)
+
+**Terminus.** The child process is owned by the Sublime plugin host. Closing or restarting Sublime
+ends the session.
+
+**GhostShell.** `tools/agent_broker.py` owns the ConPTY and the child process and serves named pipes.
+`_BrokerPty` in `ai_terminal.py` is the client. On by default for every profile
+(`"detachable": true`). Details in `docs/DETACHABLE_SESSIONS.md`.
+
+**Justification (commit `b3b3be1`, 2026-08-26, plus the owner's rule at the time).** A Sublime
+restart must not kill a running agent, and the tab must reattach to the SAME live session, not a
+resumed transcript. An earlier Claude-specific resume launcher was rejected because the solution had
+to work for every agent CLI, not one. Verified in that commit: Sublime's own process is inside a
+Windows job, so the broker is spawned with `DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB` and was
+shown to survive a real restart (`tools/job_breakaway_test.py`, `tools/check_in_job.py`). Two
+unidirectional pipes replace one duplex pipe because a duplex pipe stalled output under a fast burst
+(reproduced live).
+
+**Cost of the deviation (VERIFIED, from the same doc and git history).** Reattach replays up to
+2 MiB of raw bytes into the terminal parser, which is what caused the replay floods and
+resize storms recorded on 2026-09-18/19. This deviation is the source of a whole class of bugs
+Terminus does not have. It is justified by the feature, but the feature's live restart test
+(`125ef49`) has not been confirmed.
