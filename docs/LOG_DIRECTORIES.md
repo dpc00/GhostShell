@@ -63,3 +63,14 @@ every machine, with no setting to stop them:
 None of these is documented as a deliberate choice. Under `AGENTS.md` rule 13 they need the owner's decision.
 Standard Sublime locations would be `sublime.cache_path()` (throwaway files) and `Packages/User` (settings the
 user owns).
+
+## Owner's rule for shipping (2026-09-21)
+
+Logging is for debugging before shipment, to find bugs. No inspected Package Control package logs. The released
+GhostShell therefore ships with no logging, recording or diagnostic-file code, and writes only to Sublime's standard
+locations. Development logging stays available to the owner through STLogs or a dev-only module left out of the release.
+
+History: on 2026-08-15 the loggers were deliberately handed to STLogs (`0a0490a` 01:15, `a5b8aac` 01:31, "so GhostShell
+is not a second logging package"). Local copies were back in `terminal/` by 2026-08-28 (`820dd09`, an unlabeled
+auto-backup), with no recorded decision. The four items in the section above, the five recorder modules and the
+`~/data/logs` path are what would have to be removed or moved out before release. Not done yet.

@@ -41,3 +41,8 @@ Read this before touching anything. These rules come from the owner. They apply 
 13. Never create a log file, a log directory or any generated output location, and never move an existing one, without
     the owner's approval. If approved, first add it to `docs/LOG_DIRECTORIES.md` with its writer, purpose, size cap and
     retention, and keep it off by default. The owner should never have to work out what a file is or whether to keep it.
+
+14. Logging exists to find bugs before shipment. The Package Control release must contain no logging, recording or
+    diagnostic-file code, and must write nothing outside Sublime's standard locations (`sublime.cache_path()`,
+    `Packages/User`). Development logging belongs in STLogs or in a dev-only module that is left out of the release.
+    Never write to `~/data` or any path that exists only on the owner's machine.
