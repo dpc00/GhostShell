@@ -66,11 +66,13 @@ user owns).
 
 ## Owner's rule for shipping (2026-09-21)
 
-Logging is for debugging before shipment, to find bugs. No inspected Package Control package logs. The released
-GhostShell therefore ships with no logging, recording or diagnostic-file code, and writes only to Sublime's standard
-locations. Development logging stays available to the owner through STLogs or a dev-only module left out of the release.
+Logging is for debugging before shipment, to find bugs, and it is fine on the owner's own installation. No user of the
+released package may be subjected to it, and no inspected Package Control package logs. In the release, logging is off
+by default and creates no folder or file until the owner's dev switch is on. Where practical the logging code is a
+dev-only module the release leaves out. The release writes only to Sublime's standard locations.
 
 History: on 2026-08-15 the loggers were deliberately handed to STLogs (`0a0490a` 01:15, `a5b8aac` 01:31, "so GhostShell
 is not a second logging package"). Local copies were back in `terminal/` by 2026-08-28 (`820dd09`, an unlabeled
-auto-backup), with no recorded decision. The four items in the section above, the five recorder modules and the
-`~/data/logs` path are what would have to be removed or moved out before release. Not done yet.
+auto-backup), with no recorded decision. The four items in the section above (which happen even with logging off) are the ones that most clearly break this rule:
+they must stop, or sit behind the owner's dev switch, before release. The recorder modules themselves must also default to
+silent. Not done yet.
