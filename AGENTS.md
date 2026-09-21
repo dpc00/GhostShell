@@ -47,3 +47,7 @@ Read this before touching anything. These rules come from the owner. They apply 
     is turned on. Where practical the logging code is a dev-only module that the release leaves out. The release must
     not write anywhere except Sublime's standard locations (`sublime.cache_path()`, `Packages/User`), and never to
     `~/data` or any path that exists only on the owner's machine.
+
+15. Every log or generated file has a hard size cap, and the default cap is 32 KB. When it is reached the oldest content is
+    dropped (rotate or truncate); a log never grows without limit. The owner is told a file exists before it exists
+    (rule 13). A larger cap needs the owner's approval, written next to the file's entry in `docs/LOG_DIRECTORIES.md`.
