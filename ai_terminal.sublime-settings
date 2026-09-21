@@ -509,12 +509,6 @@
             ],
             "spawn_env": {}
         },
-        "Gemini": {
-            "launch_command": [
-                "gemini.cmd"
-            ],
-            "spawn_env": {}
-        },
         "Grok Build": {
             "detachable": true,
             // Mouse tracking: enables ?1003;1006h (any-motion + SGR coords,

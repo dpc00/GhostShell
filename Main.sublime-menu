@@ -106,13 +106,6 @@
                         }
                     },
                     {
-                        "caption": "Gemini",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Gemini"
-                        }
-                    },
-                    {
                         "caption": "GitHub Copilot",
                         "command": "ai_terminal_open_here",
                         "args": {
