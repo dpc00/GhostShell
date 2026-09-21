@@ -222,8 +222,10 @@ session recording. This is a pure addition.
 - `cast_recorder.py` (187 lines): asciicast v3 recording, one file per session.
 - `raw_debug_log.py` (24 lines): raw pre-decode PTY bytes, for suspected parser bugs.
 - `settings_debug_log.py` (12 lines): traces live settings changes; no tests.
-- `color_scheme_log.py` (9 lines): **a no-op stub** kept only so 24 call sites in `ai_terminal.py` need not
-  be deleted (its own docstring). Dead code.
+- `color_scheme_log.py` (9 lines): a retired diagnostic hook, now a no-op stub. Its own docstring says it is kept
+  so 24 call sites in `ai_terminal.py` need not be deleted and tracing can be switched back on by editing one
+  function. The owner recalls it logged until 2026-08-18; in this repo's git the file first appears
+  (2026-08-28, `820dd09`) already as the stub, so git does not show the earlier logging period.
 Both `log_tab_text` and `record_asciicast` default to `false` in the repo settings (lines 134 and 941);
 individual users switch them on.
 
@@ -239,6 +241,11 @@ individual users switch them on.
 - `session_text_log.py` writes only after 0.5 s of quiet (`_WRITE_DEBOUNCE_S`): a streaming tab was writing on
   every ~30 ms render and freezing Sublime (found live 2026-09-14, code comment).
 
+**Current state of the text log: UNVERIFIED.** The current file documents the intended behaviour. The last recorded
+check is Claude's by-eye comparison of log against tab on 2026-09-19 (settled lines matched; live bottom rows
+differed), and omp found the same day that a `/usage` panel's inner rows never reached the `.log`. No scripted
+comparison has been run since the 2026-09-18 redesign. Not known to be broken; not shown to be correct.
+
 **Instability (VERIFIED from git).** The text log changed design at least three times: append-only (2026-08-15,
 `3fe6767` per a Claude transcript, UNVERIFIED hash), whole-tab snapshot from 2026-08-17, then append again in
 `f378b85` (2026-09-18). Commit `3ef8262` ("Keep lines that scroll off the tab in the session text log",
@@ -247,5 +254,6 @@ individual users switch them on.
 **Deviations from the owner's rules.**
 - `settings_debug_log` and `raw_debug_log` are switched on by the `AI_TERMINAL_DEBUG` environment variable, not by a
   setting (rule 1). The 2026-09-19 Vibe session showed the effect: debug output flooded the Python console.
-- `color_scheme_log` is dead code (rule 1: no flags or hooks that do nothing).
+- `color_scheme_log` is now a hook that does nothing (rule 1). It was live diagnostics until about 2026-08-18
+  (owner's account), so it is retired, not always dead.
 - `settings_debug_log` has no test (rule 2).
