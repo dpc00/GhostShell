@@ -391,3 +391,50 @@ Found while doing this, not touched: these names in `ai_terminal.py` were alread
 - `terminal/launcher.py` (81 lines), `terminal/profile_availability.py` (125 lines): row formatting and local checks. The latter
   states it performs no network requests, provider probes, OAuth or inference.
 Justification: these support "one launcher for many agents", which Terminus does not do. Not audited further in this pass.
+
+## 12. ctypes documentation (owner's rule 5: every ctypes line has a proper name and a stated purpose) (VERIFIED by measurement)
+
+Terminus uses no `ctypes` for its terminal (it uses the Python `pyte` emulator and Python pty modules). GhostShell uses `ctypes` for the
+native Ghostty engine, the Windows ConPTY and the broker. Measured 2026-09-21 with `ctypes_audit.py` (method: a code line that uses
+`ctypes` names counts as documented if it has a `#` comment, the previous non-blank line is a comment, or it is inside a function or
+class that has a docstring; a generous test, because one docstring covers every line under it):
+
+| File | ctypes lines | Documented | Share |
+|---|---|---|---|
+| `terminal/ghostty_vt.py` | 136 | 61 | 45% |
+| `ai_terminal.py` (ConPTY client, key and mouse calls) | 95 | 45 | 47% |
+| `tools/agent_broker.py` | 82 | 35 | 43% |
+| `terminal/ghostty_engine.py` | 54 | 53 | 98% |
+| `tools/recover_console.py` | 48 | 5 | 10% |
+| `tools/job_breakaway_test.py` | 31 | 0 | 0% |
+| `tools/agent_broker_client.py` | 17 | 0 | 0% |
+| `terminal/mouse.py` | 7 | 3 | 43% |
+| `tools/check_in_job.py` | 7 | 0 | 0% |
+| **Total** | **477** | **202** | **42%** |
+
+**Rule 5 is not met.** Only `terminal/ghostty_engine.py` is close. Suggested order of work, largest first: `terminal/ghostty_vt.py`
+(the native engine bindings), the ConPTY code in `ai_terminal.py`, then `tools/agent_broker.py`. Three small scripts
+(`tools/job_breakaway_test.py`, `tools/check_in_job.py`, `tools/recover_console.py`) look like one-off development tools from the broker
+work in August; whether to keep them is the owner's call. Nothing has been changed in this pass.
+
+## 13. Status summary of every deviation from Terminus (2026-09-21)
+
+| # | Deviation | Status |
+|---|---|---|
+| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Why a timer and not a Sublime event is not recorded. The loop runs at 500 ms since 2026-09-19. **Open.** |
+| 2 | Viewport handling switch is a code constant, not a setting | **Open** (rule 1) |
+| 3 | History cap 300 lines (Terminus: 10,000) | Reason unverified (fills the minimap). **Open** |
+| 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
+| 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
+| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Needs the owner's decision |
+| 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified; the rewriting design is not. **Open** |
+| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). The Settings panel cannot be reached on alt-screen tabs. **Defect** |
+| 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. `~/data/logs` path, `scheme_backups`, five recorder modules and `color_scheme_log` stub still to be moved or removed. **Open** |
+| 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
+| 11 | Agent catalog, history scan, availability checks | Data and read-only. Not audited further |
+| 12 | `ctypes` documentation | **Rule 5 not met** (42%) |
+| 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
+| 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
+
+Where the register says "no recorded justification", that is a finding, not a verdict: it means neither git, the `ai/` documents nor the
+transcripts searched give a reason, so the decision is the owner's.
