@@ -88,3 +88,11 @@ Files that break this today (VERIFIED sizes):
 | `ai_terminal/settings_debug.log` | 80.4 MB | None found. Already on the delete list. |
 | Recordings folder (`*.cast`) | 118.6 MB, 58 files | None found. Owner's decision listed above. |
 | `developer_diagnostics.../ai_diagnostics.log` | 2.5 MB | STLogs, not checked. |
+
+## STLogs removed (owner, 2026-09-21)
+
+The owner removed STLogs from Sublime's `Packages`. Checked: GhostShell imports nothing from STLogs (searched all
+`.py`, settings and JSON files), and no agent config references its hook forwarder (only Codex's `config.toml` lists the folder as
+a trusted project). Consequences: `jsonl_tail_transcripts/` and the daily `2026-09-*.md` notes are no longer written,
+and `.dsh_tail/`, `.jcode_tail/` and `.hook_spool/` have no writer and are safe to delete. The STLogs tailer that
+was rewriting `.jcode_tail` every few seconds was added in an unlabeled commit on 2026-08-16 with no off switch.
