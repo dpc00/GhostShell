@@ -88,6 +88,13 @@ path has been used in real work at least 6 times. Correction: an earlier version
 live restart test was unconfirmed. That came from a 2026-09-18 handoff note and was wrong. Whether
 each reattach was clean is not verified here.
 
+**Restart of 2026-09-21 (VERIFIED, owner-initiated).** Sublime was restarted at 00:39:57 (process start time). At
+00:40:04 the broker log records the clients of both live tabs detaching and one reattaching, and one new
+`ai_2026-09-21_004004_628381_reattach` `.log` (24,749 bytes) and `.cast` (66,436 bytes) pair was created at 00:43. The
+Claude session running in one of those tabs kept working through the restart, and the Grok tab was also still present.
+So the broker design did what section 4 says it should. Not checked: whether the reattached screen was free of
+replay artefacts.
+
 ## 5. Input path: keys and mouse (VERIFIED)
 
 **Key name table: NOT a deviation.** `terminal/keys.py` opens with "Key name -> terminal byte sequences
