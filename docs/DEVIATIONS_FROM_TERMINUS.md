@@ -119,3 +119,40 @@ the cursor of apps with NO mouse tracking. Since 2026-09-18 `mouse.py` uses the 
 audited. The per-profile routing switches (`mouse_handling`, `wheel_to_pty`, `page_keys_to_pty`) exist
 to serve those audited per-agent differences, but Grok (2026-09-19) found some of the 16 gates
 ignored on the alt-screen path (see section 1). Justified in intent, not yet checked gate by gate.
+
+## 6. Output path: how the screen reaches the Sublime view (VERIFIED facts; one justification NOT found)
+
+**Terminus.** Uses the Python `pyte` emulator. `TerminusRenderCommand.update_lines`
+(`terminus/render.py:174-196`) walks only the screen's dirty lines and updates those lines in the
+buffer, colours them per line, and trims history line by line. It only trims and re-anchors the cursor
+if the user has not scrolled away (`render.py:150-154`).
+
+**GhostShell.** `AiTerminalRenderCommand` (`ai_terminal.py:8700`) replaces the WHOLE buffer with the
+current screen snapshot every frame (`view.replace(..., Region(0, view.size()), text)`, line 8793),
+then re-applies all colour regions. One shortcut exists: when only the host cursor moved and at most 4
+characters differ, it patches those characters instead (`fast_caret`, lines 8767-8790). The emulator is
+`libghostty-vt` (native, via ctypes), whose state is copied into a second Python `Screen` object.
+
+**What the repo already says about this (VERIFIED).**
+- `ai/RECOVERY_PLAN.md` (lines 14-30) names the second Python `Screen` copy as the source of most of the
+  regression ledger and states the intended architecture: the native engine is the single source of
+  truth and the host is a thin consumer that reads snapshots. That plan does not defend the whole-buffer
+  replace; it identifies the state-copy design as the problem.
+- `ai/ARCHITECTURAL_BOUNDARIES.md` (2026-08-29) compares SublimeREPL, TerminalView, Terminus and
+  terminus-persistence and states the scope rule: GhostShell combines four responsibilities
+  (launch, emulate and paint, survive Sublime, reconstruct screen) and the fourth is the dangerous one.
+  It sets a stop rule for restart recovery.
+- `ai/TODO-resolved-2026-08-30.md`: a "Terminus stage 1/2" rewrite (2026-08-21 to 08-27) tried to move
+  toward Terminus. Its "five Terminus-deviation bisection gates" are exactly these settings:
+  `host_cursor_paint_enabled`, `click_to_cursor_fallback_enabled`, `user_owns_caret_enabled`,
+  `caret_footer_pinning_enabled`, `fast_caret_patch_enabled`. Stage 2 was merged to `main` on the
+  owner's decision to verify by living with it (`403c8ab`, `06f6de6`).
+- The same file records that a live tab behaved differently for a whole session because a stale
+  personal override in `Packages/User/ai_terminal.sublime-settings` forced four of those five gates back to
+  their old values. A User-level override silently beats the repo defaults.
+
+**Justification for the whole-buffer replace: NOT FOUND in git messages or `ai/`.** The design first
+appears in the unlabeled `pybak` commit `820dd09` (2026-08-28). Next places to search: the Claude and omp
+transcripts from 2026-08-15 to 08-28, which pre-date the range already extracted.
+Terminus's dirty-line update shows a Sublime terminal does not need it. The whole-buffer rewrite is also
+the mechanism behind the trim-and-shift viewport problem (section 1, `_compensate_trim_scroll`).
