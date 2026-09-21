@@ -3,11 +3,13 @@
 
 ## Unreleased
 
-**Removed:** the usage/quota scanner. It read other CLIs' saved OAuth credentials, called the providers'
-usage endpoints every 20 minutes and, for Claude Code, rewrote `.credentials.json` when refreshing a token.
-GhostShell is not an authorised app with those providers, so it no longer does any of this. The
+**Removed:** all usage and quota features. The scanner read other CLIs' saved OAuth credentials, called the
+providers' usage endpoints every 20 minutes and, for Claude Code, rewrote `.credentials.json` when refreshing a
+token. GhostShell is not an authorised app with those providers, so it no longer does any of this. The
 `usage_scan_enabled` and `usage_refresh_minutes` settings and the "Refresh Usage & Quota" command are gone.
-Usage that a terminal itself displays is still picked up. Use `omp usage` for real quota figures.
+The Launch Agent list, the menu captions and the session-info view no longer show percent remaining, reset times,
+"quota exhausted" or "no usage data". An agent row shows only whether its program is installed. Use `omp usage`
+for real quota figures. A test (`tests/test_no_usage_in_code.py`) fails if usage code is ever added back.
 
 
 ## 0.1.7

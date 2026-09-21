@@ -133,9 +133,8 @@ Review the defaults before running commands with sensitive output:
   every open detachable tab (or check for orphaned `python.exe`/
   `pythonw.exe` processes running `agent_broker.py` in Task Manager) before
   uninstalling or updating if you don't want any left running.
-- GhostShell does not read other programs' credentials and does not contact any provider's usage or quota
-  endpoint. Usage and quota shown in menus is only what a terminal itself has displayed. For real quota
-  figures, use `omp usage`.
+- GhostShell shows no usage or quota anywhere, does not read other programs' credentials and does not contact any
+  provider's usage endpoint. For usage and quota, use `omp usage`.
 - The native library is downloaded from the pinned GitHub Release below.
   Installing GhostShell does not install or authenticate AI CLIs. Commands
   run inside a terminal have their own privacy policies and side effects.

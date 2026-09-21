@@ -152,9 +152,6 @@
     // title change, no reload needed.
     "osc_title_updates_tab": false,
     // Every configured profile is eligible when its launch executable exists.
-    // ai_terminal learns current quota state from real terminal output and grays
-    // a profile after a provider reports exhaustion. It never probes a provider,
-    // opens OAuth, or spends quota merely to populate the menus.
     // Configured terminal/shell profiles for SText.
     // This allows SText to work as a multi-console terminal launcher.
     "profiles": {

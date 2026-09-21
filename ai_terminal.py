@@ -1562,8 +1562,6 @@ try:
         command_exists as _command_exists,
         menu_caption as _menu_caption_pure,
         profile_is_available as _profile_is_available_pure,
-        reset_update_from_text as _reset_update_from_text,
-        usage_update_from_text as _usage_update_from_text,
     )
     from .terminal.agent_catalog import (
         CATALOG as _AGENT_CATALOG,
@@ -1652,8 +1650,6 @@ except ImportError as _term_imp_err:
             command_exists as _command_exists,
             menu_caption as _menu_caption_pure,
             profile_is_available as _profile_is_available_pure,
-            reset_update_from_text as _reset_update_from_text,
-            usage_update_from_text as _usage_update_from_text,
         )
         from terminal.agent_catalog import (
             CATALOG as _AGENT_CATALOG,
@@ -2848,101 +2844,37 @@ def _spawn_env():
     return dict(ev)
 
 
-def _observed_usage(profile_name):
-    """(remaining percent, reset label) learned from this profile's own output.
-
-    Both live in sys attributes so they survive a plugin reload; either half
-    is None when nothing has been observed yet.
-    """
-    usage = getattr(sys, "_stext_ai_profile_usage", {})
-    resets = getattr(sys, "_stext_ai_profile_resets", {})
-    return (
-        usage.get(profile_name) if isinstance(usage, dict) else None,
-        resets.get(profile_name) if isinstance(resets, dict) else None,
-    )
-
-
-def _profile_is_exhausted(name):
-    return _observed_usage(name)[0] == 0.0
-
-
 def _profile_is_available(profile_name, settings=None):
     """Quota-free menu availability for a configured terminal profile.
 
     Never launches the CLI, contacts a provider, refreshes OAuth, or spends
     inference quota. Executable detection prevents stale menu entries from
-    launching, while actual terminal output can mark any profile exhausted.
+    launching.
     """
     s = _settings_obj(settings)
     if not profile_name:
         profile_name = s.get("default_profile")
     profile = _profile_settings(profile_name, s)
     path = os.environ.get("Path") or os.environ.get("PATH")
-    if _profile_is_exhausted(profile_name):
-        return False
     return _profile_is_available_pure(profile_name, profile, path=path)
 
 
-def _with_reset(label, reset):
-    return label + (" | resets " + reset if reset else "")
-
-
 def _profile_availability_label(profile_name, settings=None):
-    """Explain the locally known state without spending provider quota."""
-    remaining, reset = _observed_usage(profile_name)
-    if remaining == 0.0:
-        return _with_reset("Quota exhausted", reset)
+    """Right-hand text for a profile row: empty when installed, else why it cannot launch."""
     if not _profile_is_available(profile_name, settings):
-        return "Executable unavailable"
-    if isinstance(remaining, (int, float)):
-        return _with_reset("%g%% remaining" % remaining, reset)
-    if reset:
-        return "Usage unknown | resets " + reset
-    return "Installed — no usage data"
+        return "Not installed"
+    return ""
 
 
 def _profile_menu_caption(profile_name, settings=None):
-    """Menu caption with live-observed usage/reset status for a profile.
-
-    Feeds `description()` on the launcher commands, so Main.sublime-menu
-    entries that omit "caption" render e.g. "Claude — 64% left, resets 3h"
-    or "Gemini — quota exhausted, resets Aug 5". Purely local state.
-    """
+    """Menu caption for a profile: its name, plus "not installed" when the program is missing."""
     if not profile_name:
         profile_name = (
             _settings_obj(settings).get("default_profile") or "Default Profile"
         )
-    remaining, reset = _observed_usage(profile_name)
-    executable_ok = _profile_is_available(profile_name, settings) or remaining == 0.0
     return _menu_caption_pure(
-        profile_name, remaining=remaining, reset=reset, executable_ok=executable_ok
+        profile_name, executable_ok=_profile_is_available(profile_name, settings)
     )
-
-
-def _record_profile_usage(profile_name, text):
-    """Learn current availability from real provider output, never a probe."""
-    if not profile_name:
-        return
-    buffers = getattr(sys, "_stext_ai_profile_usage_text", None)
-    if not isinstance(buffers, dict):
-        buffers = {}
-        sys._stext_ai_profile_usage_text = buffers
-    recent = (buffers.get(profile_name, "") + (text or ""))[-4096:]
-    buffers[profile_name] = recent
-    remaining = _usage_update_from_text(recent)
-    if remaining is not None:
-        usage = getattr(sys, "_stext_ai_profile_usage", None)
-        if not isinstance(usage, dict):
-            usage = {}
-            sys._stext_ai_profile_usage = usage
-        usage[profile_name] = remaining
-    reset = _reset_update_from_text(recent)
-    if reset is not None:
-        resets = getattr(sys, "_stext_ai_profile_resets", None)
-        if not isinstance(resets, dict):
-            resets = {}
-            sys._stext_ai_profile_resets = resets
-        resets[profile_name] = reset
 
 
 _SECRETS_SETTINGS_NAME = "ai_terminal_secrets.sublime-settings"
@@ -3539,7 +3471,6 @@ class _Terminal:
             _debug_log(data)
         self._last_output_at = time.time()
         text = self._decoder.decode(data)
-        _record_profile_usage(getattr(self, "profile_name", None), text)
         if getattr(self, "_resize_desynced", False):
             # Bytes can still drain while pty.kill() closes the handles, but
             # they cannot safely be interpreted against stale parser geometry.
@@ -6865,7 +6796,7 @@ class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
 
     def description(self, paths=None, profile=None):
         # Menu entries without an explicit "caption" render this live label,
-        # e.g. "Claude — 64% left, resets 3h 42m" after real output was seen.
+        # e.g. "Claude — not installed" when the program is missing.
         return _profile_menu_caption(profile)
 
 
@@ -6929,17 +6860,6 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
 
     def description(self, profile=None, group=-1, index=-1):
         return _profile_menu_caption(profile)
-
-
-def _usage_annotation(name, s):
-    """Short right-aligned availability text, e.g. '82% remaining | resets 3h'.
-
-    Uses only what the terminal itself has shown; nothing is fetched from a provider.
-    """
-    try:
-        return (_profile_availability_label(name, s) or "").strip()
-    except (TypeError, KeyError, AttributeError):
-        return ""
 
 
 def _detect_catalog_profiles():
@@ -7018,11 +6938,10 @@ def _profile_items(names, s, context_dir=None):
         _quick_panel_item(
             name,
             "",
-            _usage_annotation(name, s),
+            _profile_availability_label(name, s),
             _launcher.profile_kind(
                 name,
                 available=_profile_is_available(name, s),
-                exhausted=_profile_is_exhausted(name),
             ),
         )
         for name in ordered
@@ -9461,7 +9380,6 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
         profile_name = getattr(term, "profile_name", None)
         lines = [
             "Profile: %s" % (profile_name or "?"),
-            "Usage: %s" % _profile_availability_label(profile_name),
             "Status: %s" % ("running" if alive else "frozen (disconnected)"),
         ]
         reason = getattr(term, "_expected_termination_reason", None)
