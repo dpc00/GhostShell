@@ -242,6 +242,10 @@ session recording. This is a pure addition.
   flush 37 rules), written from a background thread. In other words, every new foreground/background colour pair seen
   on screen becomes a new scope rule and is written into the on-disk colour scheme file. No error, warning or repair
   line appears anywhere in the file.
+  **Gap (VERIFIED from the two files, cause not recorded):** the earlier file ends 2026-07-20 at 5,252 rules; the later file
+  (2026-08-18) starts at 5,948. About 696 rules were added in between with no `[register]` or `[flush]` line in
+  either file, so the detailed logging had already stopped by 2026-08-18 and only the start-of-plugin line
+  continued until then. When the detail stopped is not shown.
 Both `log_tab_text` and `record_asciicast` default to `false` in the repo settings (lines 134 and 941);
 individual users switch them on.
 
