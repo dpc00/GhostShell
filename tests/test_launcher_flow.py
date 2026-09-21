@@ -163,6 +163,9 @@ def clean_state(monkeypatch, tmp_path):
         session_text_log_module, "TEXT_LOG_DIR", str(tmp_path / "text_logs")
     )
     monkeypatch.setattr(sys.modules["sublime"], "load_settings", lambda n: settings)
+    monkeypatch.setattr(
+        ai_terminal, "_recent_profiles_path", lambda: str(tmp_path / "recent" / "recent_profiles.json")
+    )
     # AiTerminalLauncherCommand.run() calls this on every open (live PATH
     # scan against agent_catalog.CATALOG) -- without this, ~30 real
     # command_exists() checks against the actual test machine would run on
@@ -336,6 +339,26 @@ def test_unavailable_profile_is_not_listed(monkeypatch):
     triggers = {r.trigger for r in win.panels[0][0]}
     assert "Codex" not in triggers, "an agent that is not installed must not be offered"
     assert "Claude" in triggers
+
+
+def test_recently_launched_agents_are_listed_first(tmp_path):
+    recent_file = tmp_path / "recent" / "recent_profiles.json"
+    recent_file.parent.mkdir()
+    recent_file.write_text('["Codex", "Claude"]', encoding="utf-8")
+    win = FakeWindow(folders=[ALPHA])
+    _launcher_cmd(win).run()
+    triggers = [row.trigger for row in win.panels[0][0]]
+    assert triggers[:2] == ["Codex", "Claude"]
+    assert triggers[2:] == sorted(triggers[2:], key=str.lower)
+
+
+def test_launching_an_agent_puts_it_first_next_time(monkeypatch):
+    monkeypatch.setattr(ai_terminal, "_spawn_into_view", lambda *args, **kwargs: None)
+    win = FakeWindow()
+    ai_terminal._spawn(win, ALPHA, profile="Bash")
+    ai_terminal._spawn(win, ALPHA, profile="Codex")
+    ordered, _rows = ai_terminal._profile_items(["Bash", "Claude", "Codex"], None)
+    assert ordered == ["Codex", "Bash", "Claude"]
 
 
 def test_no_installed_profiles_falls_back_to_open_here(monkeypatch):

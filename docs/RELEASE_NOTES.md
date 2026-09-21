@@ -14,6 +14,10 @@ for real quota figures. A test (`tests/test_no_usage_in_code.py`) fails if usage
 **Changed:** an agent whose program is not installed is no longer listed on the Launch Agent list, and its menu
 entries are hidden. Previously it was listed and marked "Not installed". The Cody profile was removed.
 
+**Added:** the Launch Agent list now shows the agents you launched most recently first, then the rest
+alphabetically, so you do not have to scroll the whole list. The last 8 agents are remembered in one small file in
+Sublime's cache folder (`recent_profiles.json`); deleting it just puts the list back to alphabetical.
+
 
 ## 0.1.7
 
