@@ -93,11 +93,6 @@ Add other profiles using their CLI command, for example `"launch_command":
 `PATH`. Mouse handling, alternate-screen behavior, and page-key routing are
 per-profile options, not a guarantee of compatibility with every TUI version.
 
-**Ai Terminal: Sync Detected Agent Profiles** refreshes the generated profile
-list after installing a CLI. It writes only
-`User/ai_terminal_agents.sublime-settings`. Hand-written profiles take precedence
-over generated profiles of the same name.
-
 See [COMMANDS.md](COMMANDS.md) for command names and bindings, and
 [detachable sessions](docs/DETACHABLE_SESSIONS.md) for recovery and lifecycle
 details. Use **End Session (Kill + Close)** when you want to stop a session,

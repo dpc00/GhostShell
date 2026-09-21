@@ -4,14 +4,6 @@
         "caption": "Ai Terminal Agents",
         "children": [
             {
-                "caption": "Aider",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Aider"
-                }
-            },
-            {
                 "caption": "Amp",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -33,14 +25,6 @@
                 "args": {
                     "paths": [],
                     "profile": "Auggie"
-                }
-            },
-            {
-                "caption": "Blackbox",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Blackbox"
                 }
             },
             {
@@ -92,14 +76,6 @@
                 }
             },
             {
-                "caption": "CodeBuddy",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "CodeBuddy"
-                }
-            },
-            {
                 "caption": "Codex",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -124,22 +100,6 @@
                 }
             },
             {
-                "caption": "Crush",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Crush"
-                }
-            },
-            {
-                "caption": "Cursor Agent",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Cursor Agent"
-                }
-            },
-            {
                 "caption": "Devin",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -148,27 +108,11 @@
                 }
             },
             {
-                "caption": "Droid",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Droid"
-                }
-            },
-            {
                 "caption": "dsh",
                 "command": "ai_terminal_open_here",
                 "args": {
                     "paths": [],
                     "profile": "dsh"
-                }
-            },
-            {
-                "caption": "Factory",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Factory"
                 }
             },
             {
@@ -188,14 +132,6 @@
                 }
             },
             {
-                "caption": "Goose",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Goose"
-                }
-            },
-            {
                 "caption": "Grok Build",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -209,22 +145,6 @@
                 "args": {
                     "paths": [],
                     "profile": "Grok Build --minimal"
-                }
-            },
-            {
-                "caption": "Hermes Agent",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Hermes Agent"
-                }
-            },
-            {
-                "caption": "iFlow CLI",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "iFlow CLI"
                 }
             },
             {
@@ -268,14 +188,6 @@
                 }
             },
             {
-                "caption": "Letta Code",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Letta Code"
-                }
-            },
-            {
                 "caption": "Mimo",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -284,27 +196,11 @@
                 }
             },
             {
-                "caption": "Mux",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Mux"
-                }
-            },
-            {
                 "caption": "omp",
                 "command": "ai_terminal_open_here",
                 "args": {
                     "paths": [],
                     "profile": "omp"
-                }
-            },
-            {
-                "caption": "OpenClaw",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "OpenClaw"
                 }
             },
             {
@@ -340,14 +236,6 @@
                 }
             },
             {
-                "caption": "OpenHands",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "OpenHands"
-                }
-            },
-            {
                 "caption": "Pi",
                 "command": "ai_terminal_open_here",
                 "args": {
@@ -372,51 +260,11 @@
                 }
             },
             {
-                "caption": "Roo Code",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Roo Code"
-                }
-            },
-            {
-                "caption": "Trae",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Trae"
-                }
-            },
-            {
-                "caption": "Trae CN",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Trae CN"
-                }
-            },
-            {
                 "caption": "Vibe",
                 "command": "ai_terminal_open_here",
                 "args": {
                     "paths": [],
                     "profile": "Vibe"
-                }
-            },
-            {
-                "caption": "Windsurf",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Windsurf"
-                }
-            },
-            {
-                "caption": "Zencoder",
-                "command": "ai_terminal_open_here",
-                "args": {
-                    "paths": [],
-                    "profile": "Zencoder"
                 }
             }
         ]
