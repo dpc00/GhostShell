@@ -6784,9 +6784,6 @@ class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
 
         _pick_cwd_then(self.window, on_path)
 
-    def is_visible(self, paths=None):
-        return True
-
     def is_enabled(self, paths=None, profile=None):
         return _profile_is_available(profile)
 

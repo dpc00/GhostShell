@@ -63,9 +63,9 @@ the native library and broker scripts have real filesystem paths.
 2. Put overrides in the **right-hand User file**, not the left-hand defaults.
    Package updates replace the defaults. The settings filename remains
    `ai_terminal.sublime-settings` for compatibility.
-3. Run **Ai Terminal: Launch Agent…** (`Ctrl+Alt+N`) and select an installed
-   shell or CLI. Most commands currently use the **Ai Terminal** prefix.
-   **Ai Terminal: Open Here** launches the configured default profile.
+3. Open the **Ai Terminal** menu, then **Agents** (or **Shells**), and pick an
+   installed CLI or shell. Agents that are not installed are not shown. Most
+   commands use the **Ai Terminal** prefix.
 
 The current defaults still include development-machine profiles. To start
 with a plain Windows command prompt, without a detachable broker or full

@@ -14,9 +14,11 @@ for real quota figures. A test (`tests/test_no_usage_in_code.py`) fails if usage
 **Changed:** an agent whose program is not installed is no longer listed on the Launch Agent list, and its menu
 entries are hidden. Previously it was listed and marked "Not installed". The Cody profile was removed.
 
-**Added:** the Launch Agent list now shows the agents you launched most recently first, then the rest
-alphabetically, so you do not have to scroll the whole list. The last 8 agents are remembered in one small file in
-Sublime's cache folder (`recent_profiles.json`); deleting it just puts the list back to alphabetical.
+**Changed:** agents are launched from the **Ai Terminal > Agents** and **Ai Terminal > Shells** submenus, sorted A-Z,
+instead of a picker. Agents that are not installed are hidden. The "Launch Agent…" picker, its palette entry and its
+`Ctrl+Alt+N` shortcut are gone from the menu, palette and keymap, and so is the "Default Profile" item. The submenus are
+built ahead of time by `tools/regen_agent_menu.py` (Sublime has no API for adding menu items while it runs), and a test
+fails if the menu and the agent list ever differ.
 
 
 ## 0.1.7
