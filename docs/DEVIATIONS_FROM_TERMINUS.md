@@ -101,6 +101,11 @@ So the broker design did what section 4 says it should. Replay artefacts, measur
 - The restored tab (262 non-blank lines) against the pre-restart log tail plus the reattach log: 259 of 262 lines align in
   order (98.9%). The 3 that do not are the live spinner and status-bar counters.
 Conclusion: this restart reattached cleanly. One restart, one session; not a general proof.
+Owner's observation (2026-09-21): no flaw found in the reattach; Sublime records the tab contents faithfully; the only visible
+effect of reattachment is that the colours "come back". Mechanism (VERIFIED in code, `_apply_color_regions`,
+`ai_terminal.py:5165-5191`): colours are Sublime regions added each frame with `flags=sublime.DRAW_NO_OUTLINE` and no
+persistence flag, so Sublime does not keep them across a restart and they are rebuilt on the first frame after reattach.
+Expected behaviour, not a defect.
 
 ## 5. Input path: keys and mouse (VERIFIED)
 
