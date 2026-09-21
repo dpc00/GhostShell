@@ -358,6 +358,20 @@ the menu entries for missing agents are hidden (`is_visible` on `AiTerminalOpenH
 existed to draw it were removed. The Cody profile and its catalog entry were removed the same day. 491 tests pass; the same
 2 unrelated tests still fail.
 
+**Agents launch from menus, not a picker (owner, 2026-09-21: "pickers must go ... put all the agents on a sub-menu, sorted
+properly, like SublimeREPL").** This restores a design that existed on 2026-09-01/02: a generated "All Agents" menu and a
+"Shells" menu (`830edaa`, `4e441d5`), removed on 2026-09-02 by `b5bf041` ("Consolidate agent-launch UI to one picker plus one
+shortcut") as duplicates of the picker. Now: **Ai Terminal > Agents** and **Ai Terminal > Shells**, sorted A-Z ignoring case,
+built by `tools/regen_agent_menu.py` from the agent catalog plus the profiles in `ai_terminal.sublime-settings`, with
+`terminal/agent_menu.py` holding the logic and `tests/test_agent_menu.py` failing if the checked-in menu drifts. Agents that
+are not installed are hidden at run time (`is_visible`). Removed from the menu, palette and keymap: "Launch Agent…"
+(`ai_terminal_launcher`), its `Ctrl+Alt+N` chord, and the "Default Profile" item (the owner does not use a default profile).
+Sublime has no API to add menu items while it runs; the official menus page documents only the static format and
+`Packages/User` customization. A plugin can rewrite a menu file on disk and Sublime reloads it (verified live on 2026-09-02),
+which would allow a recency-ordered menu, but that means writing into Sublime's folders on every launch, so it is not done.
+Not yet done: the picker code (`AiTerminalLauncherCommand`, the folder picker, `terminal/recent_profiles.py`) is still in the
+source, unreachable from the menu, palette and keymap.
+
 ## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
 
 - `terminal/agent_catalog.py` (487 lines): a data table of known agent CLIs and the quirks each needs. Its docstring says it

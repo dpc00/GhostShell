@@ -1,6 +1,4 @@
 [
-	// Launcher: agent picker, then directory picker.
-	{"keys": ["ctrl+alt+n"], "command": "ai_terminal_launcher"},
 	{"keys": ["ctrl+alt+h"], "command": "ai_terminal_history"},
 	{"keys": ["ctrl+alt+k"], "command": "ai_terminal_nuke", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},
 	{"keys": ["ctrl+alt+c"], "command": "ai_terminal_toggle_copy_mode", "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]},

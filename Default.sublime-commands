@@ -1,6 +1,5 @@
 [
 	{"caption": "GhostShell: Settings", "command": "edit_settings", "args": {"base_file": "${packages}/GhostShell/ai_terminal.sublime-settings", "default": "{\n\t$0\n}\n"}},
-	{"caption": "Ai Terminal: Launch Agent…", "command": "ai_terminal_launcher"},
 	{"caption": "Ai Terminal: All Agent History…", "command": "ai_terminal_history"},
 	{"caption": "Ai Terminal: Sync Detected Agent Profiles", "command": "ai_terminal_sync_agent_profiles"},
 	{"caption": "Ai Terminal: Open Here", "command": "ai_terminal_open_here"},

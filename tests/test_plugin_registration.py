@@ -20,7 +20,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # possible outcome: the feature would look broken at random.
 
 LAUNCHER_CHORDS = {
-    "ctrl+alt+n": "ai_terminal_launcher",
     "ctrl+alt+h": "ai_terminal_history",
 }
 
