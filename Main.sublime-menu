@@ -8,13 +8,6 @@
                 "caption": "Agents",
                 "children": [
                     {
-                        "caption": "Aider",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Aider"
-                        }
-                    },
-                    {
                         "caption": "Amp",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -33,13 +26,6 @@
                         "command": "ai_terminal_open_here",
                         "args": {
                             "profile": "Auggie"
-                        }
-                    },
-                    {
-                        "caption": "Blackbox",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Blackbox"
                         }
                     },
                     {
@@ -85,13 +71,6 @@
                         }
                     },
                     {
-                        "caption": "CodeBuddy",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "CodeBuddy"
-                        }
-                    },
-                    {
                         "caption": "Codex",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -113,20 +92,6 @@
                         }
                     },
                     {
-                        "caption": "Crush",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Crush"
-                        }
-                    },
-                    {
-                        "caption": "Cursor Agent",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Cursor Agent"
-                        }
-                    },
-                    {
                         "caption": "Devin",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -134,24 +99,10 @@
                         }
                     },
                     {
-                        "caption": "Droid",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Droid"
-                        }
-                    },
-                    {
                         "caption": "dsh",
                         "command": "ai_terminal_open_here",
                         "args": {
                             "profile": "dsh"
-                        }
-                    },
-                    {
-                        "caption": "Factory",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Factory"
                         }
                     },
                     {
@@ -169,13 +120,6 @@
                         }
                     },
                     {
-                        "caption": "Goose",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Goose"
-                        }
-                    },
-                    {
                         "caption": "Grok Build",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -187,20 +131,6 @@
                         "command": "ai_terminal_open_here",
                         "args": {
                             "profile": "Grok Build --minimal"
-                        }
-                    },
-                    {
-                        "caption": "Hermes Agent",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Hermes Agent"
-                        }
-                    },
-                    {
-                        "caption": "iFlow CLI",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "iFlow CLI"
                         }
                     },
                     {
@@ -239,13 +169,6 @@
                         }
                     },
                     {
-                        "caption": "Letta Code",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Letta Code"
-                        }
-                    },
-                    {
                         "caption": "Mimo",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -253,24 +176,10 @@
                         }
                     },
                     {
-                        "caption": "Mux",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Mux"
-                        }
-                    },
-                    {
                         "caption": "omp",
                         "command": "ai_terminal_open_here",
                         "args": {
                             "profile": "omp"
-                        }
-                    },
-                    {
-                        "caption": "OpenClaw",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "OpenClaw"
                         }
                     },
                     {
@@ -302,13 +211,6 @@
                         }
                     },
                     {
-                        "caption": "OpenHands",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "OpenHands"
-                        }
-                    },
-                    {
                         "caption": "Pi",
                         "command": "ai_terminal_open_here",
                         "args": {
@@ -330,45 +232,10 @@
                         }
                     },
                     {
-                        "caption": "Roo Code",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Roo Code"
-                        }
-                    },
-                    {
-                        "caption": "Trae",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Trae"
-                        }
-                    },
-                    {
-                        "caption": "Trae CN",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Trae CN"
-                        }
-                    },
-                    {
                         "caption": "Vibe",
                         "command": "ai_terminal_open_here",
                         "args": {
                             "profile": "Vibe"
-                        }
-                    },
-                    {
-                        "caption": "Windsurf",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Windsurf"
-                        }
-                    },
-                    {
-                        "caption": "Zencoder",
-                        "command": "ai_terminal_open_here",
-                        "args": {
-                            "profile": "Zencoder"
                         }
                     }
                 ]
