@@ -1,8 +1,7 @@
 """Rebuild the Agents and Shells submenus in Main.sublime-menu and Side Bar.sublime-menu.
 
 Sublime Text has no API to add menu items while it runs, so the lists are built here and checked in.
-Run this by hand after adding or removing an agent in terminal/agent_catalog.py or a profile in
-ai_terminal.sublime-settings:
+Run this by hand after adding or removing a profile in ai_terminal.sublime-settings:
 
     python tools/regen_agent_menu.py           # rewrite both menu files
     python tools/regen_agent_menu.py --check   # exit 1 if either is out of date; writes nothing
@@ -18,7 +17,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from terminal import agent_menu  # noqa: E402
-from terminal.agent_catalog import CATALOG  # noqa: E402
 
 MENU_PATH = os.path.join(REPO, "Main.sublime-menu")
 SIDEBAR_PATH = os.path.join(REPO, "Side Bar.sublime-menu")
@@ -121,7 +119,7 @@ def place_submenus(items, agents_id, shells_id, agents_caption, shells_caption):
 
 
 def sorted_names():
-    names = agent_menu.known_profile_names(CATALOG, settings_profile_names())
+    names = agent_menu.known_profile_names(settings_profile_names())
     return agent_menu.split_agents_and_shells(names)
 
 

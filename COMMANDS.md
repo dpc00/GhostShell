@@ -18,7 +18,6 @@ Keep customizations in the User file so package updates do not overwrite them.
 
 | Class | ST command | Type | Command palette | Menu(s) | Keybinding |
 |---|---|---|---|---|---|
-| `AiTerminalSyncAgentProfilesCommand` | `ai_terminal_sync_agent_profiles` | ApplicationCommand | "Ai Terminal: Sync Detected Agent Profiles" | — | — |
 | `AiTerminalOpenHereCommand` | `ai_terminal_open_here` | WindowCommand | "Ai Terminal: Open Here" | Tools > Ai Terminal > Default Profile; Side Bar: "Open Ai Terminal here…" (`{"paths": [...]}`, default profile). Also the target every per-profile launch (menu or otherwise) resolves to via `{"profile": "<name>"}` -- no menu currently lists one entry per profile; that's what `ai_terminal_launcher`'s quick panel replaced. | — |
 | `AiTerminalOpenInEditorCommand` | `ai_terminal_open_in_editor` | WindowCommand | "Ai Terminal: Open in Editor" | Context.sublime-menu and Tab Context.sublime-menu: "Open Ai Terminal here…" (Tab Context passes `{"group": -1, "index": -1}`, substituted by Sublime with the right-clicked tab's real coordinates -- see `_tab_menu_target_view`) | — |
 | `AiTerminalSetWorkingDirectoryCommand` | `ai_terminal_set_working_directory` | WindowCommand | "Ai Terminal: Set Working Directory" | Tools > Ai Terminal > Set Working Directory; Side Bar: "Set Ai Terminal Working Directory" | — |

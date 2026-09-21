@@ -18,15 +18,9 @@ SIDEBAR_AGENTS_NODE_ID = "sidebar-agents"
 SIDEBAR_SHELLS_NODE_ID = "sidebar-shells"
 
 
-def known_profile_names(catalog, settings_profile_names):
-    """Every name that belongs on the menus.
-
-    That is the display name of each agent in the catalog, plus every profile defined in
-    ai_terminal.sublime-settings.
-    """
-    names = {entry["display_name"] for entry in catalog.values()}
-    names.update(settings_profile_names)
-    return names
+def known_profile_names(settings_profile_names):
+    """Every name that belongs on the menus: the profiles defined in ai_terminal.sublime-settings."""
+    return set(settings_profile_names)
 
 
 def split_agents_and_shells(names):
