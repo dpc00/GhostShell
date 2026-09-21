@@ -1,0 +1,76 @@
+// Proper DFD (Gane-Sarson): entities, numbered processes, data stores,
+// arrows labeled with DATA names only.
+// Context (0) + Level 1 explosion.
+
+digraph GhostShellDFD {
+  rankdir=LR;
+  fontname="Helvetica";
+  fontsize=10;
+  label="GhostShell Terminal Host — Level 1 DFD";
+
+  node [fontname="Helvetica", fontsize=9];
+  edge [fontname="Helvetica", fontsize=8];
+
+  // External entities
+  node [shape=box, style=bold];
+  User [label="User"];
+  Child [label="Child CLI / TUI"];
+  Settings [label="Settings Author"];
+  Win [label="Windows OS"];
+
+  // Processes
+  node [shape=box, style="rounded,bold"];
+  P1 [label="1.0\nCapture user input"];
+  P2 [label="2.0\nApply input routing policy"];
+  P3 [label="3.0\nEncode & send child input"];
+  P4 [label="4.0\nReceive child VT bytes"];
+  P5 [label="5.0\nParse VT into screen state"];
+  P6 [label="6.0\nPaint Sublime tab view"];
+  P7 [label="7.0\nAdjust tab viewport"];
+  P8 [label="8.0\nLoad profile settings"];
+  P9 [label="9.0\nRecord session artifacts"];
+
+  // Data stores
+  node [shape=box, style="filled", fillcolor="#f0f0f0", peripheries=1];
+  // Graphviz has no open-rectangle; label as D#
+  D1 [label="D1 Profile settings", shape=plaintext, xlabel="==="];
+  D1 [label="| D1 Profile settings |", shape=record];
+  D2 [label="| D2 Screen state |", shape=record];
+  D3 [label="| D3 Viewport position |", shape=record];
+  D4 [label="| D4 Broker scrollback |", shape=record];
+  D5 [label="| D5 Logs / asciicast |", shape=record];
+
+  User -> P1 [label="keystrokes"];
+  User -> P1 [label="mouse / wheel events"];
+  P1 -> P2 [label="raw input events"];
+  Settings -> P8 [label="settings file edits"];
+  P8 -> D1 [label="persisted profile"];
+  D1 -> P8 [label="profile booleans"];
+  P8 -> P2 [label="routing flags"];
+  D1 -> P2 [label="routing flags"];
+  P2 -> P3 [label="forwarded input events"];
+  P2 -> P7 [label="native scroll intent"];
+  D1 -> P3 [label="mouse/page/wheel flags"];
+  P3 -> Win [label="PTY write requests"];
+  Win -> Child [label="console input"];
+  P3 -> Child [label="VT input sequences"];
+
+  Child -> Win [label="console / VT out"];
+  Win -> P4 [label="VT byte stream"];
+  P4 -> D4 [label="retained bytes"];
+  D4 -> P4 [label="replay bytes"];
+  P4 -> P5 [label="VT byte stream"];
+  P5 -> D2 [label="cells, cursor, modes"];
+  D2 -> P5 [label="prior screen"];
+  D2 -> P6 [label="screen snapshot"];
+  D1 -> P6 [label="paint flags"];
+  P6 -> User [label="tab glyphs & chrome"];
+  D2 -> P7 [label="alt-screen / tui cues"];
+  D1 -> P7 [label="pin / wheel / tui flags"];
+  P7 -> D3 [label="viewport y"];
+  D3 -> P7 [label="current y"];
+  P7 -> User [label="visible window"];
+  D2 -> P9 [label="retired lines, OSC"];
+  D1 -> P9 [label="log/cast flags"];
+  P9 -> D5 [label="log & cast records"];
+}
