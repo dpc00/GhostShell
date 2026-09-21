@@ -94,6 +94,10 @@
     // unreliable on its own, not just in combination with the other gate.
     // Leave false: correctness over the cosmetic footer jiggle.
     "fast_caret_patch_enabled": false,
+    // How many characters fit on one row of the toolbar, as a multiple of the terminal's
+    // column count. The toolbar font is narrower than the terminal font; 1.0 = the old,
+    // narrower wrapping (Tab Close drops to a second row on a 127-column tab).
+    "toolbar_width_factor": 1.25,
     // Snap-to-bottom can skip the last N buffer rows so a TUI whose
     // footer height wobbles does not jiggle the viewport. Default 0
     // (follow the real last line). Override per profile.

@@ -1337,7 +1337,12 @@ def _add_close_toolbar(term):
     # Small safety margin: the phantom's own padding, and any rounding
     # difference between minihtml's monospace metrics and the terminal
     # font's, both eat into the raw column count.
-    cols = max(20, cols - 4)
+    # The toolbar's monospace text is narrower than the terminal font (measured live
+    # 2026-09-21: about 5.6 px against 7.03 px per character), so the toolbar fits more
+    # characters per row than the terminal has columns.
+    cols = max(20, int((cols - 4) * _setting_number(
+        "toolbar_width_factor", 1.25, cast=float, profile_name=term.profile_name
+    )))
     lines, cur, cur_len = [], [], 0
     for href, display, markup in items:
         add_len = len(display) + (len(sep) if cur else 0)
