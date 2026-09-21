@@ -1,17 +1,20 @@
-"""The Agents and Shells submenus of the Ai Terminal menu (pure Python, unit-testable).
+"""The Agents and Shells submenus of the Ai Terminal menus (pure Python, unit-testable).
 
 Sublime menus are static files: the plugin API has no call to add menu items. So the list of
 agents is built ahead of time by tools/regen_agent_menu.py and checked in, and a test fails if
-the checked-in menu and what the script would build ever differ.
+the checked-in menus and what the script would build ever differ.
 
-The same shipped menu serves every machine. An agent whose program is not installed is hidden
+The same shipped menus serve every machine. An agent whose program is not installed is hidden
 at run time (AiTerminalOpenHereCommand.is_visible), so each user sees only what they have.
 """
 from .launcher import SHELL_PROFILES
 
-# Ids of the two submenu nodes inside the Ai Terminal menu in Main.sublime-menu.
+# Ids of the submenu nodes: inside the Ai Terminal menu (Main.sublime-menu) ...
 AGENTS_NODE_ID = "all-agents"
 SHELLS_NODE_ID = "shells"
+# ... and at the top of the sidebar's right-click menu (Side Bar.sublime-menu).
+SIDEBAR_AGENTS_NODE_ID = "sidebar-agents"
+SIDEBAR_SHELLS_NODE_ID = "sidebar-shells"
 
 
 def known_profile_names(catalog, settings_profile_names):
@@ -33,9 +36,18 @@ def split_agents_and_shells(names):
     return agents, shells
 
 
-def menu_entries(names):
-    """One menu entry per name. Choosing it launches that profile in the working directory."""
+def menu_entries(names, extra_args=None):
+    """One menu entry per name. Choosing it launches that profile.
+
+    `extra_args` are added to every entry's arguments. The sidebar menu passes {"paths": []} so
+    Sublime fills in the folder that was right-clicked.
+    """
+    extra_args = extra_args or {}
     return [
-        {"caption": name, "command": "ai_terminal_open_here", "args": {"profile": name}}
+        {
+            "caption": name,
+            "command": "ai_terminal_open_here",
+            "args": dict(extra_args, profile=name),
+        }
         for name in names
     ]

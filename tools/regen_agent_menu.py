@@ -1,11 +1,11 @@
-"""Rebuild the Agents and Shells submenus in Main.sublime-menu.
+"""Rebuild the Agents and Shells submenus in Main.sublime-menu and Side Bar.sublime-menu.
 
-Sublime Text has no API to add menu items while it runs, so the list is built here and checked in.
+Sublime Text has no API to add menu items while it runs, so the lists are built here and checked in.
 Run this by hand after adding or removing an agent in terminal/agent_catalog.py or a profile in
 ai_terminal.sublime-settings:
 
-    python tools/regen_agent_menu.py           # rewrite Main.sublime-menu
-    python tools/regen_agent_menu.py --check   # exit 1 if the menu is out of date; writes nothing
+    python tools/regen_agent_menu.py           # rewrite both menu files
+    python tools/regen_agent_menu.py --check   # exit 1 if either is out of date; writes nothing
 
 tests/test_agent_menu.py runs the same check, so a stale menu fails the test suite.
 """
@@ -21,13 +21,14 @@ from terminal import agent_menu  # noqa: E402
 from terminal.agent_catalog import CATALOG  # noqa: E402
 
 MENU_PATH = os.path.join(REPO, "Main.sublime-menu")
+SIDEBAR_PATH = os.path.join(REPO, "Side Bar.sublime-menu")
 SETTINGS_PATH = os.path.join(REPO, "ai_terminal.sublime-settings")
 TOP_NODE_ID = "ai_terminal"
 
-# Commands whose menu items are removed: the two pickers and the "default profile" launcher
-# (the owner does not use a default profile, and pickers are being removed).
+# Menu items that are removed: the picker, and the "open with the default profile" items (the owner
+# does not use a default profile, and pickers are gone).
 REMOVED_COMMANDS = ("ai_terminal_launcher",)
-REMOVED_CAPTIONS = ("Default Profile",)
+REMOVED_CAPTIONS = ("Default Profile", "Open Ai Terminal here...")
 
 
 def strip_json_comments(text):
@@ -82,13 +83,13 @@ def find_node(nodes, node_id):
     return None
 
 
-def ensure_node(children, node_id, caption, position):
-    """Return the child with this id, creating an empty one at `position` if it is missing."""
-    existing = next((child for child in children if child.get("id") == node_id), None)
+def ensure_node(items, node_id, caption, position):
+    """Return the item with this id, creating an empty submenu at `position` if it is missing."""
+    existing = next((item for item in items if item.get("id") == node_id), None)
     if existing is not None:
         return existing
     node = {"id": node_id, "caption": caption, "children": []}
-    children.insert(position, node)
+    items.insert(position, node)
     return node
 
 
@@ -96,57 +97,95 @@ def is_separator(item):
     return item.get("caption") == "-"
 
 
+def drop_removed_and_tidy(items):
+    """Remove the retired items, then collapse separators left doubled, leading or trailing."""
+    items[:] = [
+        item for item in items
+        if item.get("command") not in REMOVED_COMMANDS and item.get("caption") not in REMOVED_CAPTIONS
+    ]
+    tidy = []
+    for item in items:
+        if is_separator(item) and (not tidy or is_separator(tidy[-1])):
+            continue
+        tidy.append(item)
+    items[:] = tidy
+
+
+def place_submenus(items, agents_id, shells_id, agents_caption, shells_caption):
+    """Put the Agents and Shells submenus first, followed by one separator. Returns both nodes."""
+    agents_node = ensure_node(items, agents_id, agents_caption, 0)
+    shells_node = ensure_node(items, shells_id, shells_caption, 1)
+    if len(items) < 3 or not is_separator(items[2]):
+        items.insert(2, {"caption": "-"})
+    return agents_node, shells_node
+
+
+def sorted_names():
+    names = agent_menu.known_profile_names(CATALOG, settings_profile_names())
+    return agent_menu.split_agents_and_shells(names)
+
+
 def build_menu_tree():
     """The tree Main.sublime-menu should hold: the current file with the two submenus rebuilt."""
     with open(MENU_PATH, encoding="utf-8") as handle:
         tree = json.load(handle)
-    top = find_node(tree, TOP_NODE_ID)
-    children = top["children"]
-
-    children[:] = [
-        child for child in children
-        if child.get("command") not in REMOVED_COMMANDS and child.get("caption") not in REMOVED_CAPTIONS
-    ]
-    # Collapse doubled separators that removing an item may have left behind.
-    tidy = []
-    for child in children:
-        if is_separator(child) and (not tidy or is_separator(tidy[-1])):
-            continue
-        tidy.append(child)
-    children[:] = tidy
-
-    agents_node = ensure_node(children, agent_menu.AGENTS_NODE_ID, "Agents", 0)
-    shells_node = ensure_node(children, agent_menu.SHELLS_NODE_ID, "Shells", 1)
-    if len(children) < 3 or not is_separator(children[2]):
-        children.insert(2, {"caption": "-"})
-
-    names = agent_menu.known_profile_names(CATALOG, settings_profile_names())
-    agents, shells = agent_menu.split_agents_and_shells(names)
+    items = find_node(tree, TOP_NODE_ID)["children"]
+    drop_removed_and_tidy(items)
+    agents_node, shells_node = place_submenus(
+        items, agent_menu.AGENTS_NODE_ID, agent_menu.SHELLS_NODE_ID, "Agents", "Shells"
+    )
+    agents, shells = sorted_names()
     agents_node["children"] = agent_menu.menu_entries(agents)
     shells_node["children"] = agent_menu.menu_entries(shells)
     return tree
 
 
-def render_menu_text():
+def build_sidebar_tree():
+    """The tree Side Bar.sublime-menu should hold. Entries pass "paths" so the right-clicked folder is used."""
+    with open(SIDEBAR_PATH, encoding="utf-8") as handle:
+        tree = json.load(handle)
+    drop_removed_and_tidy(tree)
+    agents_node, shells_node = place_submenus(
+        tree, agent_menu.SIDEBAR_AGENTS_NODE_ID, agent_menu.SIDEBAR_SHELLS_NODE_ID,
+        "Ai Terminal Agents", "Ai Terminal Shells",
+    )
+    agents, shells = sorted_names()
+    agents_node["children"] = agent_menu.menu_entries(agents, extra_args={"paths": []})
+    shells_node["children"] = agent_menu.menu_entries(shells, extra_args={"paths": []})
+    return tree
+
+
+def render(tree):
     """The exact text to write: the tree as 4-space-indented JSON."""
-    return json.dumps(build_menu_tree(), indent=4, ensure_ascii=False) + "\n"
+    return json.dumps(tree, indent=4, ensure_ascii=False) + "\n"
+
+
+def update_file(path, tree, check_only):
+    """Write `tree` to `path` if it differs (keeping the file's line endings). Returns True if up to date."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        current = handle.read()
+    newline = "\r\n" if "\r\n" in current else "\n"
+    wanted = render(tree)
+    name = os.path.basename(path)
+    if current.replace("\r\n", "\n") == wanted:
+        print("%s is up to date" % name)
+        return True
+    if check_only:
+        print("%s is OUT OF DATE; run: python tools/regen_agent_menu.py" % name)
+        return False
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(wanted.replace("\n", newline))
+    print("%s rewritten" % name)
+    return True
 
 
 def main(argv):
-    with open(MENU_PATH, encoding="utf-8", newline="") as handle:
-        current = handle.read()
-    newline = "\r\n" if "\r\n" in current else "\n"
-    wanted = render_menu_text()
-    if current.replace("\r\n", "\n") == wanted:
-        print("Main.sublime-menu is up to date")
-        return 0
-    if "--check" in argv:
-        print("Main.sublime-menu is OUT OF DATE; run: python tools/regen_agent_menu.py")
-        return 1
-    with open(MENU_PATH, "w", encoding="utf-8", newline="") as handle:
-        handle.write(wanted.replace("\n", newline))
-    print("Main.sublime-menu rewritten")
-    return 0
+    check_only = "--check" in argv
+    results = [
+        update_file(MENU_PATH, build_menu_tree(), check_only),
+        update_file(SIDEBAR_PATH, build_sidebar_tree(), check_only),
+    ]
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":

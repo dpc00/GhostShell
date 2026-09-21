@@ -258,39 +258,7 @@ re-confirmed live under its new name.
 
 ## Automated verification
 
-The normal suite does not create scheduled tasks:
-
-```powershell
-python -m pytest tests -q
-```
-
-The live integration test creates a real temporary Scheduled Task, broker,
-ConPTY, `cmd.exe` child, registry record, and named pipes. It verifies:
-
-- the launch file and temporary task disappear;
-- the broker PID remains unchanged across reconnects;
-- shell state survives each client replacement;
-- replay completes for every new client;
-- abrupt death of a separate client process releases all pipe endpoints;
-- a new client recovers after that simulated editor crash; and
-- explicit shutdown removes the broker registry record.
-
-Run the default 10-cycle live test from PowerShell:
-
-```powershell
-$env:GHOSTSHELL_RUN_SCHEDULED_BROKER_TEST = "1"
-python -m pytest tests/test_scheduled_broker_integration.py -v -s
-```
-
-Run a longer soak by setting the cycle count:
-
-```powershell
-$env:GHOSTSHELL_RUN_SCHEDULED_BROKER_TEST = "1"
-$env:GHOSTSHELL_BROKER_TEST_CYCLES = "100"
-python -m pytest tests/test_scheduled_broker_integration.py -q
-```
-
-The live test is Windows-only and opt-in because it mutates Task Scheduler
-briefly. Its `finally` cleanup explicitly ends the test broker even after an
-assertion failure. Broker lifecycle diagnostics are appended to
-`~/data/logs/ai_terminal/agent_broker.log`.
+The automated tests, including the scheduled-task broker test, were removed on 2026-09-21 (owner's decision). They remain
+in git history (last present in commit `52e2282`). Verify detachable sessions live: start a session, restart Sublime, and
+confirm the tab reattaches to the same broker process. The broker writes a lifecycle log only when the developer switch
+`GHOSTSHELL_BROKER_LOG=1` is set in its environment.

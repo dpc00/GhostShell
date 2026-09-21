@@ -6,6 +6,10 @@ justification here. "No justification found" is a defect, not an acceptable entr
 Status key: VERIFIED = read in both code bases, file:line given. UNVERIFIED = claim from an agent transcript.
 Terminus checkout: ~/tools/Terminus, commit 0cccd3f (2025-12-16), 4,029 lines in the core.
 
+> **Note (2026-09-21):** the owner deleted the whole `tests/` folder that day. References to tests in entries dated on or
+> before then describe what was checked at the time; they are not ongoing protection. Changes are now proven live in Sublime
+> (`AGENTS.md`, rule 7a).
+
 ## 1. Viewport positioning
 
 **Terminus (VERIFIED).** One function, `scroll_to_cursor`, `terminus/render.py:354-361`. It runs once
@@ -369,8 +373,14 @@ are not installed are hidden at run time (`is_visible`). Removed from the menu, 
 Sublime has no API to add menu items while it runs; the official menus page documents only the static format and
 `Packages/User` customization. A plugin can rewrite a menu file on disk and Sublime reloads it (verified live on 2026-09-02),
 which would allow a recency-ordered menu, but that means writing into Sublime's folders on every launch, so it is not done.
-Not yet done: the picker code (`AiTerminalLauncherCommand`, the folder picker, `terminal/recent_profiles.py`) is still in the
-source, unreachable from the menu, palette and keymap.
+Done the same day: the picker code (`AiTerminalLauncherCommand`, its folder picker, and the recent-agents file
+`terminal/recent_profiles.py` added earlier that day) was deleted, and the sidebar's right-click menu got the same two
+submenus. `ai_terminal.py` is 10,479 lines. `tests/test_agent_menu.py` fails if any of it returns. Still present: the
+history picker (`ai_terminal_history`) and the folder picker that Open Here falls back to when no folder can be worked out.
+Found while doing this, not touched: these names in `ai_terminal.py` were already unused before this work and are dead code
+(`_BLANK`, `_REG_LOCK`, `_TERMINALS`, `_RELAUNCH_REQUIRED_PROFILE_KEYS`, `_follow_content_height`, `_looks_like_project_root`,
+`_pin_viewport_rest`, `_sublime_view_info_lines`, `_vp_pan_to_tui_scroll`; and three `_CREATE_*`/`_DETACHED_*` constants that only
+`tools/job_breakaway_test.py` refers to).
 
 ## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
 

@@ -282,7 +282,6 @@ regardless of outcome -- nothing is left running on the real machine).
 From a Git checkout with the intended changes committed:
 
 ```console
-python -m pytest tests/ -q
 git diff --check
 git archive --format=zip --output=GhostShell-review.zip HEAD
 ```
