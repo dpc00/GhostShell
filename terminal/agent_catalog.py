@@ -206,17 +206,6 @@ CATALOG = {
         "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
         "notes": "Unverified: not yet run through ai_terminal.",
     },
-    "cody": {
-        "display_name": "Cody",
-        "launch_command": ["cody"],
-        "detachable": True,
-        "spawn_env": {"AI_TERMINAL_LOG_LINES": "1"},
-        "notes": (
-            "@sourcegraph/cody (npm). Installed 2026-09-04, launch_command "
-            "confirmed against the real binary -- still not yet run through "
-            "ai_terminal for mouse/scroll/alt-screen quirks."
-        ),
-    },
     "crush": {
         "display_name": "Crush",
         "launch_command": ["crush"],

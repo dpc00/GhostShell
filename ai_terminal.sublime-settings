@@ -66,7 +66,7 @@
     // "detachable": true non-detachable (ai_terminal.py defaults false when
     // this top-level key is absent) -- affected Antigravity, Bash, Claude
     // --chrome, Claude → Cloud, Claude →⇢⇨ Ollama, Claude →⇢⇨ Ollama --chrome,
-    // Cody, Codex →⇢⇨ Ollama, Dos Console, dsh, Pybackup Go TUI. See
+    // Codex →⇢⇨ Ollama, Dos Console, dsh, Pybackup Go TUI. See
     // docs/DETACHABLE_SESSIONS.md.
     "detachable": true,
     // Mouse drag vs text selection when a TUI enables xterm mouse tracking:
@@ -379,19 +379,6 @@
                 // "GOOGLE_CLOUD_PROJECT":"project-67efc385-8bb5-493f-a81",
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
             }
-        },
-        "Cody": {
-            // Sourcegraph's Cody CLI. NOT a chat-TUI agent -- confirmed live
-            // 2026-09-04 (cast ai_2026-09-04_171354_311699): bare `cody`
-            // just prints `Usage: cody [options] [command]` help text and
-            // exits, no alt-screen, no mouse tracking. Real usage is
-            // `cody chat -m "message"` as a single command, or the api/
-            // internal JSON-RPC subcommands -- type it yourself once this
-            // profile's shell opens.
-            "launch_command": [
-                "cody"
-            ],
-            "spawn_env": {}
         },
         "Continue": {
             // @continuedev/cli -- real binary is `cn`, NOT "continue" or
