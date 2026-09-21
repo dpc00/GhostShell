@@ -21,8 +21,12 @@ Read this before touching anything. These rules come from the owner. They apply 
 6. Terminus (https://github.com/randy3k/Terminus) is the reference design. Every difference from
    Terminus must be listed in `docs/DEVIATIONS_FROM_TERMINUS.md` with a plain-language justification.
    Do not add a difference you cannot justify.
-7. Everything is editable through a setting, every setting must actually do something, and every
-   behavior is tested. A beginning Python programmer must be able to read and fix it.
+7. Everything is editable through a setting, and every setting must actually do something. A beginning
+   Python programmer must be able to read and fix it.
+7a. Do not write unit tests, and do not restore the deleted `tests/` folder. The owner deleted it on
+   2026-09-21 and tests with a debugger in the live Sublime. Prove every change in the running Sublime through
+   sublime-mcp (`eval_python`, screenshots, the console in `captured` mode) or the Debugger package, and say
+   what you saw. A change is not done until it has been seen working there.
 8. Follow the electronic-equivalent structure: inputs (sources), outputs (sinks), and named blocks
    between them. See `docs/HARDWARE_MODEL_DIAGRAM.md` and `docs/ghostshell-data-flow.dot`.
 9. Use standard Python naming (PEP 8). Anything using `ctypes` must name every item properly and
