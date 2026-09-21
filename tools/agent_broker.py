@@ -149,9 +149,19 @@ _k32.IsProcessInJob.argtypes = [HANDLE, HANDLE, POINTER(BOOL)]
 _k32.IsProcessInJob.restype = BOOL
 
 
+LIFECYCLE_LOG_SWITCH = "GHOSTSHELL_BROKER_LOG"
+
+
 def _configure_lifecycle_log(path):
-    """Persist broker stdout/stderr so an abrupt parent-exit kill is visible."""
-    if not path:
+    """Persist broker stdout/stderr, only when the developer switch is on.
+
+    This is a debugging aid for the owner's own installation. It is OFF by default:
+    the broker creates no folder, opens no file and holds nothing open unless the
+    environment variable GHOSTSHELL_BROKER_LOG is set to "1" (AGENTS.md rule 14).
+    With no log stream, print() output is discarded, which is also what happens under
+    pythonw.exe, so nothing else in the broker depends on it.
+    """
+    if not path or os.environ.get(LIFECYCLE_LOG_SWITCH) != "1":
         return
     folder = os.path.dirname(os.path.abspath(path))
     os.makedirs(folder, exist_ok=True)

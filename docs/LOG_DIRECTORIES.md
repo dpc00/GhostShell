@@ -96,3 +96,12 @@ The owner removed STLogs from Sublime's `Packages`. Checked: GhostShell imports 
 a trusted project). Consequences: `jsonl_tail_transcripts/` and the daily `2026-09-*.md` notes are no longer written,
 and `.dsh_tail/`, `.jcode_tail/` and `.hook_spool/` have no writer and are safe to delete. The STLogs tailer that
 was rewriting `.jcode_tail` every few seconds was added in an unlabeled commit on 2026-08-16 with no off switch.
+
+## Broker log switched off by default (2026-09-21, owner's go)
+
+`tools/agent_broker.py` no longer opens `~/data/logs/ai_terminal/agent_broker.log` unless the environment variable
+`GHOSTSHELL_BROKER_LOG` is set to `1` in the broker's environment (the owner's dev switch). Off by default: no folder is
+created, no file is opened, nothing holds the folder open. Tests: `tests/test_broker_lifecycle_log.py` (off by default, off
+for any value other than `1`, on with the switch, no-op without a path). Brokers already running keep their old log open
+until their session ends; only brokers started after this change are affected. Not yet changed: `ai_terminal.py` still
+passes `--log-file` and still creates `scheme_backups/` (`ai_terminal.py:1944-1950`).
