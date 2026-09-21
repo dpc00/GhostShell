@@ -1,6 +1,5 @@
 [
 	{"caption": "GhostShell: Settings", "command": "edit_settings", "args": {"base_file": "${packages}/GhostShell/ai_terminal.sublime-settings", "default": "{\n\t$0\n}\n"}},
-	{"caption": "Ai Terminal: Sync Detected Agent Profiles", "command": "ai_terminal_sync_agent_profiles"},
 	{"caption": "Ai Terminal: Open Here", "command": "ai_terminal_open_here"},
 	{"caption": "Ai Terminal: Open in Editor", "command": "ai_terminal_open_in_editor"},
 	{"caption": "Ai Terminal: Set Working Directory", "command": "ai_terminal_set_working_directory"},
@@ -16,7 +15,6 @@
 	{"caption": "Ai Terminal: New Session (Relaunch)", "command": "ai_terminal_relaunch"},
 	{"caption": "Ai Terminal: Tune Profile…", "command": "ai_terminal_tune_profile"},
 	{"caption": "Ai Terminal: Session Info...", "command": "ai_terminal_session_info"},
-	{"caption": "Ai Terminal: Agent Help...", "command": "ai_terminal_agent_help"},
 	{"caption": "Ai Terminal: Nuke", "command": "ai_terminal_nuke"},
 	{"caption": "Ai Terminal: Switch Panel...", "command": "ai_terminal_switch_panel"},
 	{"caption": "Ai Terminal: Toggle Tab ⇄ Panel", "command": "ai_terminal_toggle_panel"}

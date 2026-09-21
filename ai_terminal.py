@@ -1563,10 +1563,6 @@ try:
         menu_caption as _menu_caption_pure,
         profile_is_available as _profile_is_available_pure,
     )
-    from .terminal.agent_catalog import (
-        CATALOG as _AGENT_CATALOG,
-        profile_from_entry as _agent_profile_from_entry,
-    )
     from .terminal.profile_schema import validate_profiles as _validate_profiles
     from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
@@ -1648,10 +1644,6 @@ except ImportError as _term_imp_err:
             command_exists as _command_exists,
             menu_caption as _menu_caption_pure,
             profile_is_available as _profile_is_available_pure,
-        )
-        from terminal.agent_catalog import (
-            CATALOG as _AGENT_CATALOG,
-            profile_from_entry as _agent_profile_from_entry,
         )
         from terminal.profile_schema import validate_profiles as _validate_profiles
         from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
@@ -2162,41 +2154,11 @@ def _scope_for(attr):
 _SETTINGS_NAME = "ai_terminal.sublime-settings"
 _settings = None  # sublime.Settings; (re)bound in plugin_loaded
 
-# Fully machine-generated, never hand-edited: rewritten wholesale by
-# "Ai Terminal: Sync Detected Agent Profiles" (AiTerminalSyncAgentProfilesCommand)
-# from agent_catalog.CATALOG + local PATH detection. Kept separate from
-# ai_terminal.sublime-settings so a sync can never clobber a hand-tuned
-# profile or the settings file's extensive comments (Settings.save() would
-# silently drop them). See _all_profiles() below for the merge order.
-_GENERATED_SETTINGS_NAME = "ai_terminal_agents.sublime-settings"
-_generated_settings = None  # sublime.Settings; (re)bound in plugin_loaded, same as _settings
-
 
 def _all_profiles(s):
-    """Merge auto-detected catalog profiles under hand-tuned ones.
-
-    Anything explicitly configured in ai_terminal.sublime-settings -- including
-    a profile sharing a name with a generated one -- always wins, so a sync
-    (or a re-sync after a CLI updates) never clobbers manual customization
-    (a full shim path, extra spawn_env, mouse_handling overrides, etc).
-
-    Uses the cached _generated_settings global rather than calling
-    sublime.load_settings() here directly -- this runs on every keypress/
-    render/mouse-event path via _mouse_handling_enabled and friends, and
-    hitting the Settings API uncached on every call (potentially off the
-    main thread) is what took the plugin down before this was cached.
-    """
-    generated = (_generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)).get(
-        "profiles", {}
-    ) or {}
+    """The profiles defined in ai_terminal.sublime-settings, as a dict (empty if missing or malformed)."""
     explicit = s.get("profiles", {}) or {}
-    if not isinstance(generated, dict):
-        generated = {}
-    if not isinstance(explicit, dict):
-        explicit = {}
-    merged = dict(generated)
-    merged.update(explicit)
-    return merged
+    return dict(explicit) if isinstance(explicit, dict) else {}
 
 
 def _settings_obj(settings=None):
@@ -6847,70 +6809,6 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
         return _profile_menu_caption(profile)
 
 
-def _detect_catalog_profiles():
-    """Live PATH detection against agent_catalog.CATALOG.
-
-    Shared by AiTerminalSyncAgentProfilesCommand and _resync_catalog_profiles
-    so there is exactly one definition of "what counts as detected" --
-    returns {display_name: profile_dict}.
-    """
-    # Same reasoning as _spawn: a long-lived ST process inherited PATH at
-    # launch, so a CLI installed since then (setx / installer PATH edit) is
-    # invisible to os.environ until refreshed from the registry -- otherwise
-    # detection right after installing an agent still misses it.
-    refreshed = _refresh_path_env(dict(os.environ))
-    path = refreshed.get("Path") or refreshed.get("PATH")
-    detected = {}
-    for entry in _AGENT_CATALOG.values():
-        if not _command_exists(entry["launch_command"], path=path):
-            continue
-        detected[entry["display_name"]] = _agent_profile_from_entry(entry)
-    return detected
-
-
-def _resync_catalog_profiles():
-    """Persist a fresh _detect_catalog_profiles() into the generated
-    settings file. Returns the detected count. Side-effecting; callers that
-    just want the dict without writing should call _detect_catalog_profiles
-    directly.
-
-    This is what AiTerminalOpenHereCommand's per-profile launches
-    (`{"profile": name}`, from the Agents and Shells menus) read
-    live-detected profiles from. The menus themselves are static
-    (tools/regen_agent_menu.py); an agent this machine does not have
-    installed is hidden by AiTerminalOpenHereCommand.is_visible.
-    """
-    detected = _detect_catalog_profiles()
-    gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
-    gs.set("profiles", detected)
-    sublime.save_settings(_GENERATED_SETTINGS_NAME)
-    return len(detected)
-
-
-class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
-    """Clear and rebuild the auto-detected agent profiles from scratch.
-
-    Command palette: "Ai: Sync Detected Agent Profiles". Re-runs local PATH
-    detection against agent_catalog.CATALOG and overwrites
-    ai_terminal_agents.sublime-settings wholesale with what it finds --
-    nothing else is touched. A profile in ai_terminal.sublime-settings with
-    the same name always overrides its generated counterpart (see
-    _all_profiles), so hand customization (a full shim path, extra
-    spawn_env, mouse_handling) survives a re-sync even if the bare command
-    momentarily fails detection (e.g. a shim not yet on PATH).
-
-    Manual entry point for the same detection that also runs automatically
-    when the plugin loads -- kept as its own command for a deliberate
-    re-check (e.g. right after installing something).
-    """
-
-    def run(self):
-        count = _resync_catalog_profiles()
-        sublime.status_message(
-            "Ai terminal: synced %d detected agent profile(s)" % count
-        )
-
-
 class AiTerminalSendStringCommand(sublime_plugin.TextCommand):
     """Send an arbitrary string to the PTY (terminus_send_string equivalent).
 
@@ -8803,12 +8701,8 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
       need "New Session (Relaunch)" instead (which also throws the
       conversation away, unlike this).
 
-    Writes into ai_terminal.sublime-settings's "profiles" key, which always
-    wins over the auto-generated catalog profile (_all_profiles) and is
-    never touched by a sync -- unlike ai_terminal_agents.sublime-settings,
-    which is fully machine-generated and gets wholesale overwritten by
-    AiTerminalSyncAgentProfilesCommand and _resync_catalog_profiles every
-    time they run. The override is written as a full profile dict, not just the
+    Writes into ai_terminal.sublime-settings's "profiles" key. The override is written as a full
+    profile dict, not just the
     changed key: _all_profiles() merges explicit over generated per-name
     (dict.update), not per-key, so a partial override would silently drop
     the rest of the profile (launch_command, spawn_env, ...).
@@ -9047,154 +8941,6 @@ class AiTerminalSessionInfoCommand(sublime_plugin.WindowCommand):
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)
         return term is not None and _is_broker_pty(term.pty)
-
-    def is_visible(self, group=-1, index=-1):
-        return self.is_enabled(group, index)
-
-
-def _agent_catalog_path():
-    return os.path.expanduser("~/data/agent_tui_catalog.sqlite3")
-
-
-def _agent_catalog_lookup(profile_name):
-    """Best-effort match of an ai_terminal profile name (e.g. "Grok Build
-    --minimal") to a row in the standalone agent_tui_catalog.sqlite3
-    database -- a real CLI/slash-command reference built from live TUI
-    walks and official docs, tracked separately from this repo. Strips a
-    " --flag"/" -> variant" suffix before matching, since the catalog
-    tracks one row per underlying CLI, not per ai_terminal profile
-    variant. Returns None on any failure (missing db, no match, locked
-    file, etc.) -- this integration must never be required for
-    ai_terminal's own commands to keep working.
-    """
-    path = _agent_catalog_path()
-    if not os.path.isfile(path):
-        return None
-    base = re.split(r"\s+(?:--|→)", profile_name or "", maxsplit=1)[0].strip()
-    key = re.sub(r"[\s\-]+", "", base).lower()
-    if not key:
-        return None
-    try:
-        import sqlite3
-        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=1.0)
-    except Exception:
-        print("[ai_terminal] agent catalog: could not open db:\n%s" % traceback.format_exc())
-        return None
-    try:
-        conn.row_factory = sqlite3.Row
-        agent = None
-        for row in conn.execute("SELECT id, name, display_name, notes FROM agents"):
-            cand = re.sub(r"[\s\-]+", "", row["name"]).lower()
-            if cand == key or cand.startswith(key) or key.startswith(cand):
-                agent = row
-                break
-        if agent is None:
-            return None
-        agent_id = agent["id"]
-        cli_rows = conn.execute(
-            "SELECT syntax, description, category FROM cli_commands "
-            "WHERE agent_id=? ORDER BY category, syntax",
-            (agent_id,),
-        ).fetchall()
-        cmd_rows = conn.execute(
-            "SELECT command, aliases, description, category FROM commands "
-            "WHERE agent_id=? ORDER BY category, command",
-            (agent_id,),
-        ).fetchall()
-        return {
-            "name": agent["name"],
-            "display_name": agent["display_name"],
-            "notes": agent["notes"],
-            "cli_commands": [dict(r) for r in cli_rows],
-            "commands": [dict(r) for r in cmd_rows],
-        }
-    except Exception:
-        print("[ai_terminal] agent catalog lookup failed:\n%s" % traceback.format_exc())
-        return None
-    finally:
-        conn.close()
-
-
-class AiTerminalAgentHelpCommand(sublime_plugin.WindowCommand):
-    """Search this tab's agent's real CLI/slash-command reference in a
-    quick panel -- the actual "what can I ask this beast" help system the
-    standalone agent_tui_catalog.sqlite3 database was built for, reachable
-    from inside GhostShell instead of living as a disconnected research
-    artifact with no way to reach a user.
-
-    Type to filter (native quick-panel behavior) across both CLI-level
-    commands (run in an external shell, prefixed '$') and in-session slash
-    commands (typed into the running chat, prefixed '/'). Picking a slash
-    command queues it into this tab's own input via
-    ai_terminal_queue_input_to -- not sent, reviewable before pressing
-    Enter, same caution as every other input-injection path in this file.
-    Picking a CLI command copies it to the clipboard instead, since it's
-    meant to run in an external shell, not be typed into a live chat.
-
-    A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
-    Tab Context.sublime-menu needs that to reach the right-clicked tab
-    rather than whichever one happens to be focused.
-    """
-
-    def run(self, group=-1, index=-1):
-        view = _tab_menu_target_view(self.window, group, index)
-        term = _Terminal.from_id(view.id()) if view else None
-        profile_name = getattr(term, "profile_name", None) if term else None
-        if not profile_name:
-            sublime.status_message("Ai terminal: this tab has no agent profile to look up")
-            return
-        data = _agent_catalog_lookup(profile_name)
-        if data is None:
-            sublime.status_message(
-                "Ai terminal: no cataloged reference for %s yet" % profile_name
-            )
-            return
-
-        entries = []
-        for row in data["commands"]:
-            entries.append(("/", row["command"], row.get("aliases") or "", row["description"] or ""))
-        for row in data["cli_commands"]:
-            entries.append(("$", row["syntax"], "", row["description"] or ""))
-        if not entries:
-            sublime.status_message(
-                "Ai terminal: %s is cataloged but has no commands recorded yet" % profile_name
-            )
-            return
-
-        rows = []
-        for kind, name, aliases, desc in entries:
-            title = "%s %s" % (kind, name)
-            detail = desc
-            if aliases:
-                detail = "%s  (aliases: %s)" % (detail, aliases)
-            rows.append([title, detail])
-
-        tab_name = view.name()
-
-        def on_pick(idx):
-            if idx < 0:
-                return
-            kind, name, aliases, desc = entries[idx]
-            if kind == "/":
-                self.window.run_command(
-                    "ai_terminal_queue_input_to",
-                    {"name": tab_name, "string": name.split()[0]},
-                )
-                sublime.status_message(
-                    "Ai terminal: queued %s into %s -- press Enter to send"
-                    % (name.split()[0], tab_name)
-                )
-            else:
-                sublime.set_clipboard(name)
-                sublime.status_message("Ai terminal: copied to clipboard -- %s" % name)
-
-        self.window.show_quick_panel(
-            rows, on_pick, placeholder="%s: search commands…" % profile_name
-        )
-
-    def is_enabled(self, group=-1, index=-1):
-        term = _tab_menu_term(self.window, group, index)
-        return term is not None
 
     def is_visible(self, group=-1, index=-1):
         return self.is_enabled(group, index)
@@ -10162,18 +9908,12 @@ def _clamp_vp_loop():
 def plugin_loaded():
     if not _PTY_OK:
         print("[ai_terminal] no PTY backend available; commands will report the error.")
-    global _clamp_token, _settings, _generated_settings
+    global _clamp_token, _settings
     _init_dynamic_color_scheme()
     # Bind the settings object and live-apply edits (the callback fires on the
     # main thread right after a settings file write).
     _settings = sublime.load_settings(_SETTINGS_NAME)
     _settings.add_on_change("ai_terminal", _on_settings_change)
-    # Same caching as _settings above -- _all_profiles() is on hot paths
-    # (every keypress/mouse-event via _mouse_handling_enabled), so this must
-    # not call sublime.load_settings() itself. AiTerminalSyncAgentProfilesCommand
-    # writes through this same cached object (Settings objects are singletons
-    # per base name), so a re-sync is visible immediately without a reload.
-    _generated_settings = sublime.load_settings(_GENERATED_SETTINGS_NAME)
     _report_profile_validation(_settings)
     # The registry deliberately survives module reloads so active ConPTY
     # sessions are not killed. Upgrade those objects to this generation of the
@@ -10229,11 +9969,6 @@ def plugin_loaded():
             if view.settings().get(_VIEW_SETTING):
                 _apply_terminal_view_settings(view)
             _maybe_reattach_broker(view)
-    # Refresh the auto-detected agent profiles on every load, deferred off the
-    # startup critical path, so the settings match what is installed. The
-    # Agents and Shells menus are static (tools/regen_agent_menu.py); an agent
-    # that is not installed is hidden by AiTerminalOpenHereCommand.is_visible.
-    sublime.set_timeout(_resync_catalog_profiles, 50)
     print("[ai_terminal] loaded (trackpad pan→TUI scroll armed)")
 
 
