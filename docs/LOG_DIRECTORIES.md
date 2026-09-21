@@ -19,7 +19,7 @@ Written 2026-09-21 from a read-only inventory (223 MB total). The owner decides;
 
 | Path | Size | Writer | Note |
 |---|---|---|---|
-| `ai_terminal/agent_broker.log` | 424 KB | GhostShell broker | Live. Written every session. |
+| `ai_terminal/agent_broker.log` | 424 KB, 4,780 lines since 2026-08-30 | GhostShell broker (`ai_terminal.py:866`, added in `e248602`) | The broker's own output. The broker is a windowless process, so this is where its start, attach, detach and exit messages go. Each spawn line records the agent's full command line and working directory. A debugging aid, with no recorded decision to keep it. Live. Written every session. |
 | `ai_terminal/scheme_backups/` | empty | GhostShell (`_durable_scheme_backup`) | Backups of the color scheme. |
 | `ai_terminal_session_text_logs/` | 1.1 MB | GhostShell (`log_tab_text`) | Small. |
 | `jsonl_tail_transcripts/` | 17 MB | STLogs | The agent transcript record. |
