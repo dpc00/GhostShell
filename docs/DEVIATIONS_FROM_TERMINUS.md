@@ -20,9 +20,28 @@ terminal.py, view.py or event_listeners.py.
 Eight call sites go through `_set_viewport` (2359); one, in `_compensate_trim_scroll` (7894),
 calls `view.set_viewport_position` directly and bypasses the kill switch.
 
-**Justification: NONE FOUND YET.** Agent claims (UNVERIFIED): the loop exists to stop TUI
-apps and the host fighting over scroll position (Claude/omp/Grok, 2026-09-18/19). Grok changed
-it from 8ms to 500ms on 2026-09-19 (commit 57624a0) with no noticed harm.
+**Justification (VERIFIED from git history and code comments; search continues for the remaining writers).**
+- `_scroll_to_bottom` (7910) is NOT a deviation any more. Its docstring records that on 2026-09-06 the
+  keystroke jiggle was root-caused by comparison with Terminus: with `scroll_past_end` on (Terminus also
+  sets it, `commands.py:509`), `layout_extent()` is one full line taller than the buffer, so targeting it
+  put the view one line off. The fix adopted Terminus's own formula, `text_to_layout(size())`
+  plus one line height (Terminus `render.py:357`), and Terminus's one-line deadband.
+- Commit `b915926` (2026-09-07, "keystroke jiggle") extended that fix: `_real_content_height` now uses
+  `text_to_layout(view.size())`, because two functions disagreeing by one line at the fit boundary made
+  the view "jiggle up a line on some keystrokes". Tests: `tests/test_keypress_viewport.py`,
+  `tests/test_scroll_to_bottom.py`.
+- The height-change detector inside `_clamp_vp_loop` exists (same commit) because opening or closing a
+  panel, resizing the window or changing layout changes `viewport_extent()` with no PTY resize and no
+  keystroke, so the render loop's follow/pin recompute never ran (console panel hid the last lines of a
+  following tab). Terminus recomputes only after a render (`render.py:322`), so it has no equivalent;
+  this is a real, justified deviation, but a timer is not the only way to meet it (a
+  `on_post_window_command`/layout event would be closer to Terminus). UNRESOLVED: no test shows the
+  timer is required rather than an event.
+- The self-rescheduling loop itself first appears in commit `820dd09` (2026-08-28), an automatic `pybak`
+  commit with no message, so the original reason is not in git. Later commits (`b915926`,
+  `a63e5ef`) describe what it does, not why a poll was chosen over events.
+- Agent claims (UNVERIFIED): loop keeps TUI apps and the host from fighting over scroll
+  (Claude/omp/Grok, 2026-09-18/19). Grok changed 8ms to 500ms on 2026-09-19 (57624a0), no noticed harm.
 
 **Open defect (user report, 2026-09-20).** With Claude Code CLI in a tab, the text jiggles one line
 up and back down during command-line typing. Cause not yet identified.
