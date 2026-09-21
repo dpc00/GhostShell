@@ -1569,6 +1569,7 @@ try:
     )
     from .terminal.profile_schema import validate_profiles as _validate_profiles
     from .terminal import launcher as _launcher
+    from .terminal import recent_profiles as _recent_profiles
     from .terminal import history_scan as _history_scan
     from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
@@ -1657,6 +1658,7 @@ except ImportError as _term_imp_err:
         )
         from terminal.profile_schema import validate_profiles as _validate_profiles
         from terminal import launcher as _launcher
+        from terminal import recent_profiles as _recent_profiles
         from terminal import history_scan as _history_scan
         from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
@@ -6397,6 +6399,7 @@ def _spawn(window, path, profile=None):
     view = _terminal_view(window, name=tab_name, profile_name=profile_name)
     window.focus_view(view)
     _spawn_into_view(view, path, profile_name, argv, extra_env)
+    _record_recent_profile(profile_name)
 
 
 def _spawn_into_view(view, path, profile_name, argv, extra_env):
@@ -6927,13 +6930,29 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
         )
 
 
+def _recent_profiles_path():
+    """Where the most recently launched agents are remembered: Sublime's cache folder."""
+    return os.path.join(sublime.cache_path(), "GhostShell", "recent_profiles.json")
+
+
+def _record_recent_profile(profile_name):
+    """Remember that this profile was just launched. A failure here never blocks a launch."""
+    if not profile_name:
+        return
+    try:
+        _recent_profiles.record(_recent_profiles_path(), profile_name)
+    except OSError:
+        print("[ai_terminal] could not save the recent-agents list:\n%s" % traceback.format_exc())
+
+
 def _profile_items(names, s, context_dir=None):
-    """Quick-panel rows for profiles, alphabetical, with nothing on the right.
+    """Quick-panel rows for profiles: the agents launched most recently first, then the
+    rest alphabetically, with nothing on the right.
 
     `names` holds only installed profiles: an agent that is not installed is never
     offered, so there is no "not installed" state to draw.
     """
-    ordered = sorted(names, key=lambda n: n.lower())
+    ordered = _recent_profiles.order(names, _recent_profiles.load(_recent_profiles_path()))
     rows = [
         _quick_panel_item(name, "", "", _launcher.profile_kind(name))
         for name in ordered
@@ -6962,10 +6981,10 @@ def _dir_items(window, context_profile=None):
 class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
     """Two-step launcher: pick an agent, then pick where to run it.
 
-    Command palette: "Ai: Launch Agent…". Both steps are frecency-ranked and
-    cross-conditioned (the directory list is re-ranked for the agent you just
-    chose), so the pair you use most is Enter-Enter. Going back from step two
-    reopens step one rather than dropping the whole flow.
+    Command palette: "Ai: Launch Agent…". The agent list shows the agents you
+    launched most recently first, then the rest alphabetically, and only agents
+    that are installed. Going back from step two reopens step one rather than
+    dropping the whole flow.
 
     Detects live on every open (same PATH scan as "Ai: Sync Detected Agent
     Profiles", ~30 cheap command_exists() checks) rather than depending on
