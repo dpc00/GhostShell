@@ -105,11 +105,3 @@ created, no file is opened, nothing holds the folder open. Tests: `tests/test_br
 for any value other than `1`, on with the switch, no-op without a path). Brokers already running keep their old log open
 until their session ends; only brokers started after this change are affected. Not yet changed: `ai_terminal.py` still
 passes `--log-file` and still creates `scheme_backups/` (`ai_terminal.py:1944-1950`).
-
-## Files GhostShell keeps for you (not logs)
-
-Added 2026-09-21 at the owner's request (a most-recently-used Launch Agent list), listed here per `AGENTS.md` rule 13.
-
-| File | Writer | Purpose | Size cap | Retention |
-|---|---|---|---|---|
-| `<Sublime cache folder>\GhostShell\recent_profiles.json` (`sublime.cache_path()`) | `terminal/recent_profiles.py`, called from `_spawn` in `ai_terminal.py` | The last 8 agent names launched, so the Launch Agent list can show them first | 8 names, well under 1 KB (a test checks it) | Rewritten in place on each launch. Safe to delete: the list goes back to alphabetical. It is in Sublime's cache folder, not in your `~/data`. |

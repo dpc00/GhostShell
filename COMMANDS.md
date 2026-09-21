@@ -18,7 +18,6 @@ Keep customizations in the User file so package updates do not overwrite them.
 
 | Class | ST command | Type | Command palette | Menu(s) | Keybinding |
 |---|---|---|---|---|---|
-| `AiTerminalLauncherCommand` | `ai_terminal_launcher` | WindowCommand | "Ai Terminal: Launch Agent…" | Tools > Ai Terminal > Launch Agent…; Side Bar: "Launch Ai Terminal Agent…" (`{"paths": [...]}`) | `ctrl+alt+n` |
 | `AiTerminalHistoryCommand` | `ai_terminal_history` | WindowCommand | "Ai Terminal: All Agent History…" | Tools > Ai Terminal > All Agent History… | `ctrl+alt+h` |
 | `AiTerminalSyncAgentProfilesCommand` | `ai_terminal_sync_agent_profiles` | ApplicationCommand | "Ai Terminal: Sync Detected Agent Profiles" | — | — |
 | `AiTerminalOpenHereCommand` | `ai_terminal_open_here` | WindowCommand | "Ai Terminal: Open Here" | Tools > Ai Terminal > Default Profile; Side Bar: "Open Ai Terminal here…" (`{"paths": [...]}`, default profile). Also the target every per-profile launch (menu or otherwise) resolves to via `{"profile": "<name>"}` -- no menu currently lists one entry per profile; that's what `ai_terminal_launcher`'s quick panel replaced. | — |

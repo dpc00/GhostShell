@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+> **Note (2026-09-21):** the owner deleted the whole `tests/` folder that day. References to tests in entries dated on or
+> before then describe what was checked at the time; they are not ongoing protection. Changes are now proven live in Sublime
+> (`AGENTS.md`, rule 7a).
+
 **Removed:** all usage and quota features. The scanner read other CLIs' saved OAuth credentials, called the
 providers' usage endpoints every 20 minutes and, for Claude Code, rewrote `.credentials.json` when refreshing a
 token. GhostShell is not an authorised app with those providers, so it no longer does any of this. The
@@ -16,7 +20,8 @@ entries are hidden. Previously it was listed and marked "Not installed". The Cod
 
 **Changed:** agents are launched from the **Ai Terminal > Agents** and **Ai Terminal > Shells** submenus, sorted A-Z,
 instead of a picker. Agents that are not installed are hidden. The "Launch Agent…" picker, its palette entry and its
-`Ctrl+Alt+N` shortcut are gone from the menu, palette and keymap, and so is the "Default Profile" item. The submenus are
+`Ctrl+Alt+N` shortcut are gone, and so are the picker code, the folder picker that went with it, the "Default Profile" item and the sidebar's
+"Open Ai Terminal here…". The same two submenus are in the sidebar's right-click menu. The submenus are
 built ahead of time by `tools/regen_agent_menu.py` (Sublime has no API for adding menu items while it runs), and a test
 fails if the menu and the agent list ever differ.
 

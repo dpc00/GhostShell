@@ -163,20 +163,11 @@ only a trusted build. The pinned source revision, fingerprint, and upstream
 
 ## Development and testing
 
-```console
-python -m pip install "pytest>=7,<8.4"
-python -m pytest tests/ -q
-```
+There is no automated test suite. The owner tests in the live Sublime Text with a debugger and sublime-mcp (see
+`AGENTS.md`, rule 7a). The earlier unit tests were removed on 2026-09-21 and remain in git history (last present in
+commit `52e2282`).
 
-The test dependency range also supports Python 3.8. Sublime itself does not
-need pytest. Run the suite outside Sublime: tests use API stubs, and native
-stress tests belong in an isolated Python process. Native tests skip if the
-DLL is absent. The Task Scheduler integration test is separately opt-in, as
-documented in [detachable sessions](docs/DETACHABLE_SESSIONS.md).
-
-`python -m unittest discover -s tests -v` misses pytest-only tests. Use pytest
-for the full suite. Unit tests are not a substitute for a clean Sublime
-installation smoke test.
+`python tools/regen_agent_menu.py --check` reports whether the Agents and Shells menus are out of date.
 
 Repository layout:
 

@@ -1569,7 +1569,6 @@ try:
     )
     from .terminal.profile_schema import validate_profiles as _validate_profiles
     from .terminal import launcher as _launcher
-    from .terminal import recent_profiles as _recent_profiles
     from .terminal import history_scan as _history_scan
     from .terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
@@ -1658,7 +1657,6 @@ except ImportError as _term_imp_err:
         )
         from terminal.profile_schema import validate_profiles as _validate_profiles
         from terminal import launcher as _launcher
-        from terminal import recent_profiles as _recent_profiles
         from terminal import history_scan as _history_scan
         from terminal.layout import accepted_cols as _accepted_cols, accepted_rows as _accepted_rows, gutter_digit_delta as _gutter_digit_delta
 
@@ -5919,11 +5917,6 @@ def _quick_panel_item(trigger, details, annotation, kind):
     return item(trigger, details, annotation, kind)
 
 
-def _profile_names(settings=None):
-    profiles = _all_profiles(_settings_obj(settings))
-    return list(profiles.keys()) if isinstance(profiles, dict) else []
-
-
 # ─── commands ────────────────────────────────────────────────────────────────
 
 
@@ -6399,7 +6392,6 @@ def _spawn(window, path, profile=None):
     view = _terminal_view(window, name=tab_name, profile_name=profile_name)
     window.focus_view(view)
     _spawn_into_view(view, path, profile_name, argv, extra_env)
-    _record_recent_profile(profile_name)
 
 
 def _spawn_into_view(view, path, profile_name, argv, extra_env):
@@ -6864,9 +6856,9 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
 def _detect_catalog_profiles():
     """Live PATH detection against agent_catalog.CATALOG.
 
-    Shared by AiTerminalSyncAgentProfilesCommand and
-    AiTerminalLauncherCommand so there is exactly one definition of "what
-    counts as detected" -- returns {display_name: profile_dict}.
+    Shared by AiTerminalSyncAgentProfilesCommand and _resync_catalog_profiles
+    so there is exactly one definition of "what counts as detected" --
+    returns {display_name: profile_dict}.
     """
     # Same reasoning as _spawn: a long-lived ST process inherited PATH at
     # launch, so a CLI installed since then (setx / installer PATH edit) is
@@ -6888,12 +6880,11 @@ def _resync_catalog_profiles():
     just want the dict without writing should call _detect_catalog_profiles
     directly.
 
-    This is what AiTerminalLauncherCommand's quick panel and
-    AiTerminalOpenHereCommand's per-profile launches (`{"profile": name}`)
-    read live-detected profiles from -- there is no per-machine-generated
-    menu; the quick panel greys out (AiTerminalOpenHereCommand.is_enabled)
-    a catalog entry this machine doesn't have installed rather than hiding
-    it.
+    This is what AiTerminalOpenHereCommand's per-profile launches
+    (`{"profile": name}`, from the Agents and Shells menus) read
+    live-detected profiles from. The menus themselves are static
+    (tools/regen_agent_menu.py); an agent this machine does not have
+    installed is hidden by AiTerminalOpenHereCommand.is_visible.
     """
     detected = _detect_catalog_profiles()
     gs = _generated_settings or sublime.load_settings(_GENERATED_SETTINGS_NAME)
@@ -6914,164 +6905,15 @@ class AiTerminalSyncAgentProfilesCommand(sublime_plugin.ApplicationCommand):
     spawn_env, mouse_handling) survives a re-sync even if the bare command
     momentarily fails detection (e.g. a shim not yet on PATH).
 
-    Manual entry point for the same detection AiTerminalLauncherCommand now
-    also runs automatically on open -- kept as its own command for a
-    deliberate re-check (e.g. right after installing something) without
-    opening the picker.
+    Manual entry point for the same detection that also runs automatically
+    when the plugin loads -- kept as its own command for a deliberate
+    re-check (e.g. right after installing something).
     """
 
     def run(self):
         count = _resync_catalog_profiles()
         sublime.status_message(
             "Ai terminal: synced %d detected agent profile(s)" % count
-        )
-
-
-def _recent_profiles_path():
-    """Where the most recently launched agents are remembered: Sublime's cache folder."""
-    return os.path.join(sublime.cache_path(), "GhostShell", "recent_profiles.json")
-
-
-def _record_recent_profile(profile_name):
-    """Remember that this profile was just launched. A failure here never blocks a launch."""
-    if not profile_name:
-        return
-    try:
-        _recent_profiles.record(_recent_profiles_path(), profile_name)
-    except OSError:
-        print("[ai_terminal] could not save the recent-agents list:\n%s" % traceback.format_exc())
-
-
-def _profile_items(names, s, context_dir=None):
-    """Quick-panel rows for profiles: the agents launched most recently first, then the
-    rest alphabetically, with nothing on the right.
-
-    `names` holds only installed profiles: an agent that is not installed is never
-    offered, so there is no "not installed" state to draw.
-    """
-    ordered = _recent_profiles.order(names, _recent_profiles.load(_recent_profiles_path()))
-    rows = [
-        _quick_panel_item(name, "", "", _launcher.profile_kind(name))
-        for name in ordered
-    ]
-    return ordered, rows
-
-
-def _dir_items(window, context_profile=None):
-    """Quick-panel rows for directories: open sidebar folders, then a Browse…
-    escape hatch so the picker is never a dead end.
-    """
-    folders = list(window.folders() or []) if window else []
-    rows = [
-        _quick_panel_item(
-            os.path.basename(path.rstrip("\\/")) or path,
-            _launcher.shorten_path(path),
-            "",
-            _launcher.dir_kind(is_git=os.path.isdir(os.path.join(path, ".git"))),
-        )
-        for path in folders
-    ]
-    rows.append(_quick_panel_item("Browse…", "Pick any folder", "", _launcher.BROWSE_KIND))
-    return folders, rows
-
-
-class AiTerminalLauncherCommand(sublime_plugin.WindowCommand):
-    """Two-step launcher: pick an agent, then pick where to run it.
-
-    Command palette: "Ai: Launch Agent…". The agent list shows the agents you
-    launched most recently first, then the rest alphabetically, and only agents
-    that are installed. Going back from step two reopens step one rather than
-    dropping the whole flow.
-
-    Detects live on every open (same PATH scan as "Ai: Sync Detected Agent
-    Profiles", ~30 cheap command_exists() checks) rather than depending on
-    that command having been run first -- a new user, or anyone who just
-    installed a new CLI, gets it offered here with nothing to remember.
-    """
-
-    def run(self, paths=None, profile=None):
-        _resync_catalog_profiles()
-        s = sublime.load_settings(_SETTINGS_NAME)
-        # An agent that is not installed is not offered at all.
-        names = [n for n in _profile_names(s) if _profile_is_available(n, s)]
-        if not names:
-            self.window.run_command("ai_terminal_open_here", {"paths": paths})
-            return
-
-        # Sidebar right-click already answers "where"; skip straight to launch.
-        preset_dir = None
-        if paths:
-            preset_dir = _resolve_here_path(self.window, paths)
-
-        context_dir = preset_dir or _resolve_here_path(self.window, [])
-        if profile:
-            self._pick_dir(s, profile, preset_dir)
-            return
-
-        ordered, rows = _profile_items(names, s, context_dir=context_dir)
-
-        def on_profile(idx):
-            if idx < 0:
-                return
-            self._pick_dir(s, ordered[idx], preset_dir)
-
-        self.window.show_quick_panel(
-            rows, on_profile, placeholder="Which agent?", selected_index=0
-        )
-
-    def _pick_dir(self, s, profile, preset_dir):
-        if preset_dir:
-            self._launch(profile, preset_dir)
-            return
-
-        sticky = _get_working_dir(self.window)
-        if sticky:
-            sublime.status_message(
-                "Ai terminal: using saved working directory %s" % sticky
-            )
-            self._launch(profile, sticky)
-            return
-
-        ranked, rows = _dir_items(self.window, context_profile=profile)
-
-        def on_dir(idx):
-            if idx < 0:
-                # Re-open the agent step so an accidental Esc is one key, not a
-                # restart of the whole flow.
-                sublime.set_timeout(
-                    lambda: self.window.run_command("ai_terminal_launcher"), 10
-                )
-                return
-            if idx >= len(ranked):
-                self._browse(profile)
-                return
-            self._launch(profile, ranked[idx])
-
-        self.window.show_quick_panel(
-            rows,
-            on_dir,
-            placeholder="Run %s where?" % profile,
-            selected_index=0,
-        )
-
-    def _browse(self, profile):
-        """Free-text path entry; ST has no native folder dialog for plugins."""
-        initial = os.path.expanduser("~")
-
-        def on_done(text):
-            path = os.path.expanduser((text or "").strip().strip('"'))
-            if not os.path.isdir(path):
-                sublime.error_message("ai_terminal: not a directory:\n%s" % path)
-                return
-            self._launch(profile, path)
-
-        self.window.show_input_panel(
-            "Folder for %s:" % profile, initial, on_done, None, None
-        )
-
-    def _launch(self, profile, path):
-        self.window.run_command(
-            "ai_terminal_open_here", {"profile": profile, "paths": [path]}
         )
 
 
@@ -9175,8 +9017,8 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
     wins over the auto-generated catalog profile (_all_profiles) and is
     never touched by a sync -- unlike ai_terminal_agents.sublime-settings,
     which is fully machine-generated and gets wholesale overwritten by
-    AiTerminalLauncherCommand/AiTerminalSyncAgentProfilesCommand every time
-    they run. The override is written as a full profile dict, not just the
+    AiTerminalSyncAgentProfilesCommand and _resync_catalog_profiles every
+    time they run. The override is written as a full profile dict, not just the
     changed key: _all_profiles() merges explicit over generated per-name
     (dict.update), not per-key, so a partial override would silently drop
     the rest of the profile (launch_command, spawn_env, ...).
@@ -10597,11 +10439,10 @@ def plugin_loaded():
             if view.settings().get(_VIEW_SETTING):
                 _apply_terminal_view_settings(view)
             _maybe_reattach_broker(view)
-    # Regenerate the exhaustive agent menu on every load, deferred off the
-    # startup critical path -- a new user (or anyone who just installed a
-    # new CLI) sees every known/detected agent under Tools -> Ai Terminal ->
-    # All Agents immediately, with no "Sync" command or menu edit to know
-    # about first.
+    # Refresh the auto-detected agent profiles on every load, deferred off the
+    # startup critical path, so the settings match what is installed. The
+    # Agents and Shells menus are static (tools/regen_agent_menu.py); an agent
+    # that is not installed is hidden by AiTerminalOpenHereCommand.is_visible.
     sublime.set_timeout(_resync_catalog_profiles, 50)
     print("[ai_terminal] loaded (trackpad pan→TUI scroll armed)")
 
