@@ -76,7 +76,6 @@ session recording, use these User settings:
     "default_profile": "Command Prompt",
     "log_tab_text": false,
     "record_asciicast": false,
-    "usage_scan_enabled": false,
     "color_scheme_log_path": null,
     "shared_spawn_env": {},
     "profiles": {
@@ -134,18 +133,9 @@ Review the defaults before running commands with sensitive output:
   every open detachable tab (or check for orphaned `python.exe`/
   `pythonw.exe` processes running `agent_broker.py` in Task Manager) before
   uninstalling or updating if you don't want any left running.
-- Usage/quota discovery reads supported CLIs' local session and credential
-  files and calls their providers' usage endpoints in the background. Some
-  providers may refresh saved OAuth tokens. This happens at plugin load and,
-  by default, every 20 minutes. **`usage_refresh_minutes: 0` disables the
-  periodic refresh only, not the startup scan or a manual refresh.** Set
-  **`usage_scan_enabled: false`** to disable all three, including credential
-  reads and OAuth refreshes by the usage scanner. This also clears cached
-  provider results. A provider fetch already in progress is allowed to finish
-  and persist any rotated tokens, but subsequent fetches are cancelled. Usage
-  learned from the terminal's own output still works. Set this before first
-  load in a restricted environment. It does not control the DLL download or
-  network access by commands you launch.
+- GhostShell does not read other programs' credentials and does not contact any provider's usage or quota
+  endpoint. Usage and quota shown in menus is only what a terminal itself has displayed. For real quota
+  figures, use `omp usage`.
 - The native library is downloaded from the pinned GitHub Release below.
   Installing GhostShell does not install or authenticate AI CLIs. Commands
   run inside a terminal have their own privacy policies and side effects.

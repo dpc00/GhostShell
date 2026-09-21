@@ -1,6 +1,15 @@
 # Release notes
 
 
+## Unreleased
+
+**Removed:** the usage/quota scanner. It read other CLIs' saved OAuth credentials, called the providers'
+usage endpoints every 20 minutes and, for Claude Code, rewrote `.credentials.json` when refreshing a token.
+GhostShell is not an authorised app with those providers, so it no longer does any of this. The
+`usage_scan_enabled` and `usage_refresh_minutes` settings and the "Refresh Usage & Quota" command are gone.
+Usage that a terminal itself displays is still picked up. Use `omp usage` for real quota figures.
+
+
 ## 0.1.7
 
 **Bug fix:** GhostShell still sent a 1-row `SIGWINCH` when Sublime's
@@ -72,8 +81,7 @@ rather than depending on another terminal package.
 - **Native editor scrollback** — real Sublime scrollback and folding over
   terminal output, not a fixed-size alt-screen matrix.
 - **Privacy-conscious defaults** — session recording (`log_tab_text`,
-  `record_asciicast`) and background usage/quota scanning
-  (`usage_scan_enabled`) are off by default; each is an explicit opt-in.
+  `record_asciicast`) is off by default; it is an explicit opt-in.
 
 ### Verification for this release
 

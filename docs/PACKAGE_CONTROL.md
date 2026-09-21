@@ -1,5 +1,8 @@
 # Package Control submission
 
+> **Update 2026-09-21:** the usage/quota scanner was removed entirely (commit `6cbad2c`). Every reference below to
+> `usage_scan_enabled`, `usage_refresh_minutes` or usage scanning is historical.
+
 This is a maintainer checklist, not a statement that the package is published
 or ready for approval. No release tag or channel pull request is created by
 these preparation changes.
