@@ -92,8 +92,15 @@ each reattach was clean is not verified here.
 00:40:04 the broker log records the clients of both live tabs detaching and one reattaching, and one new
 `ai_2026-09-21_004004_628381_reattach` `.log` (24,749 bytes) and `.cast` (66,436 bytes) pair was created at 00:43. The
 Claude session running in one of those tabs kept working through the restart, and the Grok tab was also still present.
-So the broker design did what section 4 says it should. Not checked: whether the reattached screen was free of
-replay artefacts.
+So the broker design did what section 4 says it should. Replay artefacts, measured the same day (VERIFIED):
+- Recording `..._004004_628381_reattach.cast` (127 x 52, 304 s, 49,702 bytes of output): 0 resize events (no row or
+  column flip), 2 cursor-home sequences and no screen-clear sequences, so no full-screen redraw dump. The cast holds only
+  live output after reattach; the broker's replayed bytes are not recorded there (by design, see section 9).
+- Reattach log (318 non-blank lines): only legitimate repeats (`Shell cwd was reset` once per Bash call, a message
+  the owner sent twice, divider lines). No duplicated conversation block.
+- The restored tab (262 non-blank lines) against the pre-restart log tail plus the reattach log: 259 of 262 lines align in
+  order (98.9%). The 3 that do not are the live spinner and status-bar counters.
+Conclusion: this restart reattached cleanly. One restart, one session; not a general proof.
 
 ## 5. Input path: keys and mouse (VERIFIED)
 
