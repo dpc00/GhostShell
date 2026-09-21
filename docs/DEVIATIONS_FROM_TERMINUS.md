@@ -151,8 +151,20 @@ characters differ, it patches those characters instead (`fast_caret`, lines 8767
   personal override in `Packages/User/ai_terminal.sublime-settings` forced four of those five gates back to
   their old values. A User-level override silently beats the repo defaults.
 
-**Justification for the whole-buffer replace: NOT FOUND in git messages or `ai/`.** The design first
-appears in the unlabeled `pybak` commit `820dd09` (2026-08-28). Next places to search: the Claude and omp
-transcripts from 2026-08-15 to 08-28, which pre-date the range already extracted.
-Terminus's dirty-line update shows a Sublime terminal does not need it. The whole-buffer rewrite is also
-the mechanism behind the trim-and-shift viewport problem (section 1, `_compensate_trim_scroll`).
+**Origin of the whole-buffer replace (found 2026-09-20 in a Claude transcript, session `0dd8959e`,
+2026-08-25 07:25, a history trace of this code; commit hashes checked where noted).**
+- 2026-07-03, SText commit `f4697b9` (VERIFIED it exists; its message is an unlabeled `pybak`): `ai_terminal.py`
+  is "born whole", 1185 lines, with a hand-rolled ANSI parser tailored to Claude's output and a capped
+  history deque from the first line. Rendering the whole screen snapshot into the view came from that first
+  version.
+- 07-30: hand-rolled parser replaced by `pyte` (the same emulator Terminus uses, which supplies dirty
+  lines); the renderer stayed whole-buffer. 08-03 (`aa8ee80`, VERIFIED in SText): `libghostty-vt` added via
+  ctypes. 08-05: `pyte` deleted, `libghostty-vt` the only engine.
+- 08-17/18: `_compensate_trim_scroll` added to compensate for history eviction drift that the
+  whole-buffer replace exposes (transcript claim; `f6b8ecd` cited there is NOT found in either repo, UNVERIFIED).
+
+**Justification: NONE RECORDED. This is an inherited design, not a chosen one.** The whole-buffer rewrite
+came from a first version written for one agent, and nothing in git or `ai/` shows it being weighed
+against Terminus's dirty-line update, even after `pyte` (which provides dirty lines) was adopted. The
+records also show it is the mechanism behind the trim-and-shift viewport problem (section 1).
+Status: an unjustified deviation. It needs a decision, not a defence.
