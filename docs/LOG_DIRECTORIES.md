@@ -76,3 +76,15 @@ is not a second logging package"). Local copies were back in `terminal/` by 2026
 auto-backup), with no recorded decision. The four items in the section above (which happen even with logging off) are the ones that most clearly break this rule:
 they must stop, or sit behind the owner's dev switch, before release. The recorder modules themselves must also default to
 silent. Not done yet.
+
+## Size cap (owner's rule, 2026-09-21)
+
+A file the owner has just been told about should not be larger than 32 KB, and no log may grow without a limit.
+Files that break this today (VERIFIED sizes):
+
+| File | Size | Cap in code? |
+|---|---|---|
+| `ai_terminal/agent_broker.log` | 424 KB | None. Opened in append mode with no limit (`tools/agent_broker.py:152-160`). |
+| `ai_terminal/settings_debug.log` | 80.4 MB | None found. Already on the delete list. |
+| Recordings folder (`*.cast`) | 118.6 MB, 58 files | None found. Owner's decision listed above. |
+| `developer_diagnostics.../ai_diagnostics.log` | 2.5 MB | STLogs, not checked. |
