@@ -192,6 +192,15 @@ against Terminus's dirty-line update, even after `pyte` (which provides dirty li
 records also show it is the mechanism behind the trim-and-shift viewport problem (section 1).
 Status: an unjustified deviation. It needs a decision, not a defence.
 
+Why no reason can be found (owner, 2026-09-21): several purges of logs, transcripts and memory files have
+deleted the older records, so a reason that was once discussed may have existed and is now unrecoverable.
+Do not search for it again; decide on the evidence in the code. Evidence gathered live 2026-09-21 with a
+`set_viewport_position` trace in the running Sublime (VERIFIED, session observation): on every history trim
+`_compensate_trim_scroll` (`ai_terminal.py:7153`) moves the view up one or more lines and `_settle_viewport`
+(`ai_terminal.py:7336`) moves it back to the bottom in the same render call, and the owner still sees a
+one-to-three-line up-and-down wobble while typing. A whole-buffer replace cannot be made steady by
+repairing the scroll afterwards; a line-level update avoids the shift at its source.
+
 ## 7. Colors (VERIFIED facts; partial justification)
 
 **Terminus.** One `view.add_regions` call per coloured segment, each with a unique key and a scope named
