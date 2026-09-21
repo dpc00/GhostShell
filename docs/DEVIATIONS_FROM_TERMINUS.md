@@ -211,3 +211,41 @@ covered or navigated away from"; each checkbox saves immediately.
 and 7985-7990).** On an alt-screen tab, `_tui_like` is forced true and the viewport is pinned to the top every
 frame, so the Settings panel, which sits below the pinned frame, cannot be reached. A wrong setting cannot
 then be undone from the tab. The panel fails exactly where it is needed.
+
+## 9. Logging and recording (VERIFIED)
+
+**Terminus.** None. A search of `terminus/*.py` for logging, asciicast, transcript and record found no
+session recording. This is a pure addition.
+
+**GhostShell.** Five recorder modules in `terminal/`:
+- `session_text_log.py` (200 lines): the tab text as a `.log`, without the 300-line cap.
+- `cast_recorder.py` (187 lines): asciicast v3 recording, one file per session.
+- `raw_debug_log.py` (24 lines): raw pre-decode PTY bytes, for suspected parser bugs.
+- `settings_debug_log.py` (12 lines): traces live settings changes; no tests.
+- `color_scheme_log.py` (9 lines): **a no-op stub** kept only so 24 call sites in `ai_terminal.py` need not
+  be deleted (its own docstring). Dead code.
+Both `log_tab_text` and `record_asciicast` default to `false` in the repo settings (lines 134 and 941);
+individual users switch them on.
+
+**Justified (written contracts).**
+- `ai/PROFILE_AND_RECORDING_INVARIANTS.md` is the operating contract: recording files are created before the
+  child starts so its first output is not missed; a reattach writes a new correlated `*_reattach.cast` and
+  `*_reattach.log` and never appends to the old one (appending would duplicate the broker's replay).
+- `ai/ARCHITECTURAL_BOUNDARIES.md` sets the authority order: the agent's own transcript for conversation
+  content, the live emulator for current screen, the `.log` as an append-only record of tab lines (not a
+  transcript), the `.cast` as diagnostic evidence.
+- The asciicast recordings have a proven use: the 2026-08-11 mouse-tracking audit replayed 470 of them
+  (`ai/TODO-archive.md`), and the 2026-09-19 resize-storm diagnosis came from one cast file.
+- `session_text_log.py` writes only after 0.5 s of quiet (`_WRITE_DEBOUNCE_S`): a streaming tab was writing on
+  every ~30 ms render and freezing Sublime (found live 2026-09-14, code comment).
+
+**Instability (VERIFIED from git).** The text log changed design at least three times: append-only (2026-08-15,
+`3fe6767` per a Claude transcript, UNVERIFIED hash), whole-tab snapshot from 2026-08-17, then append again in
+`f378b85` (2026-09-18). Commit `3ef8262` ("Keep lines that scroll off the tab in the session text log",
+2026-09-18) exists in the object store but is NOT reachable from `main`: that work was discarded.
+
+**Deviations from the owner's rules.**
+- `settings_debug_log` and `raw_debug_log` are switched on by the `AI_TERMINAL_DEBUG` environment variable, not by a
+  setting (rule 1). The 2026-09-19 Vibe session showed the effect: debug output flooded the Python console.
+- `color_scheme_log` is dead code (rule 1: no flags or hooks that do nothing).
+- `settings_debug_log` has no test (rule 2).
