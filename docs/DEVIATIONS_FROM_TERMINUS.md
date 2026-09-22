@@ -635,8 +635,24 @@ the `p`/`u16`/`u32`/`sz`/`i` type aliases, rather than per-line comments on a re
 docstrings already state what `.init()` does (sets `size` to `sizeof(...)`, the C API's "sized struct" convention), so a repeated
 docstring there would be the kind of comment the project's own style guidance says not to write. Live-verified in the running
 Sublime, 2026-09-21: `terminal.ghostty_vt` reloads cleanly (`hasattr(m, 'Ghostty')` True after `importlib.reload`) and the one live
-`ai_terminal` session (this conversation's own tab) stayed alive (`term.pty.is_alive()` True) throughout. `ai_terminal.py`'s ConPTY
-code and `tools/agent_broker.py` are not started.
+`ai_terminal` session (this conversation's own tab) stayed alive (`term.pty.is_alive()` True) throughout. `tools/agent_broker.py`
+is not started.
+
+**`ai_terminal.py`'s ConPTY binding started, 2026-09-21 (same pass).** Every previously-undocumented Win32 struct in the top-of-file
+kernel32 binding block now has a docstring/comment: `_COORD`, `_SECURITY_ATTRIBUTES`, `_STARTUPINFOW`, `_STARTUPINFOEXW`,
+`_PROCESS_INFORMATION`, plus a comment on each grouped `argtypes`/`restype` block (ConPTY lifecycle, proc-thread-attribute-list,
+`CreateProcessW`, the process-lifecycle group, the process-heap group) explaining what each function is for and, where relevant,
+why the group exists at all (e.g. the heap group backs `InitializeProcThreadAttributeList`'s two-call size-then-alloc pattern --
+confirmed against the real call site, not guessed). Also documented: `_Pty.start`/`_start_child`/`_close_pc`/`write`/`is_alive`/
+`kill`/`_close_handles`/`_release_attr_list` (all previously undocumented despite the class itself having a one-line docstring --
+that one-liner does not actually explain the ConPTY calls inside, so rule 5's spirit, not just its letter, called for more), and
+the mouse-hover `_POINT` struct and `_hover_poll_tick` (Win32 `GetCursorPos`/`ScreenToClient`). All grounded in the standard,
+well-documented Win32 APIs involved (ConPTY, process/thread creation, heap, cursor) -- no guessing. **Not yet touched:** the
+`_BrokerPty` class (its own large ctypes-adjacent surface, mostly named-pipe I/O reusing the same kernel32 bindings above), the
+Win32 key encoder path (`terminal/keys.py:encode_win32_key`), and `tools/agent_broker.py`. A crude reimplementation of the
+line-counting audit undercounts this file specifically (it only matches the literal substring `ctypes`, missing the many lines
+that use bare names imported via `from ctypes import ...`/`from ctypes.wintypes import ...`, e.g. `HANDLE`, `DWORD`, `byref`), so no
+percentage is quoted here -- unlike `ghostty_vt.py` above, where that script's numbers were usable as a directional check.
 
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 
@@ -653,7 +669,7 @@ code and `tools/agent_broker.py` are not started.
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
-| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` (the largest file) documented 2026-09-21, sourced from the real C headers -- directionally 41%->83% by a reimplemented measure. `ai_terminal.py`'s ConPTY code, `tools/agent_broker.py`, and the three small scripts remain **Open** |
+| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` fully documented 2026-09-21 (directionally 41%->83%). `ai_terminal.py`'s `_Pty`/ConPTY binding started the same day (structs, grouped argtypes, and the `_Pty` methods). `_BrokerPty`, the Win32 key encoder, `tools/agent_broker.py`, and the three small scripts remain **Open** |
 | 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
 | 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
 

@@ -82,14 +82,25 @@ if os.name == "nt":
         _CREATE_UNICODE_ENVIRONMENT = 0x00000400
         _STARTF_USESTDHANDLES = 0x00000100
 
+        # Win32 COORD (wincon.h): a column/row cell size, used here only for
+        # the ConPTY's (cols, rows) argument to CreatePseudoConsole/
+        # ResizePseudoConsole.
         class _COORD(Structure):
             _fields_ = [("X", SHORT), ("Y", SHORT)]
 
+        # Win32 SECURITY_ATTRIBUTES (wtypesbase.h): passed to CreatePipe so
+        # the pipe's HANDLE is inheritable by the child process CreateProcessW
+        # spawns (bInheritHandle=True) -- without that, the child can't see
+        # its own stdin/stdout pipe ends.
         class _SECURITY_ATTRIBUTES(Structure):
             _fields_ = [("nLength", DWORD),
                         ("lpSecurityDescriptor", c_void_p),
                         ("bInheritHandle", BOOL)]
 
+        # Win32 STARTUPINFOW (processthreadsapi.h): the legacy fixed-size half
+        # of STARTUPINFOEXW below. Only cb (struct size) and the hStd* handles
+        # are set here; the rest stay zeroed (this process does not redirect a
+        # console window position/size or icon).
         class _STARTUPINFOW(Structure):
             _fields_ = [("cb", DWORD), ("lpReserved", c_void_p),
                         ("lpDesktop", c_void_p), ("lpTitle", c_void_p),
@@ -101,9 +112,20 @@ if os.name == "nt":
                         ("lpReserved2", LPBYTE),
                         ("hStdInput", HANDLE), ("hStdOutput", HANDLE), ("hStdError", HANDLE)]
 
+        # Win32 STARTUPINFOEXW (processthreadsapi.h): STARTUPINFOW plus the
+        # extended attribute list that is the only way to attach a
+        # pseudoconsole to a child process -- CreateProcessW takes this
+        # (not plain STARTUPINFOW) when _EXTENDED_STARTUPINFO_PRESENT is set,
+        # with lpAttributeList carrying the PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+        # entry (see _spawn's InitializeProcThreadAttributeList/
+        # UpdateProcThreadAttribute calls).
         class _STARTUPINFOEXW(Structure):
             _fields_ = [("StartupInfo", _STARTUPINFOW), ("lpAttributeList", c_void_p)]
 
+        # Win32 PROCESS_INFORMATION (processthreadsapi.h): CreateProcessW's
+        # output -- handles/ids for the new process and its initial thread.
+        # hThread is closed immediately after spawn (never waited on); hProcess
+        # is kept for GetExitCodeProcess/TerminateProcess/WaitForSingleObject.
         class _PROCESS_INFORMATION(Structure):
             _fields_ = [("hProcess", HANDLE), ("hThread", HANDLE),
                         ("dwProcessId", DWORD), ("dwThreadId", DWORD)]
@@ -113,15 +135,26 @@ if os.name == "nt":
         _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         # Set argtypes/restype on EVERY function -- without these ctypes truncates
         # 64-bit HANDLEs to c_int and ConPTY silently corrupts.
+        # CreatePipe: makes the anonymous pipe pair ConPTY reads/writes through
+        # (one pair for the child's stdin, one for its stdout).
         _k32.CreatePipe.argtypes = [POINTER(HANDLE), POINTER(HANDLE),
                                     POINTER(_SECURITY_ATTRIBUTES), DWORD]
         _k32.CreatePipe.restype = BOOL
+        # ConPTY lifecycle proper: Create/Resize/ClosePseudoConsole
+        # (wincon.h) -- the actual pseudoconsole device, separate from the
+        # pipes above and from the child process CreateProcessW spawns below.
         _k32.CreatePseudoConsole.argtypes = [_COORD, HANDLE, HANDLE, DWORD, POINTER(HANDLE)]
         _k32.CreatePseudoConsole.restype = HRESULT
         _k32.ResizePseudoConsole.argtypes = [HANDLE, _COORD]
         _k32.ResizePseudoConsole.restype = HRESULT
         _k32.ClosePseudoConsole.argtypes = [HANDLE]
         _k32.ClosePseudoConsole.restype = None
+        # Proc-thread attribute list (processthreadsapi.h): the mechanism that
+        # attaches the pseudoconsole handle to CreateProcessW below --
+        # Initialize (size the list), Update (set the
+        # PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE entry to the ConPTY handle),
+        # Delete (free it after the child is spawned; the list itself is not
+        # needed once CreateProcessW returns).
         _k32.InitializeProcThreadAttributeList.argtypes = [c_void_p, DWORD, DWORD, POINTER(c_ulong)]
         _k32.InitializeProcThreadAttributeList.restype = BOOL
         _k32.UpdateProcThreadAttribute.argtypes = [c_void_p, DWORD, DWORD,
@@ -130,6 +163,8 @@ if os.name == "nt":
         _k32.UpdateProcThreadAttribute.restype = BOOL
         _k32.DeleteProcThreadAttributeList.argtypes = [c_void_p]
         _k32.DeleteProcThreadAttributeList.restype = None
+        # Spawns the actual child (the shell/agent CLI), with the
+        # pseudoconsole attribute from above attached via lpAttributeList.
         _k32.CreateProcessW.argtypes = [LPCWSTR, ctypes.c_wchar_p, c_void_p, c_void_p, BOOL,
                                         DWORD, c_void_p, LPCWSTR,
                                         POINTER(_STARTUPINFOEXW), POINTER(_PROCESS_INFORMATION)]
@@ -143,6 +178,10 @@ if os.name == "nt":
         # write() passes a `bytes` object; c_char_p accepts bytes directly.
         _k32.WriteFile.argtypes = [HANDLE, ctypes.c_char_p, DWORD, POINTER(DWORD), c_void_p]
         _k32.WriteFile.restype = BOOL
+        # Process lifecycle/query group: exit status, opening a HANDLE from a
+        # bare PID (used by _broker_process_matches to re-attach to a broker
+        # process across a Sublime restart), killing, waiting, and closing
+        # any HANDLE this file opens (pipes, process, thread, pseudoconsole).
         _k32.GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
         _k32.GetExitCodeProcess.restype = BOOL
         _k32.OpenProcess.argtypes = [DWORD, BOOL, DWORD]
@@ -153,6 +192,12 @@ if os.name == "nt":
         _k32.WaitForSingleObject.restype = DWORD
         _k32.CloseHandle.argtypes = [HANDLE]
         _k32.CloseHandle.restype = BOOL
+        # Process heap group (heapapi.h): backs InitializeProcThreadAttributeList
+        # above -- that call needs a caller-allocated buffer of a size only
+        # knowable after a first sizing call, which is what this
+        # GetProcessHeap/HeapAlloc/HeapFree trio provides (Python's own
+        # allocator is not used here since the buffer must outlive the
+        # ctypes call that sizes it and be freed with the matching Win32 API).
         _k32.GetProcessHeap.restype = ctypes.c_void_p
         _k32.HeapAlloc.argtypes = [ctypes.c_void_p, DWORD, c_ulong]
         _k32.HeapAlloc.restype = c_void_p
@@ -222,6 +267,11 @@ class _Pty:
         self._rows = rows
 
     def start(self):
+        """Create the ConPTY (two pipe pairs + CreatePseudoConsole) and hand
+        the pty-side ends to _start_child to spawn the real process.
+        Every raise path here closes whatever HANDLEs it already opened --
+        see the comments at each step -- since a rejected spawn otherwise
+        leaks them for the life of the Sublime process."""
         hPipePtyIn = HANDLE()
         hInWrite = HANDLE()
         hOutRead = HANDLE()
@@ -267,6 +317,9 @@ class _Pty:
             raise
 
     def _start_child(self, hInWrite, hOutRead):
+        """Spawn the real child process (argv/cwd/env) attached to the
+        pseudoconsole self._hPC via a proc-thread attribute list, the only
+        mechanism CreateProcessW exposes for attaching a ConPTY."""
         # Build the proc-thread attribute list (double call: NULL -> size -> alloc -> call).
         size = c_ulong(0)
         _k32.InitializeProcThreadAttributeList(None, 1, 0, byref(size))
@@ -347,6 +400,8 @@ class _Pty:
         self._close_pc()
 
     def _close_pc(self):
+        """Close the pseudoconsole HANDLE (idempotent, lock-guarded so the
+        exit watcher thread and an explicit kill() can't double-close)."""
         with self._pc_lock:
             if self._hPC is not None:
                 _k32.ClosePseudoConsole(self._hPC)
@@ -372,6 +427,9 @@ class _Pty:
         self._alive = False
 
     def write(self, data):
+        """Blocking WriteFile to the pseudoconsole's input pipe, looping
+        until every byte of data is accepted (a single WriteFile call is not
+        guaranteed to consume the whole buffer)."""
         if not self._alive or self._hInWrite is None:
             return
         written = DWORD(0)
@@ -414,6 +472,9 @@ class _Pty:
         return True
 
     def is_alive(self):
+        """GetExitCodeProcess-backed liveness check, not just the cached
+        self._alive flag -- catches a child that exited on its own before
+        _watch_process_exit's WaitForSingleObject got scheduled."""
         if not self._alive or self._hProcess is None:
             return False
         code = DWORD(0)
@@ -424,6 +485,9 @@ class _Pty:
         return self._alive
 
     def kill(self):
+        """Explicit tab-close teardown: close the pseudoconsole (drains the
+        reader via EOF), force-terminate the child if it's still running,
+        then release every HANDLE this instance owns."""
         if not self._alive:
             return
         self._alive = False
@@ -436,6 +500,8 @@ class _Pty:
         self._close_handles()
 
     def _close_handles(self):
+        """CloseHandle every pipe/process/thread HANDLE this instance owns
+        (pseudoconsole itself is closed separately via _close_pc)."""
         for h in (self._hInWrite, self._hOutRead, self._hThread, self._hProcess):
             if h is not None:
                 _k32.CloseHandle(h)
@@ -443,6 +509,10 @@ class _Pty:
         self._release_attr_list()
 
     def _release_attr_list(self):
+        """Free the proc-thread attribute list and its backing heap
+        allocation from _start_child's InitializeProcThreadAttributeList /
+        HeapAlloc pair -- the two are not the same allocation and both must
+        be released, in this order (list first, then the heap it lives in)."""
         if self._attr_list is not None:
             _k32.DeleteProcThreadAttributeList(self._attr_list)
             self._attr_list = None
@@ -9681,6 +9751,9 @@ _hover_last_cell = {}  # view_id -> (col, row) last cell a motion report was sen
 
 
 class _POINT(ctypes.Structure):
+    """Win32 POINT (windef.h): a plain (x, y) pixel pair. Used here for
+    GetCursorPos (screen coordinates) and ScreenToClient's in/out conversion
+    to Sublime window-client coordinates -- see _hover_poll_tick below."""
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
@@ -9703,6 +9776,11 @@ def _hover_st_hwnd():
 
 
 def _hover_poll_tick():
+    """Poll the real OS cursor position (GetCursorPos, screen coords) and
+    convert it to this Sublime window's client coordinates (ScreenToClient),
+    to synthesize DEC any-motion mouse reports for a TUI that requested
+    them -- Sublime's own mouse events do not fire on hover with no button
+    held, only on click/drag, so this is the only way to get motion."""
     hwnd = _hover_st_hwnd()
     if hwnd is None:
         return
