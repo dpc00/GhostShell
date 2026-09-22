@@ -389,6 +389,23 @@ and 7985-7990).** On an alt-screen tab, `_tui_like` is forced true and the viewp
 frame, so the Settings panel, which sits below the pinned frame, cannot be reached. A wrong setting cannot
 then be undone from the tab. The panel fails exactly where it is needed.
 
+**Appears already fixed the same day, code-verified 2026-09-21; not yet re-confirmed live against a real
+alt-screen app.** Commit `57624a0` (2026-09-19 14:40) replaced every `tui_owns_scroll`/`_tui_like` call to
+the old direction-agnostic `_pin_viewport_rest` (which snapped the viewport back to the top on ANY drift,
+including a deliberate downward scroll toward the toolbar) with `_pin_viewport_rest_dip_only`
+(`ai_terminal.py:7020-7052`), which by design only corrects a *negative* overshoot above rest and leaves a
+positive/downward scroll alone (its own docstring: "a deliberate forward scroll past rest... is left
+alone"). Checked in the current file: `_pin_viewport_rest` (the old hard pin) is called nowhere any more —
+`git grep` finds it only at its own definition; every one of the four `tui_owns_scroll` call sites
+(`_settle_viewport:7344`, `AiTerminalRenderCommand._run:8206`, and `_clamp_vp_loop`'s `tui_like` branch)
+now uses the dip-only version. That means the specific mechanism Grok described — the viewport being
+forced back to the top on every frame regardless of direction — no longer exists as a live code path,
+for either the render loop or the 500ms clamp loop. Whether the same commit predates or postdates Grok's
+2026-09-19 reading is not established from the doc's date-only citation, so this is recorded as "appears
+fixed by code inspection," not "confirmed fixed" — it has not been re-tested against a real alt-screen TUI
+(e.g. vim, htop) live in Sublime, which rule 7a requires before closing this out. Not done in this pass
+because it would mean opening a new tab/session, which needs the owner's go-ahead.
+
 ## 9. Logging and recording (VERIFIED)
 
 **Terminus.** None. A search of `terminus/*.py` for logging, asciicast, transcript and record found no
@@ -582,7 +599,7 @@ work in August; whether to keep them is the owner's call. Nothing has been chang
 | 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
 | 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
 | 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Checked 2026-09-21: dynamic-registration-over-pre-generation is defensible (GhostShell's real 256-colour x 256-colour x 8-style space is ~1,600x Terminus's 16-colour table); the defect is that registered scopes are never evicted, so the file only ever grows. **Open** (needs an eviction/bound design) |
-| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). The Settings panel cannot be reached on alt-screen tabs. **Defect** |
+| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: appears already fixed by `57624a0` (2026-09-19, same day) by code inspection 2026-09-21 -- the hard pin it depended on is no longer called anywhere. **Needs a live re-test against a real alt-screen TUI to close** |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. `~/data/logs` path, `scheme_backups`, five recorder modules and `color_scheme_log` stub still to be moved or removed. **Open** |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
