@@ -103,27 +103,5 @@ was rewriting `.jcode_tail` every few seconds was added in an unlabeled commit o
 `GHOSTSHELL_BROKER_LOG` is set to `1` in the broker's environment (the owner's dev switch). Off by default: no folder is
 created, no file is opened, nothing holds the folder open. Tests: `tests/test_broker_lifecycle_log.py` (off by default, off
 for any value other than `1`, on with the switch, no-op without a path). Brokers already running keep their old log open
-until their session ends; only brokers started after this change are affected. Not yet changed at the time this entry was
-written: `ai_terminal.py` still passes `--log-file` and still created `scheme_backups/` unconditionally
-(`ai_terminal.py:1944-1950` at the time).
-
-## Scheme backup switched off by default, moved to a standard location (2026-09-22)
-
-`_durable_scheme_backup` (`ai_terminal.py`, the deviations review's section 9 finding) used to write an uncapped
-~400KB+ `.sublime-color-scheme` snapshot to `~/data/logs/ai_terminal/scheme_backups/` on every scheme save once the
-scheme reached 100+ rules, with no setting or env-var gate at all -- worse than every other logger in this file, all
-of which were at least off by default. Fixed: gated behind a new setting, `scheme_backup_enabled` (default `false`,
-in `ai_terminal.sublime-settings`), and moved from the owner's personal `~/data/logs` layout to
-`sublime.cache_path()/GhostShell/scheme_backups/`, a standard Sublime location. Off by default: no folder is created
-and no file is written until the setting is turned on. Size cap: none by design -- a scheme backup that is smaller
-than the live scheme it snapshots is not useful for recovery, so the existing "keep only the newest snapshot" cap
-(one file, not a byte limit) is the applicable bound here, not the 32 KB default. Verified live in the running
-Sublime, 2026-09-22: with the setting flipped on in memory, a real snapshot wrote to the new path
-(`ai_terminal_150rules_<timestamp>.sublime-color-scheme`); with it off (the shipped default), the function no-ops.
-Test artifact removed after verification. The orphaned `color_scheme_log_path` setting (pointed at
-`~/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log`, but never actually read by any
-code -- `color_scheme_log.py` is the no-op stub noted in `docs/DEVIATIONS_FROM_TERMINUS.md` section 9 and takes no
-path argument) was removed from the settings file rather than fixed, since fixing a setting that does nothing would
-still leave a misleading one. Not yet changed: `ai_terminal.py` still passes `--log-file` to the broker
-unconditionally, and `terminal/log_paths.py`'s `LOG_ROOT` (used by `session_text_log.py`, `cast_recorder.py`,
-`raw_debug_log.py`) is still `~/data/logs` -- those are still open (see `docs/DEVIATIONS_FROM_TERMINUS.md` section 9).
+until their session ends; only brokers started after this change are affected. Not yet changed: `ai_terminal.py` still
+passes `--log-file` and still creates `scheme_backups/` (`ai_terminal.py:1944-1950`).

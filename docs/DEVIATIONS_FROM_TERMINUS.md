@@ -538,25 +538,9 @@ approval before moving or creating any log location, so this is recorded, not ac
 - `_durable_scheme_backup`'s `~/data/logs/ai_terminal/scheme_backups` path above, the most urgent of the
   three because it is the only one that is both hardcoded AND unconditional.
 None of these are Sublime's standard locations (`sublime.cache_path()` or `Packages/User`) as rule 14
-requires for a release.
-
-**`_durable_scheme_backup` fixed, 2026-09-22 (owner's go: "eliminate bugs, undesirable aspects").** Gated
-behind a new setting, `scheme_backup_enabled` (default `false`), and moved off `~/data/logs` to
-`sublime.cache_path()/GhostShell/scheme_backups/`, a standard Sublime location. Off by default: no folder
-is created and no file is written until turned on. No byte-size cap added deliberately — a scheme backup
-smaller than the live scheme it snapshots would not be useful for recovery, so "keep only the newest
-snapshot" (already existing) is the applicable bound, not rule 15's 32KB default. Live-verified in the
-running Sublime: with the setting flipped on in memory, a real snapshot wrote to the new path; with it off
-(the shipped default), the function no-ops. Full detail in `docs/LOG_DIRECTORIES.md`. Also removed: the
-`color_scheme_log_path` setting, which was never actually read by any code (`color_scheme_log.py` is the
-no-op stub noted above and takes no path argument) — a misleading, non-functional setting per rule 7
-("every setting must actually do something"), fixed by removal rather than repair since there was nothing
-to repair.
-
-**Still open:** `terminal/log_paths.py`'s `LOG_ROOT` (used by `session_text_log.py`, `cast_recorder.py`,
-gated opt-in via `log_tab_text`/`record_asciicast`) and `raw_debug_log.py` (gated by `AI_TERMINAL_DEBUG`,
-an env var not a setting) still point at `~/data/logs`. Both are at least off by default, unlike the fixed
-item above, so lower priority.
+requires for a release. Fixing this needs a decision on where the default should point (likely
+`sublime.cache_path()`) and, for `_durable_scheme_backup` specifically, whether it should exist by default
+at all or become opt-in like its siblings — both are the owner's call before any file is touched.
 
 ## 10. Usage and quota scanning (VERIFIED in code; the biggest trust issue found)
 
@@ -743,7 +727,7 @@ kernel32 binding block (every `argtypes`/`restype` assignment) under the real Wi
 | 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
 | 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Checked 2026-09-21: dynamic-registration-over-pre-generation is defensible (GhostShell's real 256-colour x 256-colour x 8-style space is ~1,600x Terminus's 16-colour table); the defect is that registered scopes are never evicted, so the file only ever grows. **Open** (needs an eviction/bound design) |
 | 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: appears already fixed by `57624a0` (2026-09-19, same day) by code inspection 2026-09-21 -- the hard pin it depended on is no longer called anywhere. **Needs a live re-test against a real alt-screen TUI to close** |
-| 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. **`_durable_scheme_backup` fixed 2026-09-22**: gated behind `scheme_backup_enabled` (default off), moved to `sublime.cache_path()`. Orphaned `color_scheme_log_path` setting removed. `LOG_ROOT` (`terminal/log_paths.py`, feeds `session_text_log.py`/`cast_recorder.py`/`raw_debug_log.py`) still points at `~/data/logs`, but all three writers are at least off by default. **Open**, lower priority now |
+| 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
 | 12 | `ctypes` documentation | **Rule 5 not met overall, but the three real (non-test-script) files are now done.** `terminal/ghostty_vt.py`, `ai_terminal.py`'s ConPTY surface, and `tools/agent_broker.py` (structs, all kernel32 groups, `_Pty`, and the three named-pipe server classes) all fully documented 2026-09-21, checked against the real headers/call sites, not guessed. Only four "owner's call to keep" test/dev scripts (`tools/agent_broker_client.py`, `tools/job_breakaway_test.py`, `tools/check_in_job.py`, `tools/recover_console.py`) remain **Open** -- documenting them is deferred pending the owner's decision on whether to keep them at all |

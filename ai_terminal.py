@@ -2022,21 +2022,12 @@ def _load_scheme_from_disk():
 
 
 def _durable_scheme_backup(scheme_data):
-    """Keep a dated snapshot of the live colour scheme, for recovery if a
-    write goes wrong (see _save_color_scheme's shrink guard just below this
-    function). Off by default (rule 14: no folder or file for a user until
-    the owner's own dev switch is on) -- set scheme_backup_enabled to opt in.
-    Written to sublime.cache_path(), a standard Sublime location, not the
-    owner's personal ~/data/logs layout this used to hardcode (see
-    docs/DEVIATIONS_FROM_TERMINUS.md section 9 and docs/LOG_DIRECTORIES.md).
-    """
-    if not _setting_bool("scheme_backup_enabled", False):
-        return
+    """Keep a dated snapshot under ~/data/logs/ai_terminal/scheme_backups/."""
     try:
         n = len(scheme_data.get("rules") or [])
         if n < 100:
             return
-        bdir = os.path.join(sublime.cache_path(), "GhostShell", "scheme_backups")
+        bdir = os.path.expanduser("~/data/logs/ai_terminal/scheme_backups")
         os.makedirs(bdir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(bdir, f"ai_terminal_{n}rules_{ts}.sublime-color-scheme")
