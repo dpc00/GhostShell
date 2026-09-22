@@ -106,6 +106,8 @@ itself remains a separate, already-settled tuning decision (line 48 above).
 
 **Open defect (user report, 2026-09-20).** With Claude Code CLI in a tab, the text jiggles one line
 up and back down during command-line typing. Cause not yet identified.
+**2026-09-22:** gone in the Claude tab (owner, live) after the line-by-line redraw in section 6 was switched on. That points
+to the whole-buffer replace as the cause, since the Vibe log below showed the view moving with no GhostShell write.
 
 **Related observation, Vibe, 2026-09-22 (logged live, cause NOT assigned).** With the view scrolled down to show the
 toolbar (y=258) and the caret on Vibe's input row (row 49), typing moved the view about one line further down on each
@@ -284,6 +286,13 @@ came from a first version written for one agent, and nothing in git or `ai/` sho
 against Terminus's dirty-line update, even after `pyte` (which provides dirty lines) was adopted. The
 records also show it is the mechanism behind the trim-and-shift viewport problem (section 1).
 Status: an unjustified deviation. It needs a decision, not a defence.
+
+**Partly fixed, 2026-09-22 (VERIFIED live).** New setting `line_diff_render_enabled` (default true): when a frame has the
+same number of lines as the buffer, `AiTerminalRenderCommand._run` replaces only the lines that differ, last line first,
+as Terminus does; when the line count changes it still falls back to the whole-buffer replace. The native per-row dirty
+state is not used yet: this compares old and new text in Python. Measured in the Claude tab: 185 of 200 frames took the
+line path and 15 fell back. The owner reported the typing jiggle (section 1's open defect) gone in that tab with the setting on.
+Not yet done: the line-count-change case, and removing viewport fixers that existed only to undo the whole-buffer replace.
 
 **Feasibility of switching to dirty-line updates (VERIFIED, read-only investigation, 2026-09-21, no code changed).**
 
@@ -747,7 +756,7 @@ kernel32 binding block (every `argtypes`/`restype` assignment) under the real Wi
 | 3 | History cap 300 lines (Terminus: 10,000) | **Justified**, checked 2026-09-21: settings-file comment calls it a measured minimap-fill constant ("rigorously tested, deliberate"), not a jumpiness knob. Whether an actual test exists behind "rigorously tested" is unverified |
 | 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
 | 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
-| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
+| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **Partly fixed** 2026-09-22: `line_diff_render_enabled` (default on) replaces only changed lines when the line count is unchanged (185 of 200 frames in the Claude tab); the owner saw the typing jiggle gone. Line-count changes still rewrite the whole buffer. Removing the now-redundant viewport fixers is the next step |
 | 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Checked 2026-09-21: dynamic-registration-over-pre-generation is defensible (GhostShell's real 256-colour x 256-colour x 8-style space is ~1,600x Terminus's 16-colour table); the defect is that registered scopes are never evicted, so the file only ever grows. **Open** (needs an eviction/bound design) |
 | 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: live-tested with Vibe 2026-09-22 -- `57624a0` fixed the render and clamp loops, but `_preclamp_vp` still snapped the view back on hover/focus change. **Fixed** 2026-09-22 (dip-only), owner confirmed live |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
