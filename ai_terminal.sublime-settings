@@ -42,10 +42,6 @@
     // can set "close_tab_on_exit": false to keep a tab open after exit (e.g.
     // to read a final error/update message at leisure).
     "close_tab_on_exit": true,
-    // Path for the color-scheme-scope diagnostic log. The plugin appends scope-
-    // registration and flush events here. Edit to redirect, or set null to disable
-    // color-scheme logging entirely. Changes take effect after plugin reload.
-    "color_scheme_log_path": "~/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log",
     // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
     // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
     // Off by default (extra text in every terminal tab's status bar
@@ -945,8 +941,8 @@
     // ghostty_engine converts this line cap at terminal_new.
     "scrollback_history_size": 300,
     // Kill switch for the auto-scroll/follow/pin machinery (_scroll_to_bottom,
-    // _pin_terminal_viewport, _pin_viewport_rest, the render loop's do_follow
-    // write, and _clamp_vp_loop's rest-pin branches) -- every viewport write
+    // _pin_terminal_viewport, _pin_viewport_rest_dip_only, the render loop's
+    // do_follow write, and _clamp_vp_loop's rest-pin branches) -- every viewport write
     // in ai_terminal.py goes through the single _set_viewport choke point,
     // gated on this. False = the user's own scroll position (wheel, drag,
     // keyboard) is never overwritten by any of that machinery.
@@ -957,6 +953,16 @@
     // at once while it was being redesigned rather than patched further.
     // Live: read fresh on every viewport write, no reload needed.
     "scroll_manipulation_enabled": true,
+    // Keep a dated snapshot of the live colour scheme under sublime.cache_path()
+    // (GhostShell/scheme_backups/) for recovery if a scheme write ever goes
+    // wrong. Off by default per the owner's rule (2026-09-21,
+    // docs/LOG_DIRECTORIES.md): no file exists on a user's machine until this
+    // is turned on. Only the single newest snapshot is ever kept; each one is
+    // a full copy of the live scheme (hundreds of KB, proportional to how many
+    // distinct colours have been seen -- see section 7 of
+    // docs/DEVIATIONS_FROM_TERMINUS.md), so no smaller fixed size cap applies.
+    // Live: read fresh each time the scheme is saved, no reload needed.
+    "scheme_backup_enabled": false,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {},
