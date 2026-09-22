@@ -647,12 +647,29 @@ confirmed against the real call site, not guessed). Also documented: `_Pty.start
 `kill`/`_close_handles`/`_release_attr_list` (all previously undocumented despite the class itself having a one-line docstring --
 that one-liner does not actually explain the ConPTY calls inside, so rule 5's spirit, not just its letter, called for more), and
 the mouse-hover `_POINT` struct and `_hover_poll_tick` (Win32 `GetCursorPos`/`ScreenToClient`). All grounded in the standard,
-well-documented Win32 APIs involved (ConPTY, process/thread creation, heap, cursor) -- no guessing. **Not yet touched:** the
-`_BrokerPty` class (its own large ctypes-adjacent surface, mostly named-pipe I/O reusing the same kernel32 bindings above), the
-Win32 key encoder path (`terminal/keys.py:encode_win32_key`), and `tools/agent_broker.py`. A crude reimplementation of the
+well-documented Win32 APIs involved (ConPTY, process/thread creation, heap, cursor) -- no guessing. A crude reimplementation of the
 line-counting audit undercounts this file specifically (it only matches the literal substring `ctypes`, missing the many lines
 that use bare names imported via `from ctypes import ...`/`from ctypes.wintypes import ...`, e.g. `HANDLE`, `DWORD`, `byref`), so no
 percentage is quoted here -- unlike `ghostty_vt.py` above, where that script's numbers were usable as a directional check.
+
+**`_BrokerPty` and two bare-PID helpers documented, same day.** `_try_connect` (the CreateFileW/WaitNamedPipeW retry loop),
+`read` (ReadFile loop plus the replay-marker boundary it also handles), `write`, `resize` (a text control-pipe line, not a ConPTY
+call -- the broker owns the real ConPTY, not this client), and `is_alive` (no HANDLE at all on this side, unlike `_Pty.is_alive`)
+now all have docstrings; `kill`/`explicit_kill` already had them plus thorough inline comments and needed nothing added. Also
+documented: `_pid_is_alive` (OpenProcess+GetExitCodeProcess by bare PID, for checking a broker recorded in the on-disk registry
+after a restart) and `_filetime_to_unix` (the FILETIME-to-Unix-epoch conversion GetProcessTimes' result needs, used by
+`_broker_process_matches` to confirm a PID is the SAME process the registry recorded, not one Windows recycled the PID to).
+Checked and found to need nothing: `terminal/keys.py`'s `encode_win32_key` is pure Python text-building (the DEC 9001
+win32-input-mode escape sequence) with no ctypes at all -- the original table's "key... calls" for this file most likely meant
+the mouse-hover code above, not this function; `_broker_registry_file`/`_broker_pipe_path`/`_broker_script_path`/
+`_recover_console_script_path` are plain path-string helpers with no ctypes either.
+
+**Not fixed, found instead: a fourth "owner's call to keep" script.** `tools/agent_broker_client.py` (140 lines, 0% documented in
+the original table) is not broker-runtime code -- its own module docstring calls it a "minimal attach/detach test client for
+agent_broker.py" for manual testing at a terminal, duplicating `_BrokerPty`'s connect logic standalone. Same category as the three
+scripts row 12's original table already flagged ("one-off development tools... whether to keep them is the owner's call") --
+documenting a script that might be deleted is not a good use of the remaining effort here, so it is only catalogued, not touched.
+`tools/agent_broker.py` (the actual broker server) remains the one substantial, definitely-kept file in this row still undocumented.
 
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 
@@ -669,7 +686,7 @@ percentage is quoted here -- unlike `ghostty_vt.py` above, where that script's n
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
-| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` fully documented 2026-09-21 (directionally 41%->83%). `ai_terminal.py`'s `_Pty`/ConPTY binding started the same day (structs, grouped argtypes, and the `_Pty` methods). `_BrokerPty`, the Win32 key encoder, `tools/agent_broker.py`, and the three small scripts remain **Open** |
+| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` fully documented 2026-09-21 (directionally 41%->83%). `ai_terminal.py`'s ConPTY surface (structs, grouped argtypes, `_Pty`, `_BrokerPty`, the two bare-PID helpers) fully documented the same day; the key encoder and path helpers checked and found to have no ctypes. `tools/agent_broker.py` (the actual broker server, definitely kept) and four "owner's call to keep" test/dev scripts (`tools/agent_broker_client.py` newly found to be in this category, plus the original three) remain **Open** |
 | 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
 | 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
 

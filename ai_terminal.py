@@ -576,6 +576,11 @@ def _read_broker_registry_record(pipe_name):
 
 
 def _pid_is_alive(pid):
+    """Whether a bare PID (no HANDLE of our own, e.g. one read back from the
+    broker registry JSON after a restart) is still a live process. On
+    Windows, OpenProcess by PID + GetExitCodeProcess (same pattern as
+    _Pty.is_alive, but opening the HANDLE fresh instead of holding one);
+    elsewhere, the POSIX os.kill(pid, 0) probe."""
     if os.name == "nt" and _k32 is not None:
         try:
             handle = _k32.OpenProcess(
@@ -607,6 +612,11 @@ _EPOCH_AS_FILETIME = 116444736000000000  # 1601-01-01 -> 1970-01-01, in 100ns un
 
 
 def _filetime_to_unix(ft):
+    """Convert a Win32 FILETIME (ctypes.wintypes; 100ns ticks since
+    1601-01-01, split across two 32-bit words) -- as returned by
+    GetProcessTimes -- into a Unix epoch float, for comparing a broker's
+    real process creation time against the registry's recorded created_at
+    (see _broker_process_matches, the reason GetProcessTimes is called)."""
     value = (ft.dwHighDateTime << 32) | ft.dwLowDateTime
     return (value - _EPOCH_AS_FILETIME) / 10000000.0
 
@@ -842,6 +852,10 @@ class _BrokerPty:
         self._io_lock = threading.Lock()
 
     def _try_connect(self, path, access, timeout_s):
+        """Retry CreateFileW against a named pipe until it opens or
+        timeout_s elapses, distinguishing "pipe exists but busy" (wait on
+        it via WaitNamedPipeW) from "pipe doesn't exist yet" (poll instead --
+        WaitNamedPipeW does not wait for first creation, per MSDN)."""
         deadline = time.time() + timeout_s
         while True:
             h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, 0, None)
@@ -1015,6 +1029,11 @@ class _BrokerPty:
             raise OSError("invalid scheduled broker-launch response: %r (%s)" % (output, exc))
 
     def read(self, on_data, on_replay_complete=None):
+        """Blocking ReadFile loop on the broker's output pipe (run on a
+        daemon thread, like _Pty.read). The bulk of this method's own logic
+        is not ctypes: it is scanning the byte stream for _BROKER_REPLAY_END
+        so a reattach's buffered replay bytes can be told apart from live
+        output and on_replay_complete fired exactly once at the boundary."""
         buf = (c_char * 8192)()
         n = DWORD(0)
         if on_replay_complete is None:
@@ -1088,6 +1107,8 @@ class _BrokerPty:
         self._alive = False
 
     def write(self, data):
+        """Blocking WriteFile to the broker's input pipe, looping until every
+        byte of data is accepted -- same pattern as _Pty.write."""
         if not self._alive or self._h_in is None:
             return
         written = DWORD(0)
@@ -1100,6 +1121,10 @@ class _BrokerPty:
             data = data[written.value:]
 
     def resize(self, cols, rows):
+        """Send a text "RESIZE cols rows\\n" line over the separate control
+        pipe (self._h_ctl) rather than a ConPTY call -- the broker, not this
+        client, owns the real ConPTY; a client with no control-pipe
+        connection (start()'s best-effort connect failed) silently no-ops."""
         self._cols, self._rows = cols, rows
         if self._h_ctl is None:
             return False
@@ -1110,6 +1135,10 @@ class _BrokerPty:
         return bool(ok)
 
     def is_alive(self):
+        """No ctypes here -- unlike _Pty.is_alive, this client has no HANDLE
+        to a process to query (the broker owns the child); _alive only
+        reflects this pipe connection's own state, flipped False by read()
+        on EOF/error or by kill()."""
         return self._alive
 
     def kill(self):
