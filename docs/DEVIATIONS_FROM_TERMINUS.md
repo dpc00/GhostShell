@@ -332,6 +332,40 @@ fill and leaves the text uncoloured. `DRAW_NO_OUTLINE` avoids a border around ea
 and per-segment keys. The design first appears in the unlabeled `pybak` commit `820dd09` (2026-08-28).
 No performance or correctness claim was found in git or `ai/`, so none is made here.
 
+**Partial justification found, and a real defect identified (VERIFIED, code read, 2026-09-21).** Terminus's
+`generate_theme_file` (`~/tools/Terminus/tools/theme_generator.py:47-124`) only builds scopes for its 16
+named ANSI colours by default (`color256_scopes=False`) — `terminus.<u>.<v>` for `u, v` in 16 colours (plus
+`default`/`reverse_default`), roughly 18x18 = 324 rules, written once, using `var(...)` references into a
+small variables table rather than literal hex per rule. That is why Terminus's file is small and never
+regenerated at runtime.
+
+GhostShell's colour space is not the same size. `terminal/colors.py` quantizes every truecolor cell to the
+nearest of the full **256**-entry xterm palette (`quantize256`, line 34) before building a scope name
+(`ai.fb.<fg>.<bg>` or `ai.fb.<fg>.<bg>.s<style>`, `scope_name_for`, line 153), where `fg`/`bg` each range
+0-256 (0 = default) and `style` is a 3-bit bold/italic/underline combination (0-7, `style_id_for`, line 189).
+The full addressable space is therefore up to 257 x 257 x 8 = **~528,000** possible scopes — roughly 1,600x
+Terminus's ~324 — because GhostShell renders the real 256-colour xterm palette CLIs actually emit (Claude
+Code, ratatui apps, etc. all use 256-colour/RGB SGR codes routinely), not just the 16 named ANSI colours
+Terminus targets. Pre-generating that entire space up front, Terminus-style, would produce a far larger
+static file than today's already-large one (528,000 rules vs. the current 5,948). Registering scopes lazily
+as they are actually seen (`_register_scope_async`, `ai_terminal.py:2033`) is a real, defensible answer to
+that size problem — it keeps the file only as big as the colours actually used, which is why the design
+exists at all.
+
+**The defect is that "lazily" never means "temporarily."** `_REGISTERED_SCOPES` (`ai_terminal.py:1692`) is
+a set that is only ever added to (`.add`, lines 1839/1862/1868/2025/2041) across the whole file — no removal
+path exists anywhere. A colour combination used once, in one session, stays a permanent rule in the shared
+`ai_terminal.sublime-color-scheme` file forever, for every future profile and session, even after the
+profile that produced it is never used again. This is the mechanism behind section 9's measured growth
+(5,140 rules on 2026-07-10 -> 423,061 bytes by 2026-08-18 -> 450,593 bytes now): it is not a leak in the
+sense of wasted memory, but it is unbounded on-disk growth with no cap, which conflicts with rule 15 (every
+generated file needs a hard size cap; this one is unrelated to logging but is the same kind of ungoverned
+file). A bounded design consistent with both Terminus's approach and GhostShell's actual colour range would
+be either (a) an LRU/TTL eviction of scopes unused for N sessions, or (b) switching to `var(...)`-style
+rules referencing a small palette table (Terminus's trick) so the *rules* stay proportional to distinct
+(fg, bg, style) triples actually seen, without literal hex duplicated per rule — worth comparing against (a)
+for file-size impact before choosing. Neither exists today.
+
 ## 8. Phantom toolbar and in-tab Settings panel (VERIFIED)
 
 **Terminus.** Uses phantoms only for images (`terminus/terminal.py:362`). No toolbar.
@@ -547,7 +581,7 @@ work in August; whether to keep them is the owner's call. Nothing has been chang
 | 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
 | 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
 | 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
-| 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified; the rewriting design is not. **Open** |
+| 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Checked 2026-09-21: dynamic-registration-over-pre-generation is defensible (GhostShell's real 256-colour x 256-colour x 8-style space is ~1,600x Terminus's 16-colour table); the defect is that registered scopes are never evicted, so the file only ever grows. **Open** (needs an eviction/bound design) |
 | 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). The Settings panel cannot be reached on alt-screen tabs. **Defect** |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. `~/data/logs` path, `scheme_backups`, five recorder modules and `color_scheme_log` stub still to be moved or removed. **Open** |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
