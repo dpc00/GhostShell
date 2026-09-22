@@ -754,6 +754,10 @@ class _OutputServer:
         pty.on_exit(self._cancel_pending_accept)
 
     def _cancel_pending_accept(self):
+        """pty.on_exit callback: CancelIoEx the ConnectNamedPipe call
+        run_forever is currently blocked in, so a dead child unblocks the
+        accept loop immediately instead of leaving it parked forever (see
+        the class docstring's pty.on_exit paragraph)."""
         with self._pending_lock:
             handle = self._pending_handle
         if handle is not None:
@@ -772,6 +776,8 @@ class _OutputServer:
                     self._client_handle = None
 
     def _write(self, handle, data):
+        """Blocking WriteFile loop to a connected client HANDLE, looping
+        until every byte of data is accepted."""
         written = DWORD(0)
         while data:
             if not _k32.WriteFile(handle, data, len(data), byref(written), None):
@@ -793,6 +799,13 @@ class _OutputServer:
             self._client_handle = None
 
     def run_forever(self):
+        """Accept-loop, one client at a time, until the child exits: create
+        one named-pipe instance (CreateNamedPipeW), block in ConnectNamedPipe
+        for a client, send the scrollback snapshot + _REPLAY_END marker so a
+        reattaching client can tell replay from live output apart, then wait
+        (polling _client_handle, not blocking on any I/O -- this pipe is
+        write-only, see the class docstring) until feed() notices the client
+        is gone, and recycle the pipe instance for the next connection."""
         while self._pty.is_alive():
             handle = _k32.CreateNamedPipeW(
                 _pipe_path(self._name),
@@ -872,6 +885,13 @@ class _InputServer:
         self._current_handle = None
 
     def run_forever(self):
+        """Accept-loop, one client at a time, until the child exits: create
+        one named-pipe instance, block in ConnectNamedPipe, then hand the
+        connected client to _serve_client until it disconnects (naturally,
+        or via force_disconnect's CancelIoEx), disconnect/close and recycle
+        the pipe instance for the next connection -- same shape as
+        _OutputServer.run_forever, but inbound and with a real read loop
+        instead of a poll."""
         while self._pty.is_alive():
             handle = _k32.CreateNamedPipeW(
                 _pipe_path(self._name),
@@ -919,6 +939,9 @@ class _InputServer:
             _k32.CancelIoEx(handle, None)
 
     def _serve_client(self, handle):
+        """Blocking ReadFile loop on one connected client's input pipe;
+        every chunk read is written straight to the PTY (self._pty.write --
+        the real keystroke path from client to child)."""
         buf = (c_char * 4096)()
         n = DWORD(0)
         while self._pty.is_alive():
@@ -983,6 +1006,10 @@ class _ControlServer:
             ).start()
 
     def _run_client(self, handle):
+        """Per-connection thread body: serve this one control client until
+        it disconnects, then always DisconnectNamedPipe/CloseHandle -- run in
+        its own thread (see run_forever's comment) so a long-lived ctl
+        client does not block the accept loop from seeing the next one."""
         try:
             self._serve_client(handle)
         finally:
@@ -990,6 +1017,10 @@ class _ControlServer:
             _k32.CloseHandle(handle)
 
     def _serve_client(self, handle):
+        """Blocking ReadFile loop, splitting the byte stream on b"\\n" into
+        whole lines and dispatching each to _handle_line (RESIZE/KILL/
+        DISCONNECT) -- a line can arrive split across ReadFile calls, so
+        partial data is held in `pending` until a full line is seen."""
         buf = (c_char * 256)()
         n = DWORD(0)
         pending = b""
