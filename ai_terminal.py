@@ -2409,6 +2409,38 @@ _MOUSE_HANDLING_ENABLED = False
 # converted to scroll_manipulation_enabled in ai_terminal.sublime-settings,
 # same pattern as the other bisection gates (caret_footer_pinning_enabled
 # etc.) just above it in that file.
+def _keep_screen_height_steady(term, rows, trimmed):
+    """Never let the tab lose rows at the bottom once they have been shown.
+
+    rows is the untrimmed frame (scrollback + every screen row); trimmed is
+    the same frame with trailing blank rows dropped (trim_display_rows).
+    Trimming alone makes the tab's height follow an app's footer: when
+    Claude Code's status footer shrinks by a line, the tab shrinks by a line
+    and the follow code scrolls the view up, then down again when the footer
+    grows back -- the "jiggle" on status updates (logged live 2026-09-22:
+    buffer 350 -> 348 -> 350 -> 351 rows, each change followed by a
+    _scroll_to_bottom write). A real terminal's screen never changes height,
+    so a shorter footer just leaves a blank row. This keeps the number of
+    dropped rows from ever growing again: a new tab still starts compact and
+    grows as content arrives, but a row, once shown, stays.
+
+    Starts over when the screen height changes (resize) or the app switches
+    between the normal and the alternate screen. Terminus trims the same
+    way as trim_display_rows, so this is a deviation from it (see
+    docs/DEVIATIONS_FROM_TERMINUS.md section 6).
+    """
+    screen = term.screen
+    screen_rows = len(rows) - len(screen.history)
+    key = (screen_rows, bool(getattr(screen, "alt_screen", False)))
+    dropped = len(rows) - len(trimmed)
+    if getattr(term, "_steady_rows_key", None) != key:
+        term._steady_rows_key = key
+        term._steady_rows_dropped = dropped
+    else:
+        term._steady_rows_dropped = min(term._steady_rows_dropped, dropped)
+    return rows[:len(rows) - term._steady_rows_dropped]
+
+
 def _scroll_manipulation_enabled():
     return _setting_bool("scroll_manipulation_enabled", True)
 
@@ -4830,7 +4862,11 @@ def _do_render(term):
         # cursor. Trim trailing blanks; a cursor parked two or more rows
         # below content (Claude last-row CUP + overflow \\n) is not kept.
         # Empty prompt on the next line is. See trim_display_rows.
-        rows = _trim_display_rows(rows, cy)
+        trimmed = _trim_display_rows(rows, cy)
+        if _setting_bool("steady_screen_height_enabled", True):
+            rows = _keep_screen_height_steady(term, rows, trimmed)
+        else:
+            rows = trimmed
         # Cursor visibility/shape captured under the same lock as rows/cy/cx
         # below -- reading them after releasing the lock let a concurrent
         # parser feed change cursor state between the grid snapshot above and
@@ -7251,6 +7287,21 @@ def _compensate_trim_scroll(view, term, vp):
     evicted = (total - last_total) - (hist_len - (last_len or 0))
     if evicted <= 0:
         return vp
+    # 2026-09-22: while following, leave the viewport alone (bookkeeping
+    # above still runs, so nothing piles up for later). Old lines are only
+    # evicted while following (Screen.trim_paused is on whenever follow is
+    # off), and following means the follow code puts the tail back at the
+    # bottom -- so this write moved the view up N lines and the follow write
+    # moved it straight back down: the up-and-down jiggle on status updates
+    # (logged live: 4185 -> 4157 -> 4185 on every eviction). With the write
+    # skipped, 6 evictions over 55 frames moved the view 0 px. This repeats
+    # the 2026-08-23 attempt reverted below; what changed since is that the
+    # tab no longer rewrites the whole buffer every frame
+    # (line_diff_render_enabled) and no longer changes height with an app's
+    # footer (steady_screen_height_enabled).
+    if term._auto_follow and not _setting_bool(
+            "compensate_trim_while_following", False):
+        return vp
     lh = view.line_height() or 20
     new_y = max(0.0, vp[1] - evicted * lh)
     if new_y != vp[1]:
@@ -8157,31 +8208,38 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # (Terminus rewrites dirty lines, never the whole buffer). A whole-
             # buffer replace makes Sublime lose its place and move the view on
             # its own, which the viewport fixers then fight -- the up-and-down
-            # "jiggle". Only when the line count is unchanged; otherwise fall
-            # through to the whole-buffer replace below.
+            # "jiggle".
             if not cur:
                 cur = view.substr(sublime.Region(0, view.size()))
             old_lines = cur.split("\n")
             new_lines = text.split("\n")
-            if len(old_lines) == len(new_lines):
-                # Start offset of every old line.
-                starts = []
-                offset = 0
-                for line in old_lines:
-                    starts.append(offset)
-                    offset += len(line) + 1
-                # Last line first, so each replace leaves the offsets of the
-                # lines above it unchanged.
-                for i in range(len(old_lines) - 1, -1, -1):
-                    if old_lines[i] != new_lines[i]:
-                        start = starts[i]
-                        view.replace(
-                            edit,
-                            sublime.Region(start, start + len(old_lines[i])),
-                            new_lines[i],
-                        )
-                patched = True
-                _apply_color_regions(view, regions or [])
+            common = min(len(old_lines), len(new_lines))
+            # Start offset of every old line.
+            starts = []
+            offset = 0
+            for line in old_lines:
+                starts.append(offset)
+                offset += len(line) + 1
+            # Lines added or removed at the end go first, at the very end of
+            # the buffer, so the offsets of the lines above stay valid.
+            end_of_common = starts[common - 1] + len(old_lines[common - 1])
+            if len(new_lines) > common:
+                view.insert(
+                    edit, view.size(), "\n" + "\n".join(new_lines[common:])
+                )
+            elif len(old_lines) > common:
+                view.erase(edit, sublime.Region(end_of_common, view.size()))
+            # Then the changed lines, last line first, for the same reason.
+            for i in range(common - 1, -1, -1):
+                if old_lines[i] != new_lines[i]:
+                    start = starts[i]
+                    view.replace(
+                        edit,
+                        sublime.Region(start, start + len(old_lines[i])),
+                        new_lines[i],
+                    )
+            patched = True
+            _apply_color_regions(view, regions or [])
 
         if not patched:
             view.replace(edit, sublime.Region(0, view.size()), text)

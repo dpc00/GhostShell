@@ -960,11 +960,26 @@
     // Redraw only the lines that changed (as Terminus does) instead of
     // rewriting the whole tab on every screen update. Rewriting everything
     // makes Sublime move the view by itself, which shows up as the text
-    // jumping up and down while typing. Used only when the number of lines is
-    // unchanged; otherwise the whole tab is rewritten as before.
+    // jumping up and down while typing. Lines added or removed at the end are
+    // inserted or erased there; nothing else is touched.
     // False = always rewrite the whole tab (the behaviour before 2026-09-22).
     // Live: read fresh on every redraw, no reload needed.
     "line_diff_render_enabled": true,
+    // Keep the tab from losing rows at the bottom once they have been shown,
+    // like a real terminal whose screen height never changes. Without it the
+    // tab shrinks and grows with an app's status footer, and the view jumps
+    // up and down on every status update. A new tab still starts compact.
+    // False = drop every trailing blank row on every redraw (as before
+    // 2026-09-22, and as Terminus does).
+    // Live: read fresh on every redraw, no reload needed.
+    "steady_screen_height_enabled": true,
+    // When old scrollback lines are dropped while the tab is following new
+    // output, move the view up to keep the same text on screen. The follow
+    // code then moves it straight back down, which shows as the text jumping
+    // up and down on status updates, so this is off by default.
+    // True = the behaviour before 2026-09-22.
+    // Live: read fresh on every redraw, no reload needed.
+    "compensate_trim_while_following": false,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {},
