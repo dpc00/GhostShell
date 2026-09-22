@@ -944,6 +944,19 @@
     // libghostty-vt max_scrollback is bytes, not lines (ghostty#12769);
     // ghostty_engine converts this line cap at terminal_new.
     "scrollback_history_size": 300,
+    // Kill switch for the auto-scroll/follow/pin machinery (_scroll_to_bottom,
+    // _pin_terminal_viewport, _pin_viewport_rest, the render loop's do_follow
+    // write, and _clamp_vp_loop's rest-pin branches) -- every viewport write
+    // in ai_terminal.py goes through the single _set_viewport choke point,
+    // gated on this. False = the user's own scroll position (wheel, drag,
+    // keyboard) is never overwritten by any of that machinery.
+    // Per user directive (2026-08-18): added because that machinery had
+    // accumulated enough interacting special cases (footer-size assumptions,
+    // TUI-vs-shell branches, pan/latch state machines) that every targeted
+    // fix broke a different case live -- this let the whole pile be disabled
+    // at once while it was being redesigned rather than patched further.
+    // Live: read fresh on every viewport write, no reload needed.
+    "scroll_manipulation_enabled": true,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {},

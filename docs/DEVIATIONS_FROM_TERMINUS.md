@@ -47,20 +47,70 @@ calls `view.set_viewport_position` directly and bypasses the kill switch.
 - Agent claims (UNVERIFIED): loop keeps TUI apps and the host from fighting over scroll
   (Claude/omp/Grok, 2026-09-18/19). Grok changed 8ms to 500ms on 2026-09-19 (57624a0), no noticed harm.
 
+**Timer vs. event, resolved for one of the two jobs (VERIFIED, code read, 2026-09-21).** `_clamp_vp_loop`
+(`ai_terminal.py:9817-9948`) does two separate jobs on its 500ms tick:
+1. Converts trackpad pan into PTY scroll for TUI apps (`_vp_pan_to_tui_scroll`, 9778, "content-grab"
+   model) by comparing the viewport position against its own last-seen value every tick. Sublime has no
+   command or event that fires on a raw viewport-position change from trackpad/scrollbar drag (only
+   `on_selection_modified`/text commands fire on user text edits, not on scrolling); a poll is the only
+   way to see this happen at all. **This job cannot be event-driven with Sublime's plugin API.**
+   No deviation to resolve here beyond the interval, already loosened 8ms->500ms.
+2. The height-change detector (line 9832 comment onward) exists because panel/sash/sidebar/resize can
+   change `viewport_extent()` with no user text edit. The code comment argues this "is not just an
+   enumerable list of commands" — a sash drag between groups, for example, is a raw mouse operation with
+   no `on_post_window_command` hook at all in the public API (checked against Sublime's documented
+   `sublime_plugin` event list: no `on_layout`/`on_group_resize` event exists). Panel show/hide (find,
+   console, replace) IS a command (`show_panel`/`hide_panel`) and could be caught by
+   `on_post_window_command`, but a sash drag could not. **This half of the loop cannot be fully replaced
+   by events either, for the same missing-hook reason, though a command-triggered event could cut how
+   often it needs to poll for that sub-case.**
+Conclusion: the "timer vs Sublime event" question in the doc since 2026-08-28 has an answer — Sublime's
+plugin API has no event for either raw-viewport-drift or arbitrary-layout-resize, so a poll is required
+for both jobs this loop does, not merely convenient. This closes the "why a timer and not an event"
+question; the 500ms interval itself is a separate, already-settled tuning decision (line 48 above).
+
 **Open defect (user report, 2026-09-20).** With Claude Code CLI in a tab, the text jiggles one line
 up and back down during command-line typing. Cause not yet identified.
 
-## 2. Kill switch is a code constant, not a setting
+## 2. Kill switch is a code constant, not a setting — FIXED 2026-09-21
 
-`_SCROLL_MANIPULATION_ENABLED = True` (`ai_terminal.py:2356`). Its comment says "NOT yet the
-default anywhere live", but it is True. The comment is stale. As a constant it cannot be tuned
-without editing code, which conflicts with the "everything editable via settings" rule.
+`_SCROLL_MANIPULATION_ENABLED = True` (`ai_terminal.py:2308`, was `2356` when this entry was written).
+Its comment said "NOT yet the default anywhere live", but it was True. The comment was stale. As a
+constant it could not be tuned without editing code, which conflicted with rule 7 ("everything editable
+via settings").
 
-## 3. History cap (VERIFIED)
+**Fix (VERIFIED, live-tested in the running Sublime, 2026-09-21).** Converted to
+`scroll_manipulation_enabled` in `ai_terminal.sublime-settings` (next to `scrollback_history_size`,
+same doc-comment style as the four existing cursor bisection gates), read through
+`_scroll_manipulation_enabled()` -> `_setting_bool("scroll_manipulation_enabled", True)`
+(`ai_terminal.py:2308-2317`), the same resolution pattern (profile override, then global, then default)
+every other live-tunable gate in this file already uses. `_set_viewport`, the single choke point for
+every viewport write, now calls this instead of reading the module constant.
+Verified live via `eval_python` in the one running `ai_terminal` session (window 2, view 18, profile
+"Claude" — this very conversation's own tab): the plugin's file-watcher already auto-reloaded
+`ai_terminal.py` after the edit (per rule 11) without disrupting the running PTY (`term.pty.is_alive()`
+stayed `True` throughout); `_scroll_manipulation_enabled()` correctly read `True` from the new setting,
+then flipping the live settings object to `False` and back to `True` changed the function's return value
+immediately, matching the documented "no reload needed" behaviour of the sibling gates. No restart was
+needed or performed — per rule 11 ("never kill a running session"), and there was exactly one live
+session to protect.
+
+## 3. History cap (VERIFIED, justification now checked)
 
 Terminus `scrollback_history_size` default 10000 (`render.py:123`). GhostShell caps at 300.
-Justification (UNVERIFIED, from omp/Claude 2026-09-19): 300 was tuned so the whole buffer fills the
-minimap. Not yet checked against the code comment.
+
+**Justification, checked against the code comment 2026-09-21.** `ai_terminal.sublime-settings:934-942`,
+the setting's own comment: "Number of lines kept in scrollback history (the `history` deque). This is
+the minimap-fill knob: at font 14 / 685px viewport, 300 fills the minimap exactly -- rigorously tested,
+deliberate (the whole buffer top-to-bottom is always visible in the minimap at once)." It also warns
+against raising this to fix trim-induced viewport jumps, naming `trim_paused` + `_compensate_trim_scroll`
+(section 1's jiggle mechanism) as the right tool for that instead — i.e. the comment's author already
+knew 300 is unrelated to the jiggle problem, matching what the section 1 trace found. This is a written,
+specific justification (a measured screen/font combination, called "rigorously tested"), not the vaguer
+secondhand paraphrase ("300 was tuned so the whole buffer fills the minimap") this entry previously
+carried from an agent transcript. **UNVERIFIED still:** whether "rigorously tested" refers to an actual
+test that exists somewhere, or is the comment author's own characterization with no artifact behind it —
+no such test was found in this pass.
 
 ## 4. Detachable sessions via a standalone broker (VERIFIED)
 
@@ -191,6 +241,67 @@ came from a first version written for one agent, and nothing in git or `ai/` sho
 against Terminus's dirty-line update, even after `pyte` (which provides dirty lines) was adopted. The
 records also show it is the mechanism behind the trim-and-shift viewport problem (section 1).
 Status: an unjustified deviation. It needs a decision, not a defence.
+
+**Feasibility of switching to dirty-line updates (VERIFIED, read-only investigation, 2026-09-21, no code changed).**
+
+The native engine already computes per-row dirty state and the Python side already throws it away:
+- `terminal/ghostty_engine.py:_sync_grid` (690-765) reads `RENDER_STATE_DATA_DIRTY` (the whole-frame flag)
+  and, if set, walks rows via `RENDER_STATE_DATA_ROW_ITERATOR` and checks `RENDER_STATE_ROW_DATA_DIRTY`
+  per row (730-736), writing `s.grid[y]`/`s.attrs[y]` only for rows the native engine flagged. This is
+  real per-row dirty tracking, already used to skip unnecessary FFI cell walks.
+- That per-row information is discarded immediately after: `_sync()` (868-872) collapses everything to
+  one Python bool, `s.dirty = True` (also `terminal/screen.py:85` and every other `self.dirty = True` in
+  that file). `_do_render` (`ai_terminal.py:4716`) only ever asks "is anything dirty", never "which rows".
+- So the raw material for a Terminus-style per-line update already exists at the native boundary; it is
+  deleted one call later. Recovering it means `_sync_grid` returning (or accumulating) the set of dirty
+  row indices instead of folding them into a bool.
+
+Three things make GhostShell's buffer layout harder to line-diff than Terminus's, found while reading
+`terminal/screen.py` and `ai_terminal.py`'s render path:
+1. **The visible row count is not fixed.** `render_cells()` (`terminal/screen.py:364-387`) concatenates
+   history + the full `self.rows` grid rows every call; `trim_display_rows` (`terminal/render.py:127-147`)
+   then drops trailing blank rows based on where the last non-blank content and the cursor (`cy`) are.
+   Terminus's pyte screen is a fixed `rows` grid — the trailing-blank trim is GhostShell's own addition
+   ("wall of blank lines below the cursor", comment at `ai_terminal.py:4722-4727`) and it recomputes the
+   kept row count on every frame from cursor position, not just from cell content. A cursor moving down
+   one line can shift the total line count even when no cell changed.
+2. **Extra pad lines are prepended/appended.** `_HOST_SCROLL_PAD_LINES` / `_append_host_scroll_pad`
+   (`ai_terminal.py:4756-4764`) add blank lines above and below the real content "trackpad can pan both
+   ways", and colour-region + caret offsets are shifted by the pad size after the fact. Any line-diff
+   scheme has to account for this fixed offset, not just the dirty rows themselves.
+3. **Scrollback retirement shifts every grid row's buffer-line index.** When a line retires from the grid
+   into `history` (`terminal/screen.py`, `_retire_line`/`_enforce_history_cap`), every subsequent frame's
+   grid rows sit one line further down in the concatenated text. This is exactly the shift that
+   `_compensate_trim_scroll` currently patches over at the viewport level (section 1) because the whole
+   buffer gets rewritten anyway. A line-diff renderer would instead need to compute
+   `delta = new_len(history) - old_len(history)` once per frame and treat it as an insert of `delta` new
+   lines at the history/grid boundary, not a rewrite.
+
+None of these are blockers — Terminus's own `update_lines` (`render.py:150-154`) handles the history-trim
+case by choosing not to re-anchor when the user has scrolled away, which is the same problem in a smaller
+form. But points 1-3 mean this is not a small textual change to `AiTerminalRenderCommand`; it is:
+- a change to `ghostty_engine.py` to preserve the row-dirty set instead of collapsing it,
+- a decision about whether the trailing-blank trim (point 1) and scroll pad (point 2) are kept, reworked
+  to be diff-friendly, or dropped,
+- a rewrite of `_do_render`/`AiTerminalRenderCommand` (`ai_terminal.py:4656`, `7964-8060`) to walk dirty
+  row indices, map each to a buffer line via the history-boundary delta, and call `view.replace` per line
+  instead of once for the whole buffer (subsuming `fast_caret`, which becomes unnecessary once line-level
+  patching exists),
+- removal or simplification of `_compensate_trim_scroll` (7841) and probably `_settle_viewport` (8067),
+  since their reason for existing (whole-buffer rewrite disturbs the viewport, section 1) goes away,
+- a correctness fallback: unlike Terminus, GhostShell already has one confirmed history of the Sublime-side
+  buffer drifting from the emulator's own state (the state-copy problem named in `ai/RECOVERY_PLAN.md`).
+  A line-diff renderer trusts that the dirty set is complete; a periodic full-resync safety net (e.g. every
+  Nth frame, or on any detected mismatch) is worth keeping so a missed dirty flag self-heals instead of
+  leaving a stale line on screen forever — this has no counterpart requirement in Terminus, which VERIFIED
+  has no state-copy step at all (pyte's screen *is* the render source).
+
+**Estimate:** medium-sized, self-contained change (four files: `ghostty_engine.py`, `screen.py`,
+`render.py`, `ai_terminal.py`'s render path), correctness-sensitive, and it should retire several existing
+workarounds (`_compensate_trim_scroll`, `_settle_viewport`, `fast_caret_patch_enabled`) rather than sit
+alongside them. Per rule 7a it would need to be proven live in Sublime (typing, scrollback trim while
+scrolled away, a TUI full-screen redraw, and a window resize), not by a unit test. Not started; no code
+changed in this investigation.
 
 Why no reason can be found (owner, 2026-09-21): several purges of logs, transcripts and memory files have
 deleted the older records, so a reason that was once discussed may have existed and is now unrecoverable.
@@ -430,12 +541,12 @@ work in August; whether to keep them is the owner's call. Nothing has been chang
 
 | # | Deviation | Status |
 |---|---|---|
-| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Why a timer and not a Sublime event is not recorded. The loop runs at 500 ms since 2026-09-19. **Open.** |
-| 2 | Viewport handling switch is a code constant, not a setting | **Open** (rule 1) |
-| 3 | History cap 300 lines (Terminus: 10,000) | Reason unverified (fills the minimap). **Open** |
+| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Timer-vs-event question resolved 2026-09-21: Sublime's plugin API has no event for raw viewport drift or arbitrary layout resize, so polling is required for both of the loop's jobs. The loop runs at 500 ms since 2026-09-19. The other 7 writers and their overlap (e.g. the compensate/settle pair implicated in the open jiggle defect) are still **Open.** |
+| 2 | Viewport handling switch is a code constant, not a setting | **Fixed** 2026-09-21: now `scroll_manipulation_enabled` in `ai_terminal.sublime-settings`, live-verified in the running Sublime |
+| 3 | History cap 300 lines (Terminus: 10,000) | **Justified**, checked 2026-09-21: settings-file comment calls it a measured minimap-fill constant ("rigorously tested, deliberate"), not a jumpiness knob. Whether an actual test exists behind "rigorously tested" is unverified |
 | 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
 | 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
-| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Needs the owner's decision |
+| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
 | 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified; the rewriting design is not. **Open** |
 | 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). The Settings panel cannot be reached on alt-screen tabs. **Defect** |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. `~/data/logs` path, `scheme_backups`, five recorder modules and `color_scheme_log` stub still to be moved or removed. **Open** |
