@@ -24,6 +24,24 @@ terminal.py, view.py or event_listeners.py.
 Eight call sites go through `_set_viewport` (2359); one, in `_compensate_trim_scroll` (7894),
 calls `view.set_viewport_position` directly and bypasses the kill switch.
 
+**Full catalogue completed, 2026-09-22 (VERIFIED, every name above re-checked against current line numbers
+and call sites — `grep` for each function's own name across the whole file).** Two of the "eight" are dead
+code: **only 6 of the 8 originally-named writers still write anything.**
+
+| Writer | Current line | Status | Call sites / role |
+|---|---|---|---|
+| `_pin_terminal_viewport` | 5804 | Live | Thin wrapper around `_pin_viewport_rest_dip_only`; 2 call sites, both in the mouse-wheel scroll command path (re-pin after `_route_mouse_wheel`) |
+| `_pin_viewport_rest` | 7104 | **Dead code** | Zero callers. Superseded by `_pin_viewport_rest_dip_only` everywhere on 2026-09-19 (commit `57624a0`) — see section 8's alt-screen-Settings-panel finding, which traces the same commit |
+| `_pin_viewport_rest_dip_only` | 7119 | Live | 5 call sites (`_pin_terminal_viewport`, `_resync_viewport_after_height_change`, `_settle_viewport`, and twice in `AiTerminalRenderCommand._run`). The one real "pin to rest, negative overshoot only" function everything now funnels through |
+| `_compensate_trim_scroll` | 7210 | Live | 1 call site (the render loop). Corrects the text-slide the whole-buffer replace causes on scrollback eviction (section 6's root cause). Bypasses the kill switch deliberately (own docstring) |
+| `_scroll_to_bottom` | 7279 | Live | 11 call sites across copy-mode exit, several key/click handlers, `_settle_viewport`, `_post_render_follow`, `_resync_viewport_after_height_change`. The "snap to live prompt" primitive |
+| `_settle_viewport` | 7436 | Live | 1 call site (the render loop). Dispatches to `_pin_viewport_rest_dip_only` (TUI) or `_scroll_to_bottom` (following, non-TUI) depending on state — implicated in the open jiggle defect below |
+| `_vp_pan_to_tui_scroll` | 9891 | **Dead code** | Zero callers. Already independently found and listed as dead code in section 10's 2026-09-21 entry ("Found while doing this, not touched") — that finding was not cross-referenced into this section when it was first written, causing this same fact to read differently in two places in one document until this pass |
+| `_clamp_vp_loop` | 9930 | Live | Self-rescheduling, 500ms. Two jobs: the height-change detector (a real Sublime-event gap, see below), and — since job 1 turned out to be dead-code-adjacent, see the "Timer vs. event" correction below — a dip-only overshoot/dx correction across three view-state branches |
+
+`_resync_viewport_after_height_change` (7388) is not a 9th writer: it only ever calls `_scroll_to_bottom` or
+`_pin_viewport_rest_dip_only`, both already in this table.
+
 **Justification (VERIFIED from git history and code comments; search continues for the remaining writers).**
 - `_scroll_to_bottom` (7910) is NOT a deviation any more. Its docstring records that on 2026-09-06 the
   keystroke jiggle was root-caused by comparison with Terminus: with `scroll_past_end` on (Terminus also
@@ -47,27 +65,38 @@ calls `view.set_viewport_position` directly and bypasses the kill switch.
 - Agent claims (UNVERIFIED): loop keeps TUI apps and the host from fighting over scroll
   (Claude/omp/Grok, 2026-09-18/19). Grok changed 8ms to 500ms on 2026-09-19 (57624a0), no noticed harm.
 
-**Timer vs. event, resolved for one of the two jobs (VERIFIED, code read, 2026-09-21).** `_clamp_vp_loop`
-(`ai_terminal.py:9817-9948`) does two separate jobs on its 500ms tick:
-1. Converts trackpad pan into PTY scroll for TUI apps (`_vp_pan_to_tui_scroll`, 9778, "content-grab"
-   model) by comparing the viewport position against its own last-seen value every tick. Sublime has no
-   command or event that fires on a raw viewport-position change from trackpad/scrollbar drag (only
-   `on_selection_modified`/text commands fire on user text edits, not on scrolling); a poll is the only
-   way to see this happen at all. **This job cannot be event-driven with Sublime's plugin API.**
-   No deviation to resolve here beyond the interval, already loosened 8ms->500ms.
-2. The height-change detector (line 9832 comment onward) exists because panel/sash/sidebar/resize can
-   change `viewport_extent()` with no user text edit. The code comment argues this "is not just an
-   enumerable list of commands" — a sash drag between groups, for example, is a raw mouse operation with
-   no `on_post_window_command` hook at all in the public API (checked against Sublime's documented
-   `sublime_plugin` event list: no `on_layout`/`on_group_resize` event exists). Panel show/hide (find,
-   console, replace) IS a command (`show_panel`/`hide_panel`) and could be caught by
+**Timer vs. event, resolved for one of the two jobs (VERIFIED, code read, 2026-09-21; corrected 2026-09-22
+after cataloguing every viewport writer for this section — see below).** `_clamp_vp_loop`
+(`ai_terminal.py:9930-...`) does two separate jobs on its 500ms tick:
+1. **Correction, 2026-09-22: this is NOT what job 1 does.** The original version of this entry said job 1
+   converts trackpad pan into PTY scroll via `_vp_pan_to_tui_scroll` — wrong. `_vp_pan_to_tui_scroll`
+   (9891) is dead code: `grep` finds zero call sites anywhere in the file. It was already caught and listed
+   as dead code once before, in section 10's 2026-09-21 entry ("Found while doing this, not touched") —
+   that finding was not cross-referenced when this entry was written the same day, so the same fact got
+   contradicted in two places in one document. The loop's real remaining job, confirmed by its own comment
+   at the `tui_like` branch ("No pan→PTY and no hard-pin... Only fix the negative overshoot glitch",
+   `ai_terminal.py:10020-10024`), is a dip-only correction: fix a negative viewport overshoot (or nonzero
+   horizontal drift) back to `rest`, across three branches (`tui_like`, `near_fit`, tall-scrollback) — never
+   a forward/pan-to-PTY conversion. The `# Every ai_terminal view: trackpad = core pan. Convert + pin.`
+   comment a few lines into the function (9937) is itself stale for the same reason: no "Convert" happens
+   any more, only "pin." Whether Sublime has an event for a raw viewport-position change is now moot for
+   this loop, since it does not act on that signal at all any more — only on the height check below and a
+   dip below `rest`, neither of which is "trackpad pan."
+2. The height-change detector (comment from 9945 onward, current numbering) exists because panel/sash/
+   sidebar/resize can change `viewport_extent()` with no user text edit. The code comment argues this "is
+   not just an enumerable list of commands" — a sash drag between groups, for example, is a raw mouse
+   operation with no `on_post_window_command` hook at all in the public API (checked against Sublime's
+   documented `sublime_plugin` event list: no `on_layout`/`on_group_resize` event exists). Panel show/hide
+   (find, console, replace) IS a command (`show_panel`/`hide_panel`) and could be caught by
    `on_post_window_command`, but a sash drag could not. **This half of the loop cannot be fully replaced
-   by events either, for the same missing-hook reason, though a command-triggered event could cut how
-   often it needs to poll for that sub-case.**
-Conclusion: the "timer vs Sublime event" question in the doc since 2026-08-28 has an answer — Sublime's
-plugin API has no event for either raw-viewport-drift or arbitrary-layout-resize, so a poll is required
-for both jobs this loop does, not merely convenient. This closes the "why a timer and not an event"
-question; the 500ms interval itself is a separate, already-settled tuning decision (line 48 above).
+   by events, for the missing-hook reason above, though a command-triggered event could cut how often it
+   needs to poll for the panel sub-case.**
+Conclusion, corrected: the height-change detector is the one part of this loop that genuinely has no
+Sublime-event equivalent, so a poll is justified there. The dip-only overshoot correction (job 1, as it
+actually exists today) is a much smaller ask than the original "trackpad pan → PTY scroll" description —
+whether IT needs a 500ms poll specifically, versus e.g. running only inside the existing render loop, was
+not re-examined under this corrected understanding and is now open again, not closed. The 500ms interval
+itself remains a separate, already-settled tuning decision (line 48 above).
 
 **Open defect (user report, 2026-09-20).** With Claude Code CLI in a tab, the text jiggles one line
 up and back down during command-line typing. Cause not yet identified.
@@ -690,7 +719,7 @@ kernel32 binding block (every `argtypes`/`restype` assignment) under the real Wi
 
 | # | Deviation | Status |
 |---|---|---|
-| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Timer-vs-event question resolved 2026-09-21: Sublime's plugin API has no event for raw viewport drift or arbitrary layout resize, so polling is required for both of the loop's jobs. The loop runs at 500 ms since 2026-09-19. The other 7 writers and their overlap (e.g. the compensate/settle pair implicated in the open jiggle defect) are still **Open.** |
+| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Full catalogue completed 2026-09-22: only 6 of the 8 originally-named writers still write anything (`_pin_viewport_rest` and `_vp_pan_to_tui_scroll` are dead code, zero callers). Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Timer-vs-event finding corrected 2026-09-22: the height-change detector genuinely has no Sublime-event equivalent; the loop's other job was wrongly described as trackpad-pan-to-PTY conversion (that path is the now-dead `_vp_pan_to_tui_scroll`) and is actually a smaller dip-only correction whose need for a 500ms poll specifically is open again. The compensate/settle pair remains implicated in the open jiggle defect below. **Open.** |
 | 2 | Viewport handling switch is a code constant, not a setting | **Fixed** 2026-09-21: now `scroll_manipulation_enabled` in `ai_terminal.sublime-settings`, live-verified in the running Sublime |
 | 3 | History cap 300 lines (Terminus: 10,000) | **Justified**, checked 2026-09-21: settings-file comment calls it a measured minimap-fill constant ("rigorously tested, deliberate"), not a jumpiness knob. Whether an actual test exists behind "rigorously tested" is unverified |
 | 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
