@@ -2388,7 +2388,7 @@ _DEFAULT_MIN_ROWS = 1
 _MOUSE_HANDLING_ENABLED = False
 
 # Kill switch per user directive (2026-08-18): the auto-scroll/follow/pin
-# machinery -- _scroll_to_bottom, _pin_terminal_viewport, _pin_viewport_rest,
+# machinery -- _scroll_to_bottom, _pin_terminal_viewport, _pin_viewport_rest_dip_only,
 # the render loop's do_follow write, and _clamp_vp_loop's several rest-pin
 # branches -- had accumulated enough interacting special cases (footer-size
 # assumptions, TUI-vs-shell branches, pan/latch state machines) that every
@@ -7101,42 +7101,27 @@ def _host_rest_y(view):
     return float(_HOST_SCROLL_PAD_LINES) * lh
 
 
-def _pin_viewport_rest(view, rest=None, term=None):
-    """Pin to host rest_y only if the viewport drifted (avoids per-frame thrash)."""
-    if rest is None:
-        rest = _host_rest_y(view)
-    try:
-        cur = view.viewport_position()[1]
-        if abs(cur - rest) > 1.0:
-            _set_viewport(view, (0.0, rest), False)
-        if term is not None:
-            term._last_vp_y = rest
-            term._live_anchor_y = rest
-    except (RuntimeError, AttributeError):
-        print("[ai_terminal] pin viewport rest failed:\n%s" % traceback.format_exc())
-
-
 def _pin_viewport_rest_dip_only(view, rest=None, term=None):
-    """Like _pin_viewport_rest, but only corrects a NEGATIVE overshoot below
+    """Pin to host rest_y, but only to correct a NEGATIVE overshoot below
     rest -- ST's view.show() briefly parking vp[1] below rest (e.g. -20)
     when content fits the viewport, the same glitch _clamp_vp_loop's
     near_fit branch guards against. A deliberate forward scroll past rest
     (e.g. pushing a short conversation's permission prompt up to read it in
-    full) is left alone: unlike a real app-owned TUI (_pin_viewport_rest's
-    other caller, where any drift genuinely is noise to correct), content
-    that merely happens to fit the viewport is not "owned" by anything that
-    requires a fixed rest position. The render loop's content_fits branch
-    used plain _pin_viewport_rest (direction-agnostic) until this was
-    reported live: the same content ("does it fit the viewport") could
-    still be scrolled away from without the user having done anything
-    wrong, and every render (Claude Code's CLI redraws its footer roughly
-    every half-second even while idle) snapped it straight back.
+    full) is left alone: for a real app-owned TUI, any drift genuinely is
+    noise to correct, but content that merely happens to fit the viewport
+    is not "owned" by anything that requires a fixed rest position. A
+    direction-agnostic predecessor (pinned on ANY drift, removed 2026-09-19
+    once every caller had moved to this dip-only version -- see
+    docs/DEVIATIONS_FROM_TERMINUS.md section 1) caused exactly that: the
+    render loop's content_fits branch snapped a deliberate scroll straight
+    back on every render (Claude Code's CLI redraws its footer roughly
+    every half-second even while idle), reported live before the fix.
 
-    Unlike _pin_viewport_rest, does not force term._last_vp_y/_live_anchor_y
-    to `rest` when no correction was made -- they track wherever the
-    viewport actually is, so the next render's drift-disengage check
-    doesn't compare against a rest value the viewport was deliberately never
-    returned to.
+    Unlike a direction-agnostic pin, does not force
+    term._last_vp_y/_live_anchor_y to `rest` when no correction was made --
+    they track wherever the viewport actually is, so the next render's
+    drift-disengage check doesn't compare against a rest value the
+    viewport was deliberately never returned to.
     """
     if rest is None:
         rest = _host_rest_y(view)
@@ -9886,45 +9871,6 @@ def _hover_poll_loop():
 
 _CLAMP_POLL_MS = 500
 _clamp_token = None
-
-
-def _vp_pan_to_tui_scroll(view, term, dy_from_rest):
-    """Turn ST viewport drift from rest into PTY scroll — content-grab model.
-
-    dy_from_rest = viewport_y - rest_y (rest = top of real TUI, below top pad).
-
-      dy > 0  text slides UP   → reveal newer below → amount < 0
-      dy < 0  text slides DOWN → reveal older above → amount > 0
-
-    Opposite of the TUI scroll-button (view move). Both signs must work:
-    rest is not y=0 so finger-down can produce dy < 0.
-    """
-    lh = view.line_height() or 12.0
-    dy = float(dy_from_rest)
-    if abs(dy) < 1.5:
-        return False
-    now = time.time()
-    last = float(getattr(term, "_last_scroll_send_t", 0.0) or 0.0)
-    if (now - last) < 0.08:
-        return False
-    ticks = 1 if abs(dy) < lh * 0.75 else 2
-    # Content-grab: text moves with fingers.
-    amount = -float(ticks) if dy > 0 else float(ticks)
-    term._last_user_pan_t = now
-    try:
-        n = int(getattr(term, "_vp_pan_log_n", 0) or 0)
-        if n < 8:
-            print(
-                f"[ai_terminal] content-grab pan→TUI "
-                f"dy_rest={dy:.1f}px steps={ticks} "
-                f"({'older' if amount > 0 else 'newer'})"
-            )
-            term._vp_pan_log_n = n + 1
-        _route_mouse_wheel(view, term, amount)
-        return True
-    except Exception as e:
-        print(f"[ai_terminal] vp-pan scroll failed: {e}")
-        return False
 
 
 def _clamp_vp_loop():
