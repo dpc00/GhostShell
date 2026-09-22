@@ -7430,7 +7430,8 @@ def _page_scroll(view, term, forward):
     _set_viewport(view, (cur[0], new_y), False)
 
 
-def _resync_viewport_after_height_change(view, term):
+def _resync_viewport_after_height_change(view, term, old_height=None,
+                                         new_height=None):
     """Re-clamp/follow after this view's viewport_extent() height changes
     for any reason other than a PTY resize.
 
@@ -7439,7 +7440,7 @@ def _resync_viewport_after_height_change(view, term):
     window resize, a sidebar/minimap toggle, a tab-group sash drag all
     shrink or grow every view's viewport_extent(), and none of them is a
     keystroke or new PTY output -- the two things that normally drive the
-    render loop's follow/pin logic (_settle_viewport, _post_render_follow).
+    render loop's follow/pin logic (_settle_viewport).
     Enumerating specific window commands (an earlier version of this fix
     hooked on_post_window_command for "show_panel"/"hide_panel" only) misses
     every other cause; detecting the height change itself, generically,
@@ -7454,7 +7455,23 @@ def _resync_viewport_after_height_change(view, term):
     if term is None or view is None or not term.pty.is_alive():
         return
     try:
-        if term._auto_follow:
+        if term._auto_follow and old_height is not None and new_height is not None:
+            # Keep the bottom anchored: move the view by exactly the height
+            # change, so the last line stays the same distance from the
+            # bottom edge. _scroll_to_bottom alone is not enough here: it
+            # deliberately leaves the view alone while the last line is
+            # visible anywhere, so closing a panel left the text floating
+            # with blank lines below it (reported live 2026-09-22: console
+            # open moved the text up, console close never moved it back).
+            # Opening and then closing a panel now returns the view to
+            # exactly where it was.
+            cur = view.viewport_position()[1]
+            target = max(_host_rest_y(view), cur + (old_height - new_height))
+            _set_viewport(view, (0.0, target), False)
+            _scroll_to_bottom(view)
+            term._last_vp_y = view.viewport_position()[1]
+            term._live_anchor_y = term._last_vp_y
+        elif term._auto_follow:
             _scroll_to_bottom(view)
             term._last_vp_y = view.viewport_position()[1]
             term._live_anchor_y = term._last_vp_y
@@ -7492,28 +7509,6 @@ def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
         if term is not None:
             term._last_vp_y = view.viewport_position()[1]
             term._live_anchor_y = term._last_vp_y
-
-
-def _post_render_follow(term):
-    """Re-apply live-tail following after ST has recomputed layout metrics.
-
-    A full terminal-buffer replace can return before Sublime updates
-    ``layout_extent``.  The first follow calculation then targets the old
-    height, leaving the newest prompt below the visible viewport until a
-    column/layout change forces a repaint.  This deferred correction only
-    runs while the terminal still owns follow mode, so it cannot override a
-    user's intentional scrollback position.
-    """
-    try:
-        view = term.view
-        if (view is None or not view.is_valid() or not term.pty.is_alive()
-                or not term._auto_follow):
-            return
-        _scroll_to_bottom(view)
-        term._last_vp_y = view.viewport_position()[1]
-        term._live_anchor_y = term._last_vp_y
-    except (RuntimeError, AttributeError):
-        print("[ai_terminal] post-render follow failed:\n%s" % traceback.format_exc())
 
 
 class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
@@ -8389,10 +8384,6 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             _pin_viewport_rest_dip_only(view, rest, term)
         elif content_fits:
             _pin_viewport_rest_dip_only(view, rest, term)
-        elif do_follow:
-            # Allow Sublime one turn to recompute layout_extent after the
-            # full-buffer replace, then correct the live-tail viewport.
-            sublime.set_timeout(lambda t=term: _post_render_follow(t), 35)
 
 
 def _revive_terminal_client(term, window):
@@ -10033,10 +10024,13 @@ def _clamp_vp_loop():
                         term._ve_h_candidate = ve_now_h
                         term._ve_h_candidate_count = 1
                     if term._ve_h_candidate_count >= 2:
+                        old_ve_h = term._last_ve_h
                         term._last_ve_h = ve_now_h
                         term._ve_h_candidate = None
                         term._ve_h_candidate_count = 0
-                        _resync_viewport_after_height_change(v, term)
+                        _resync_viewport_after_height_change(
+                            v, term, old_ve_h, ve_now_h
+                        )
                         continue
             try:
                 vp = v.viewport_position()
