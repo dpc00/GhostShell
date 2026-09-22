@@ -2295,7 +2295,7 @@ _MOUSE_HANDLING_ENABLED = False
 # assumptions, TUI-vs-shell branches, pan/latch state machines) that every
 # targeted fix broke a different case live. Rather than keep patching that
 # pile, every viewport write in this file now goes through the single
-# _set_viewport choke point below, gated on this flag.
+# _set_viewport choke point below, gated on this setting.
 #
 # RE-ENABLED 2026-08-27 (Terminus rewrite, stage 2, ai/TODO.md) after the
 # actual redesign: the follow/drift decision now reads term._live_anchor_y
@@ -2303,16 +2303,22 @@ _MOUSE_HANDLING_ENABLED = False
 # term._last_vp_y (which this same machinery also wrote with an
 # incompatible meaning -- rest=0.0 -- corrupting the drift check). Verified
 # in a genuinely isolated process (portable ST + git worktree) before this
-# flip; NOT yet the default anywhere live -- see ai/TODO.md for the three
-# real-streaming-session checks still required before this reaches main.
-_SCROLL_MANIPULATION_ENABLED = True
+# flip.
+#
+# Was a hardcoded module constant (_SCROLL_MANIPULATION_ENABLED) until
+# 2026-09-21 -- rule 7 (everything editable through a setting) was not met;
+# converted to scroll_manipulation_enabled in ai_terminal.sublime-settings,
+# same pattern as the other bisection gates (caret_footer_pinning_enabled
+# etc.) just above it in that file.
+def _scroll_manipulation_enabled():
+    return _setting_bool("scroll_manipulation_enabled", True)
 
 
 def _set_viewport(view, pos, animate=False):
     """Single choke point for every view.set_viewport_position() call in this
-    file -- see _SCROLL_MANIPULATION_ENABLED. No-op while disabled so the
+    file -- see _scroll_manipulation_enabled. No-op while disabled so the
     user's own scroll position (wheel, drag, keyboard) is never overwritten."""
-    if not _SCROLL_MANIPULATION_ENABLED:
+    if not _scroll_manipulation_enabled():
         return
     view.set_viewport_position(pos, animate)
 
@@ -7106,7 +7112,7 @@ def _compensate_trim_scroll(view, term, vp):
     """Undo the visual shift caused by the history deque evicting old lines.
 
     Not a follow/snap heuristic like the machinery gated behind
-    _SCROLL_MANIPULATION_ENABLED above -- that decides where the viewport
+    scroll_manipulation_enabled above -- that decides where the viewport
     *should* go. This corrects for the buffer changing size under a
     viewport that never moved: _do_render replaces the whole view text
     every frame, and once screen.history is at its maxlen cap, each newly
@@ -7161,7 +7167,7 @@ def _compensate_trim_scroll(view, term, vp):
         # lh*1.5" user-scroll detector (a few lines below this call site)
         # reads this write as the user having scrolled up, disengages
         # _auto_follow, which now also latches screen.trim_paused True --
-        # and with _SCROLL_MANIPULATION_ENABLED off, nothing ever moves the
+        # and with scroll_manipulation_enabled off, nothing ever moves the
         # viewport back to "near bottom" to re-engage it, so one real
         # eviction permanently stops all future trimming (confirmed live
         # 2026-08-18: unbounded growth, 300 -> 1000+ lines in seconds).
