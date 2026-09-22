@@ -5323,6 +5323,14 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
     # event, so clamping vp here pre-empts the bad paint instead of waiting for
     # the 16ms tick. Only fires when content fits within 1 line of overflow, so
     # it never fights the user scrolling up to read scrollback.
+    #
+    # Dip-only, like every other viewport writer since 57624a0: corrects a
+    # horizontal drift or a position ABOVE rest, never a deliberate scroll
+    # DOWN into the scroll-past-end area. That is where the toolbar and the
+    # Settings panel sit, so the old "any nonzero vp -> (0, 0)" check snapped
+    # a short, fitting tab back to the top on every mouse hover or focus
+    # change -- confirmed live 2026-09-22 with Vibe (layout 752 vs viewport
+    # 743), both snaps logged from on_hover and on_deactivated.
     def _preclamp_vp(self):
         v = self.view
         try:
@@ -5332,8 +5340,9 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
             ve = v.viewport_extent()
             vp = v.viewport_position()
             lh = v.line_height() or 12.0
-            if le[1] - ve[1] <= lh and (vp[0] != 0.0 or vp[1] != 0.0):
-                _set_viewport(v, (0.0, 0.0), False)
+            rest = _host_rest_y(v)
+            if le[1] - ve[1] <= lh and (vp[1] < rest - 1.0 or vp[0] != 0.0):
+                _set_viewport(v, (0.0, rest), False)
         except (RuntimeError, AttributeError, TypeError):
             print("[ai_terminal] preclamp viewport failed:\n%s" % traceback.format_exc())
 
