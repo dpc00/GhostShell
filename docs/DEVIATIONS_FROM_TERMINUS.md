@@ -669,7 +669,22 @@ the original table) is not broker-runtime code -- its own module docstring calls
 agent_broker.py" for manual testing at a terminal, duplicating `_BrokerPty`'s connect logic standalone. Same category as the three
 scripts row 12's original table already flagged ("one-off development tools... whether to keep them is the owner's call") --
 documenting a script that might be deleted is not a good use of the remaining effort here, so it is only catalogued, not touched.
-`tools/agent_broker.py` (the actual broker server) remains the one substantial, definitely-kept file in this row still undocumented.
+
+**`tools/agent_broker.py` fully documented, same day.** The actual broker server (the third and last of the three real,
+definitely-kept ctypes files in this row) is done: the same 5 ConPTY structs as `ai_terminal.py` (identical layout, documented the
+same way), the broker-specific named-pipe-server kernel32 group (`CreateNamedPipeW`/`ConnectNamedPipe`/`DisconnectNamedPipe`/
+`FlushFileBuffers`) and the `IsProcessInJob` check `_current_process_is_in_job()` uses to confirm the broker actually escaped
+Sublime's job object at spawn (see section 4's `DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB` justification -- this is how that
+claim gets verified at runtime, logged once in `main()`). Documented every method of this file's own `_Pty` (the broker-side twin
+of `ai_terminal.py`'s client-side `_Pty` -- one bug found while writing its docstring: an initial claim about where `_REPLAY_END`
+gets written was wrong, corrected after checking the real call site, `_OutputServer.run_forever`, not `feed()`) and the three
+named-pipe server classes -- `_OutputServer` (broker-to-client, write-only, the snapshot+marker handoff on connect),
+`_InputServer` (client-to-broker, read-only, `force_disconnect`'s `CancelIoEx` hand-back from a Windows Terminal relay), and
+`_ControlServer` (`RESIZE`/`KILL`/`DISCONNECT` on a duplex pipe, one thread per connection). `_Scrollback` (the ring-buffer
+snapshot file) uses no ctypes at all -- out of scope for this rule, not touched. Verified (not live in Sublime -- this file runs
+as its own separate process, never imported into the plugin host, so editing it cannot affect any already-running broker or this
+session's own live tab): `python -m py_compile` and `python tools/agent_broker.py --help`, which re-executes the entire top-level
+kernel32 binding block (every `argtypes`/`restype` assignment) under the real Windows ctypes runtime without error.
 
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 
@@ -686,7 +701,7 @@ documenting a script that might be deleted is not a good use of the remaining ef
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
-| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` fully documented 2026-09-21 (directionally 41%->83%). `ai_terminal.py`'s ConPTY surface (structs, grouped argtypes, `_Pty`, `_BrokerPty`, the two bare-PID helpers) fully documented the same day; the key encoder and path helpers checked and found to have no ctypes. `tools/agent_broker.py` (the actual broker server, definitely kept) and four "owner's call to keep" test/dev scripts (`tools/agent_broker_client.py` newly found to be in this category, plus the original three) remain **Open** |
+| 12 | `ctypes` documentation | **Rule 5 not met overall, but the three real (non-test-script) files are now done.** `terminal/ghostty_vt.py`, `ai_terminal.py`'s ConPTY surface, and `tools/agent_broker.py` (structs, all kernel32 groups, `_Pty`, and the three named-pipe server classes) all fully documented 2026-09-21, checked against the real headers/call sites, not guessed. Only four "owner's call to keep" test/dev scripts (`tools/agent_broker_client.py`, `tools/job_breakaway_test.py`, `tools/check_in_job.py`, `tools/recover_console.py`) remain **Open** -- documenting them is deferred pending the owner's decision on whether to keep them at all |
 | 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
 | 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
 
