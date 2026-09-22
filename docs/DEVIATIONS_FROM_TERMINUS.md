@@ -38,6 +38,12 @@ code: **only 6 of the 8 originally-named writers still write anything.**
 | `_settle_viewport` | 7436 | Live | 1 call site (the render loop). Dispatches to `_pin_viewport_rest_dip_only` (TUI) or `_scroll_to_bottom` (following, non-TUI) depending on state — implicated in the open jiggle defect below |
 | `_vp_pan_to_tui_scroll` | 9891 | **Dead code** | Zero callers. Already independently found and listed as dead code in section 10's 2026-09-21 entry ("Found while doing this, not touched") — that finding was not cross-referenced into this section when it was first written, causing this same fact to read differently in two places in one document until this pass |
 | `_clamp_vp_loop` | 9930 | Live | Self-rescheduling, 500ms. Two jobs: the height-change detector (a real Sublime-event gap, see below), and — since job 1 turned out to be dead-code-adjacent, see the "Timer vs. event" correction below — a dip-only overshoot/dx correction across three view-state branches |
+| `AiTerminalViewListener._preclamp_vp` | 5334 | Live | **Missed by the first catalogue, found live 2026-09-22.** Runs on `on_hover`, `on_activated` and `on_deactivated`. Until 2026-09-22 it forced (0,0) on any drift when content fit within one line, the one direction-agnostic writer `57624a0` did not convert; it snapped a deliberate scroll down to the toolbar back to the top. Now dip-only, targets `rest` (see section 8) |
+| `_page_scroll` | 7351 | Live | **Missed by the first catalogue.** Ctrl+PageUp/PageDown and plain PageUp/PageDown (non-TUI). A direct, user-requested move, not a correction |
+
+**Correction, 2026-09-22 (VERIFIED):** the "full catalogue" above was first built by grepping the known function names,
+not every call site, so it missed the last two rows. Rebuilt from `grep -nE '_set_viewport\(|set_viewport_position'`
+over `ai_terminal.py`: every call site is now in this table.
 
 `_resync_viewport_after_height_change` (7388) is not a 9th writer: it only ever calls `_scroll_to_bottom` or
 `_pin_viewport_rest_dip_only`, both already in this table.
@@ -100,6 +106,14 @@ itself remains a separate, already-settled tuning decision (line 48 above).
 
 **Open defect (user report, 2026-09-20).** With Claude Code CLI in a tab, the text jiggles one line
 up and back down during command-line typing. Cause not yet identified.
+
+**Related observation, Vibe, 2026-09-22 (logged live, cause NOT assigned).** With the view scrolled down to show the
+toolbar (y=258) and the caret on Vibe's input row (row 49), typing moved the view about one line further down on each
+frame (314, 328, 342 ... 412). Instrumentation showed the position was unchanged inside `AiTerminalRenderCommand.run`
+and changed only after it returned, with no GhostShell viewport write logged at all (every `_set_viewport` call was
+wrapped). When the caret left row 49 the view went back to exactly 258. Every one of Vibe's frames was a full-buffer
+replace, never a patch (section 6). A second run, driven by Claude, could not isolate it (the view moved before the first
+key was sent), and the owner reported it had stopped shortly after, so it is recorded here and not chased further.
 
 ## 2. Kill switch is a code constant, not a setting — FIXED 2026-09-21
 
@@ -435,6 +449,15 @@ fixed by code inspection," not "confirmed fixed" — it has not been re-tested a
 (e.g. vim, htop) live in Sublime, which rule 7a requires before closing this out. Not done in this pass
 because it would mean opening a new tab/session, which needs the owner's go-ahead.
 
+**Live test, 2026-09-22 (VERIFIED): not fully fixed; one more writer found and fixed.** With Vibe (alt-screen) in a tab,
+the owner could push the text up to show the toolbar, but it snapped back intermittently. Every viewport write was
+wrapped and logged with its call stack. Both snaps came from `AiTerminalViewListener._preclamp_vp`
+(`ai_terminal.py:5334`), triggered by `on_hover` and by `on_deactivated`: layout 752 vs viewport 743 is within one line,
+so its "content fits" check applied, and it then forced (0,0) on any drift in either direction. The render loop and clamp
+loop behaved correctly. `_preclamp_vp` is now dip-only, like the others: it corrects a horizontal drift or a position above
+`rest`, and targets `rest` instead of (0,0). With that patch live, about two minutes of real use logged zero viewport
+writes, and the owner confirmed the snap-back had stopped.
+
 ## 9. Logging and recording (VERIFIED)
 
 **Terminus.** None. A search of `terminus/*.py` for logging, asciicast, transcript and record found no
@@ -719,14 +742,14 @@ kernel32 binding block (every `argtypes`/`restype` assignment) under the real Wi
 
 | # | Deviation | Status |
 |---|---|---|
-| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Full catalogue completed 2026-09-22: only 6 of the 8 originally-named writers still write anything (`_pin_viewport_rest` and `_vp_pan_to_tui_scroll` are dead code, zero callers). Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Timer-vs-event finding corrected 2026-09-22: the height-change detector genuinely has no Sublime-event equivalent; the loop's other job was wrongly described as trackpad-pan-to-PTY conversion (that path is the now-dead `_vp_pan_to_tui_scroll`) and is actually a smaller dip-only correction whose need for a 500ms poll specifically is open again. The compensate/settle pair remains implicated in the open jiggle defect below. **Open.** |
+| 1 | Eight code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | Catalogue rebuilt from every call site 2026-09-22: 8 live writers (the first pass missed `_preclamp_vp` and `_page_scroll`); 2 of the originally-named ones are dead code (`_pin_viewport_rest` and `_vp_pan_to_tui_scroll` are dead code, zero callers). Partly justified (the one-line jiggle fix of 2026-09-06/07; the panel-resize case). Timer-vs-event finding corrected 2026-09-22: the height-change detector genuinely has no Sublime-event equivalent; the loop's other job was wrongly described as trackpad-pan-to-PTY conversion (that path is the now-dead `_vp_pan_to_tui_scroll`) and is actually a smaller dip-only correction whose need for a 500ms poll specifically is open again. The compensate/settle pair remains implicated in the open jiggle defect below. **Open.** |
 | 2 | Viewport handling switch is a code constant, not a setting | **Fixed** 2026-09-21: now `scroll_manipulation_enabled` in `ai_terminal.sublime-settings`, live-verified in the running Sublime |
 | 3 | History cap 300 lines (Terminus: 10,000) | **Justified**, checked 2026-09-21: settings-file comment calls it a measured minimap-fill constant ("rigorously tested, deliberate"), not a jumpiness knob. Whether an actual test exists behind "rigorously tested" is unverified |
 | 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
 | 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
 | 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **No recorded justification.** Inherited from the first version (2026-07-03). Feasibility of a fix investigated 2026-09-21: the native engine already tracks per-row dirty state and it is thrown away one call later (`ghostty_engine.py`). A dirty-line rewrite is a medium-sized, four-file change, not started. Needs the owner's decision |
 | 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Checked 2026-09-21: dynamic-registration-over-pre-generation is defensible (GhostShell's real 256-colour x 256-colour x 8-style space is ~1,600x Terminus's 16-colour table); the defect is that registered scopes are never evicted, so the file only ever grows. **Open** (needs an eviction/bound design) |
-| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: appears already fixed by `57624a0` (2026-09-19, same day) by code inspection 2026-09-21 -- the hard pin it depended on is no longer called anywhere. **Needs a live re-test against a real alt-screen TUI to close** |
+| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: live-tested with Vibe 2026-09-22 -- `57624a0` fixed the render and clamp loops, but `_preclamp_vp` still snapped the view back on hover/focus change. **Fixed** 2026-09-22 (dip-only), owner confirmed live |
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
