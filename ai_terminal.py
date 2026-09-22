@@ -8380,9 +8380,10 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             last_real = max(0, view.rowcol(view.size())[0] - pad)
             _place_auto_caret(view, term, view.text_point(last_real, 0))
         _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
-        if tui_owns_scroll:
-            _pin_viewport_rest_dip_only(view, rest, term)
-        elif content_fits:
+        # A full-screen app (tui_owns_scroll) was already pinned inside
+        # _settle_viewport; a second identical call here (removed 2026-09-22)
+        # could never change anything.
+        if content_fits and not tui_owns_scroll:
             _pin_viewport_rest_dip_only(view, rest, term)
 
 
