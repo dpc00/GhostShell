@@ -64,16 +64,25 @@ _INVALID_HANDLE_VALUE = HANDLE(-1).value
 _REPLAY_END = b"\x1b]777;GhostShellReplayEnd\x07"
 
 
+# Win32 COORD (wincon.h): a column/row cell size, used here only for the
+# ConPTY's (cols, rows) argument to CreatePseudoConsole/ResizePseudoConsole.
 class _COORD(Structure):
     _fields_ = [("X", SHORT), ("Y", SHORT)]
 
 
+# Win32 SECURITY_ATTRIBUTES (wtypesbase.h): passed to CreatePipe so the
+# pipe's HANDLE is inheritable by the child process CreateProcessW spawns
+# (bInheritHandle=True) -- without that, the child can't see its own
+# stdin/stdout pipe ends.
 class _SECURITY_ATTRIBUTES(Structure):
     _fields_ = [("nLength", DWORD),
                 ("lpSecurityDescriptor", c_void_p),
                 ("bInheritHandle", BOOL)]
 
 
+# Win32 STARTUPINFOW (processthreadsapi.h): the legacy fixed-size half of
+# STARTUPINFOEXW below. Only cb (struct size) and the hStd* handles are set
+# by _Pty._start_child; the rest stay zeroed.
 class _STARTUPINFOW(Structure):
     _fields_ = [("cb", DWORD), ("lpReserved", c_void_p),
                 ("lpDesktop", c_void_p), ("lpTitle", c_void_p),
@@ -86,25 +95,42 @@ class _STARTUPINFOW(Structure):
                 ("hStdInput", HANDLE), ("hStdOutput", HANDLE), ("hStdError", HANDLE)]
 
 
+# Win32 STARTUPINFOEXW (processthreadsapi.h): STARTUPINFOW plus the extended
+# attribute list that is the only way to attach a pseudoconsole to a child
+# process -- see _Pty._start_child's InitializeProcThreadAttributeList/
+# UpdateProcThreadAttribute calls for how lpAttributeList gets set.
 class _STARTUPINFOEXW(Structure):
     _fields_ = [("StartupInfo", _STARTUPINFOW), ("lpAttributeList", c_void_p)]
 
 
+# Win32 PROCESS_INFORMATION (processthreadsapi.h): CreateProcessW's output --
+# handles/ids for the new process and its initial thread. hThread is closed
+# immediately after spawn; hProcess is kept for GetExitCodeProcess/
+# TerminateProcess/WaitForSingleObject.
 class _PROCESS_INFORMATION(Structure):
     _fields_ = [("hProcess", HANDLE), ("hThread", HANDLE),
                 ("dwProcessId", DWORD), ("dwThreadId", DWORD)]
 
 
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+# CreatePipe: makes the anonymous pipe pair ConPTY reads/writes through (one
+# pair for the child's stdin, one for its stdout).
 _k32.CreatePipe.argtypes = [POINTER(HANDLE), POINTER(HANDLE),
                             POINTER(_SECURITY_ATTRIBUTES), DWORD]
 _k32.CreatePipe.restype = BOOL
+# ConPTY lifecycle proper: Create/Resize/ClosePseudoConsole (wincon.h) -- the
+# actual pseudoconsole device, separate from the pipes above and from the
+# child process CreateProcessW spawns below.
 _k32.CreatePseudoConsole.argtypes = [_COORD, HANDLE, HANDLE, DWORD, POINTER(HANDLE)]
 _k32.CreatePseudoConsole.restype = HRESULT
 _k32.ResizePseudoConsole.argtypes = [HANDLE, _COORD]
 _k32.ResizePseudoConsole.restype = HRESULT
 _k32.ClosePseudoConsole.argtypes = [HANDLE]
 _k32.ClosePseudoConsole.restype = None
+# Proc-thread attribute list (processthreadsapi.h): attaches the
+# pseudoconsole handle to CreateProcessW below -- Initialize (size the
+# list), Update (set the PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE entry to the
+# ConPTY handle), Delete (free it after the child is spawned).
 _k32.InitializeProcThreadAttributeList.argtypes = [c_void_p, DWORD, DWORD, POINTER(c_ulong)]
 _k32.InitializeProcThreadAttributeList.restype = BOOL
 _k32.UpdateProcThreadAttribute.argtypes = [c_void_p, DWORD, DWORD,
@@ -113,14 +139,20 @@ _k32.UpdateProcThreadAttribute.argtypes = [c_void_p, DWORD, DWORD,
 _k32.UpdateProcThreadAttribute.restype = BOOL
 _k32.DeleteProcThreadAttributeList.argtypes = [c_void_p]
 _k32.DeleteProcThreadAttributeList.restype = None
+# Spawns the actual child (the shell/agent CLI), with the pseudoconsole
+# attribute from above attached via lpAttributeList.
 _k32.CreateProcessW.argtypes = [LPCWSTR, ctypes.c_wchar_p, c_void_p, c_void_p, BOOL,
                                 DWORD, c_void_p, LPCWSTR,
                                 POINTER(_STARTUPINFOEXW), POINTER(_PROCESS_INFORMATION)]
 _k32.CreateProcessW.restype = BOOL
+# Buffer arg must match the read buffer type -- see _Pty.read's own comment
+# in ai_terminal.py for why POINTER(c_char), not LPBYTE.
 _k32.ReadFile.argtypes = [HANDLE, POINTER(c_char), DWORD, POINTER(DWORD), c_void_p]
 _k32.ReadFile.restype = BOOL
 _k32.WriteFile.argtypes = [HANDLE, ctypes.c_char_p, DWORD, POINTER(DWORD), c_void_p]
 _k32.WriteFile.restype = BOOL
+# Process lifecycle group: exit status, killing, waiting, and closing any
+# HANDLE this file opens (pipes, process, thread, pseudoconsole).
 _k32.GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
 _k32.GetExitCodeProcess.restype = BOOL
 _k32.TerminateProcess.argtypes = [HANDLE, DWORD]
@@ -129,11 +161,23 @@ _k32.WaitForSingleObject.argtypes = [HANDLE, DWORD]
 _k32.WaitForSingleObject.restype = DWORD
 _k32.CloseHandle.argtypes = [HANDLE]
 _k32.CloseHandle.restype = BOOL
+# Process heap group (heapapi.h): backs InitializeProcThreadAttributeList
+# above -- that call needs a caller-allocated buffer of a size only knowable
+# after a first sizing call, which this GetProcessHeap/HeapAlloc/HeapFree
+# trio provides.
 _k32.GetProcessHeap.restype = ctypes.c_void_p
 _k32.HeapAlloc.argtypes = [ctypes.c_void_p, DWORD, c_ulong]
 _k32.HeapAlloc.restype = c_void_p
 _k32.HeapFree.argtypes = [ctypes.c_void_p, DWORD, c_void_p]
 _k32.HeapFree.restype = BOOL
+# Named-pipe SERVER group (namedpipeapi.h) -- the broker side of the
+# connection ai_terminal.py's _BrokerPty (client side, CreateFileW) connects
+# to. CreateNamedPipeW makes one pipe instance; ConnectNamedPipe blocks until
+# a client connects to it; DisconnectNamedPipe drops the current client so a
+# new one can connect (this is how "detach" then "reattach" work -- the pipe
+# instance itself persists); FlushFileBuffers ensures a write has actually
+# reached the client before this side proceeds (used before a deliberate
+# disconnect, so the client sees every byte).
 _k32.CreateNamedPipeW.argtypes = [LPCWSTR, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, c_void_p]
 _k32.CreateNamedPipeW.restype = HANDLE
 _k32.ConnectNamedPipe.argtypes = [HANDLE, c_void_p]
@@ -142,8 +186,17 @@ _k32.DisconnectNamedPipe.argtypes = [HANDLE]
 _k32.DisconnectNamedPipe.restype = BOOL
 _k32.FlushFileBuffers.argtypes = [HANDLE]
 _k32.FlushFileBuffers.restype = BOOL
+# Unblocks a thread's pending ReadFile/ConnectNamedPipe on a HANDLE from a
+# different thread -- same purpose as ai_terminal.py's _BrokerPty.kill use of
+# it: CloseHandle can hang otherwise if a blocking call on the same HANDLE is
+# still pending elsewhere.
 _k32.CancelIoEx.argtypes = [HANDLE, c_void_p]
 _k32.CancelIoEx.restype = BOOL
+# Used only by _current_process_is_in_job() below, to detect whether this
+# broker process itself is inside a Windows job object (Sublime's own
+# process is; the broker is deliberately spawned with
+# DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB in ai_terminal.py so it is
+# not, and can outlive a Sublime restart -- see docs/DETACHABLE_SESSIONS.md).
 _k32.GetCurrentProcess.restype = HANDLE
 _k32.IsProcessInJob.argtypes = [HANDLE, HANDLE, POINTER(BOOL)]
 _k32.IsProcessInJob.restype = BOOL
@@ -171,6 +224,11 @@ def _configure_lifecycle_log(path):
 
 
 def _current_process_is_in_job():
+    """True/False if IsProcessInJob succeeds, else a string describing the
+    GetLastError failure -- logged once at startup (see main()) so a broker
+    that unexpectedly ended up inside a job object (and so cannot survive a
+    Sublime restart, defeating the whole point of this process) is visible
+    in the lifecycle log rather than silently failing later."""
     result = BOOL(False)
     ok = _k32.IsProcessInJob(_k32.GetCurrentProcess(), None, byref(result))
     return bool(result.value) if ok else "unknown(error=%d)" % ctypes.get_last_error()
@@ -202,6 +260,10 @@ class _Pty:
         self._rows = rows
 
     def start(self):
+        """Create the ConPTY (two pipe pairs + CreatePseudoConsole) and hand
+        the pty-side ends to _start_child to spawn the real process. Every
+        raise path here closes whatever HANDLEs it already opened, since a
+        rejected spawn otherwise leaks them for the life of the broker."""
         hPipePtyIn = HANDLE()
         hInWrite = HANDLE()
         hOutRead = HANDLE()
@@ -242,6 +304,12 @@ class _Pty:
             raise
 
     def _start_child(self, hInWrite, hOutRead):
+        """Spawn the real child process (argv/cwd/env) attached to the
+        pseudoconsole self._hPC via a proc-thread attribute list (the
+        InitializeProcThreadAttributeList/HeapAlloc pair below is the
+        standard double-call pattern: NULL -> get required size -> allocate
+        -> call again for real), the only mechanism CreateProcessW exposes
+        for attaching a ConPTY."""
         size = c_ulong(0)
         _k32.InitializeProcThreadAttributeList(None, 1, 0, byref(size))
         heap = _k32.GetProcessHeap()
@@ -321,6 +389,14 @@ class _Pty:
                 print("[agent_broker] exit callback failed:\n%s" % traceback.format_exc())
 
     def _watch_process_exit(self):
+        """Block on WaitForSingleObject until the child exits on its own
+        (ReadFile on hOutRead does not return EOF just because every process
+        attached to the console exited -- conhost only flushes the final
+        frame and closes the pipe once ClosePseudoConsole is called), then
+        record its exit code via GetExitCodeProcess, fire on_exit callbacks
+        (see _OutputServer._cancel_pending_accept, which registers one so a
+        pending ConnectNamedPipe wakes up once the child is gone), and close
+        the pseudoconsole."""
         h = self._hProcess
         if h is None:
             return
@@ -369,12 +445,21 @@ class _Pty:
         return self._exit_code
 
     def _close_pc(self):
+        """Close the pseudoconsole HANDLE (idempotent, lock-guarded so the
+        exit watcher thread and an explicit kill() can't double-close)."""
         with self._pc_lock:
             if self._hPC is not None:
                 _k32.ClosePseudoConsole(self._hPC)
                 self._hPC = None
 
     def read(self, on_data):
+        """Blocking reader loop; calls on_data(bytes) until EOF. Run on a
+        daemon thread -- see main()'s _Pty.read thread. Unlike
+        ai_terminal.py's _BrokerPty.read (the client side), there is no
+        replay-marker bookkeeping here: this is the raw output the broker
+        feeds straight to _OutputServer.feed. _REPLAY_END itself is written
+        separately, by _OutputServer.run_forever right after a client
+        connects (snapshot, then the marker, then live feed() data)."""
         buf = (c_char * 8192)()
         n = DWORD(0)
         while self._alive:
@@ -393,6 +478,9 @@ class _Pty:
         self._alive = False
 
     def write(self, data):
+        """Blocking WriteFile to the pseudoconsole's input pipe, looping
+        until every byte of data is accepted (a single WriteFile call is not
+        guaranteed to consume the whole buffer)."""
         if not self._alive or self._hInWrite is None:
             return
         written = DWORD(0)
@@ -409,6 +497,10 @@ class _Pty:
             data = data[written.value:]
 
     def resize(self, cols, rows):
+        """Actually resize the ConPTY (unlike _ControlServer's RESIZE line
+        handling, which just calls this) -- returns True iff ConPTY accepted
+        the new size, so a caller can tell a rejected resize apart from an
+        applied one."""
         if not self._alive or self._hPC is None:
             return False
         try:
@@ -426,6 +518,9 @@ class _Pty:
         return True
 
     def is_alive(self):
+        """GetExitCodeProcess-backed liveness check, not just the cached
+        self._alive flag -- catches a child that exited on its own before
+        _watch_process_exit's WaitForSingleObject got scheduled."""
         if not self._alive or self._hProcess is None:
             return False
         code = DWORD(0)
@@ -436,6 +531,11 @@ class _Pty:
         return self._alive
 
     def kill(self):
+        """End the child for real -- unlike ai_terminal.py's client-side
+        _BrokerPty.kill (which only disconnects a client, leaving the broker
+        and child running), this IS the broker, so this actually terminates
+        the process: close the pseudoconsole, TerminateProcess, release
+        every HANDLE. Called from _ControlServer's KILL line handler."""
         if not self._alive:
             return
         self._alive = False
@@ -445,6 +545,8 @@ class _Pty:
         self._close_handles()
 
     def _close_handles(self):
+        """CloseHandle every pipe/process/thread HANDLE this instance owns
+        (the pseudoconsole itself is closed separately via _close_pc)."""
         for h in (self._hInWrite, self._hOutRead, self._hThread, self._hProcess):
             if h is not None:
                 _k32.CloseHandle(h)
@@ -452,6 +554,10 @@ class _Pty:
         self._release_attr_list()
 
     def _release_attr_list(self):
+        """Free the proc-thread attribute list and its backing heap
+        allocation from _start_child's InitializeProcThreadAttributeList /
+        HeapAlloc pair -- the two are not the same allocation and both must
+        be released, in this order (list first, then the heap it lives in)."""
         if self._attr_list is not None:
             _k32.DeleteProcThreadAttributeList(self._attr_list)
             self._attr_list = None
