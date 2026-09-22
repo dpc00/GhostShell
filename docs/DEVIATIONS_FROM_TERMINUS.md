@@ -617,7 +617,26 @@ class that has a docstring; a generous test, because one docstring covers every 
 **Rule 5 is not met.** Only `terminal/ghostty_engine.py` is close. Suggested order of work, largest first: `terminal/ghostty_vt.py`
 (the native engine bindings), the ConPTY code in `ai_terminal.py`, then `tools/agent_broker.py`. Three small scripts
 (`tools/job_breakaway_test.py`, `tools/check_in_job.py`, `tools/recover_console.py`) look like one-off development tools from the broker
-work in August; whether to keep them is the owner's call. Nothing has been changed in this pass.
+work in August; whether to keep them is the owner's call.
+
+**`terminal/ghostty_vt.py` documented, 2026-09-21.** The `ctypes_audit.py` tool used for the table above no longer exists in the
+repo (correctly, per rule 16 -- it was a scratch measurement tool), so an exact re-run of the same methodology against the same
+numbers is not possible; a reimplementation of its described rule gives a different absolute line count for the same file (117
+vs. 136) because the two scripts likely differ on edge cases (e.g. whether a `#` comment two lines above still counts). Treated as
+directional, not a replacement for row 1's `45%`: the same reimplementation measured `41%` documented before this pass's edits and
+`83%` after, on real source. Every docstring added was sourced from the actual C headers in `~/tools/ghostty/include/ghostty/vt/*.h`
+(`color.h`, `style.h`, `point.h`, `grid_ref.h`, `terminal.h`, `mouse/event.h`, `mouse/encoder.h`, `types.h`), not guessed (rule 12) --
+each new docstring names the header and struct it mirrors. Added: docstrings for `_BuildInfoString`, `GhosttyBuffer`,
+`GhosttyColorRgb`, `_GhosttyStyleColorValue`, `GhosttyStyleColor`, `GhosttyStyle`, `GhosttyPointCoordinate`, `_GhosttyPointValue`,
+`GhosttyPoint`, `point()`, `GhosttyGridRef`, `GhosttyTerminalOptions`, `GhosttyMousePosition`, `GhosttyMouseEncoderSize`,
+`load_library()`, `_sha256_file()`, `_bind()` (the ~100-line FFI signature table -- one docstring explaining the `sig()` helper and
+the `p`/`u16`/`u32`/`sz`/`i` type aliases, rather than per-line comments on a repetitive block), and
+`mouse_encoder_setopt_int`/`_bool`. `.init()` on `GhosttyStyle`/`GhosttyGridRef` were left uncommented -- their enclosing class
+docstrings already state what `.init()` does (sets `size` to `sizeof(...)`, the C API's "sized struct" convention), so a repeated
+docstring there would be the kind of comment the project's own style guidance says not to write. Live-verified in the running
+Sublime, 2026-09-21: `terminal.ghostty_vt` reloads cleanly (`hasattr(m, 'Ghostty')` True after `importlib.reload`) and the one live
+`ai_terminal` session (this conversation's own tab) stayed alive (`term.pty.is_alive()` True) throughout. `ai_terminal.py`'s ConPTY
+code and `tools/agent_broker.py` are not started.
 
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 
@@ -634,7 +653,7 @@ work in August; whether to keep them is the owner's call. Nothing has been chang
 | 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
 | 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
 | 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
-| 12 | `ctypes` documentation | **Rule 5 not met** (42%) |
+| 12 | `ctypes` documentation | **Rule 5 not met overall.** `terminal/ghostty_vt.py` (the largest file) documented 2026-09-21, sourced from the real C headers -- directionally 41%->83% by a reimplemented measure. `ai_terminal.py`'s ConPTY code, `tools/agent_broker.py`, and the three small scripts remain **Open** |
 | 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
 | 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
 

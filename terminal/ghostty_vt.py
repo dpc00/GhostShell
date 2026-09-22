@@ -43,6 +43,9 @@ _BUILD_INFO_VERSION_STRING = 5
 
 
 class _BuildInfoString(ctypes.Structure):
+    """Mirrors GhosttyString (build_info.h): a borrowed byte string returned by
+    ghostty_build_info(). ``ptr`` is only valid for the duration of that call --
+    libghostty_version() decodes it to a Python str immediately, never holds it."""
     _fields_ = [
         ("ptr", ctypes.POINTER(ctypes.c_uint8)),
         ("len", ctypes.c_size_t),
@@ -92,6 +95,9 @@ def dll_fingerprint(path):
 
 
 def _sha256_file(path):
+    """sha256 of the whole file at path, streamed in 1 MiB chunks (no ctypes;
+    used by ensure_dll to verify a download or an existing DLL against
+    EXPECTED_SHA256 before load_library() ever hands it to ctypes.CDLL)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -160,6 +166,13 @@ def ensure_dll(path=DEFAULT_DLL_PATH, url=RELEASE_DLL_URL, expected_sha256=EXPEC
 
 
 def load_library(path=None):
+    """Load libghostty-vt via ctypes.CDLL and return the raw handle.
+
+    path/GHOSTTY_VT_DLL/DEFAULT_DLL_PATH resolution and the ensure_dll()
+    download-and-verify step happen first (see module docstring); this
+    function's only ctypes-specific work is the CDLL() call itself and the
+    one-time version/fingerprint log line after it succeeds.
+    """
     global _fingerprint_logged
     override = os.environ.get("GHOSTTY_VT_DLL")
     explicit = path is not None
@@ -242,6 +255,12 @@ GhosttyRenderStateRowCells = ctypes.c_void_p
 
 
 class GhosttyBuffer(ctypes.Structure):
+    """Mirrors GhosttyBuffer (types.h): a caller-provided byte buffer for a
+    write-out API. ``ptr``/``cap`` are supplied by the caller (``ptr`` may be
+    NULL with ``cap`` 0 to query the required size first); on return ``len``
+    is bytes written on GHOSTTY_SUCCESS, or the required capacity on
+    GHOSTTY_OUT_OF_SPACE. Opposite direction from GhosttyString below, which
+    is a pointer libghostty-vt hands back, not one the caller allocates."""
     _fields_ = [
         ("ptr", ctypes.POINTER(ctypes.c_uint8)),
         ("cap", ctypes.c_size_t),
@@ -261,6 +280,9 @@ class GhosttyString(ctypes.Structure):
 # ---- color.h / style.h ----
 
 class GhosttyColorRgb(ctypes.Structure):
+    """Mirrors GhosttyColorRgb (color.h): one 8-bit-per-channel RGB triple,
+    used both as a resolved cell color (see _resolve_style_color in
+    ghostty_engine.py) and inside _GhosttyStyleColorValue below."""
     _fields_ = [("r", ctypes.c_uint8), ("g", ctypes.c_uint8), ("b", ctypes.c_uint8)]
 
 
@@ -270,6 +292,11 @@ STYLE_COLOR_RGB = 2
 
 
 class _GhosttyStyleColorValue(ctypes.Union):
+    """Mirrors GhosttyStyleColorValue (style.h): the tagged union inside
+    GhosttyStyleColor. Only one field is live at a time, selected by the
+    sibling GhosttyStyleColor.tag (STYLE_COLOR_PALETTE -> palette index,
+    STYLE_COLOR_RGB -> rgb, STYLE_COLOR_NONE -> neither, read _padding as an
+    opaque 8-byte union size match with the C struct only)."""
     _fields_ = [
         ("palette", ctypes.c_uint8),
         ("rgb", GhosttyColorRgb),
@@ -278,10 +305,17 @@ class _GhosttyStyleColorValue(ctypes.Union):
 
 
 class GhosttyStyleColor(ctypes.Structure):
+    """Mirrors GhosttyStyleColor (style.h): a tagged union color -- unset
+    (STYLE_COLOR_NONE), a 256-palette index, or a direct RGB value. Used for
+    GhosttyStyle's fg_color/bg_color/underline_color below."""
     _fields_ = [("tag", ctypes.c_int), ("value", _GhosttyStyleColorValue)]
 
 
 class GhosttyStyle(ctypes.Structure):
+    """Mirrors GhosttyStyle (style.h): the full visual style of one terminal
+    cell -- colors plus bold/italic/underline/etc. flags. A "sized struct"
+    per the C API (GHOSTTY_INIT_SIZED convention): ``size`` must be set to
+    sizeof(GhosttyStyle) before passing it in, which .init() below does."""
     _fields_ = [
         ("size", ctypes.c_size_t),
         ("fg_color", GhosttyStyleColor),
@@ -312,10 +346,17 @@ POINT_TAG_HISTORY = 3
 
 
 class GhosttyPointCoordinate(ctypes.Structure):
+    """Mirrors GhosttyPointCoordinate (point.h): a column/row pair. y may
+    exceed the page size for the SCREEN/HISTORY tags below (those address
+    into scrollback, not just the active viewport)."""
     _fields_ = [("x", ctypes.c_uint16), ("y", ctypes.c_uint32)]
 
 
 class _GhosttyPointValue(ctypes.Union):
+    """Mirrors GhosttyPointValue (point.h): currently only ever holds a
+    coordinate; _padding exists solely to match the C union's declared size
+    (there is only one real variant today, unlike _GhosttyStyleColorValue
+    above which has genuinely distinct tags)."""
     _fields_ = [
         ("coordinate", GhosttyPointCoordinate),
         ("_padding", ctypes.c_uint64 * 2),
@@ -323,10 +364,17 @@ class _GhosttyPointValue(ctypes.Union):
 
 
 class GhosttyPoint(ctypes.Structure):
+    """Mirrors GhosttyPoint (point.h): a coordinate plus which of the four
+    POINT_TAG_* coordinate systems it is measured in (ACTIVE = cursor-movable
+    area, VIEWPORT = currently visible, SCREEN = active+scrollback together,
+    HISTORY = scrollback only). Built by point() below; consumed by
+    terminal_grid_ref (ghostty_engine.py's _sync_scrollback)."""
     _fields_ = [("tag", ctypes.c_int), ("value", _GhosttyPointValue)]
 
 
 def point(tag, x, y):
+    """Build a GhosttyPoint(tag, {x, y}) for one of the POINT_TAG_* constants
+    above -- the argument shape terminal_grid_ref expects."""
     p = GhosttyPoint()
     p.tag = tag
     p.value.coordinate.x = x
@@ -337,6 +385,15 @@ def point(tag, x, y):
 # ---- grid_ref.h ----
 
 class GhosttyGridRef(ctypes.Structure):
+    """Mirrors GhosttyGridRef (grid_ref.h): a resolved reference to one
+    terminal cell, obtained from ghostty_terminal_grid_ref (ghostty_engine.py
+    _sync_scrollback). ``node`` is an opaque pointer into libghostty-vt's own
+    grid storage -- never read directly, only passed back into
+    ghostty_grid_ref_cell/graphemes. Only valid until the next mutation of
+    the terminal (untracked reference, per grid_ref.h's "Untracked vs
+    Tracked" note); this file only ever uses the untracked form. A "sized
+    struct" like GhosttyStyle above: .init() sets ``size`` to
+    sizeof(GhosttyGridRef) as GHOSTTY_INIT_SIZED() requires."""
     _fields_ = [
         ("size", ctypes.c_size_t),
         ("node", ctypes.c_void_p),
@@ -352,6 +409,10 @@ class GhosttyGridRef(ctypes.Structure):
 # ---- terminal.h ----
 
 class GhosttyTerminalOptions(ctypes.Structure):
+    """Mirrors GhosttyTerminalOptions (terminal.h): the arguments to
+    ghostty_terminal_new. cols/rows must both be > 0; max_scrollback is the
+    line cap ghostty_engine converts scrollback_history_size into at
+    terminal creation (see terminal/screen.py's history_cap docstring)."""
     _fields_ = [
         ("cols", ctypes.c_uint16),
         ("rows", ctypes.c_uint16),
@@ -664,10 +725,22 @@ MOUSE_ENCODER_OPT_TRACK_LAST_CELL = 4
 
 
 class GhosttyMousePosition(ctypes.Structure):
+    """Mirrors GhosttyMousePosition (mouse/event.h): a surface-space pixel
+    position (not a grid cell) -- the coordinate mouse encoding starts
+    from before it is converted to a terminal row/column."""
     _fields_ = [("x", ctypes.c_float), ("y", ctypes.c_float)]
 
 
 class GhosttyMouseEncoderSize(ctypes.Structure):
+    """Mirrors GhosttyMouseEncoderSize (mouse/encoder.h): the renderer-size
+    context a mouse encoder needs to turn a pixel position into a cell
+    coordinate for SGR/X10 reporting -- screen_width/height are the full
+    surface in pixels, cell_width/height must be non-zero, and the four
+    padding_* fields are unused chrome around the grid (e.g. window margins)
+    to subtract before dividing by cell size. Set via
+    GHOSTTY_MOUSE_ENCODER_OPT_SIZE (see mouse_encoder_setopt_* below); built
+    by mouse_encoder_size(). A "sized struct" like GhosttyStyle/GhosttyGridRef
+    above -- ``size`` must equal sizeof(GhosttyMouseEncoderSize)."""
     _fields_ = [
         ("size", ctypes.c_size_t),
         ("screen_width", ctypes.c_uint32),
@@ -768,6 +841,17 @@ class Ghostty:
         self._bind()
 
     def _bind(self):
+        """Declare argtypes/restype for every libghostty-vt function this
+        file calls, via the local sig() helper -- ctypes.CDLL functions have
+        no signature until set, so a wrong/missing argtypes here is a
+        crashing or silently-wrong FFI call, not a Python exception.
+        One-to-one with the C declarations in include/ghostty/vt/*.h; each
+        self.<x> below is named after its ghostty_<x> C function with the
+        prefix dropped. Short local aliases for the repeated ctypes types:
+        p=c_void_p, u16=c_uint16, u32=c_uint32, sz=c_size_t, i=c_int
+        (GhosttyResult and the struct types above are used by their real
+        names). GhosttyTerminal/GhosttyRenderState/etc. (module scope, just
+        above GhosttyBuffer) are themselves c_void_p opaque handles."""
         lib = self.lib
 
         def sig(name, argtypes, restype):
@@ -1021,10 +1105,16 @@ class Ghostty:
         )
 
     def mouse_encoder_setopt_int(self, encoder, option, value):
+        """ghostty_mouse_encoder_setopt() takes a void* to the option's value
+        (its type depends on which GHOSTTY_MOUSE_ENCODER_OPT_* is passed, per
+        mouse/encoder.h) -- this wraps the int-typed options (e.g. EVENT,
+        FORMAT) so callers pass a plain Python int/enum value."""
         v = ctypes.c_int(int(value))
         self.mouse_encoder_setopt(encoder, option, ctypes.byref(v))
 
     def mouse_encoder_setopt_bool(self, encoder, option, value):
+        """Same as mouse_encoder_setopt_int above, for the bool-typed options
+        (ANY_BUTTON_PRESSED, TRACK_LAST_CELL)."""
         v = ctypes.c_bool(bool(value))
         self.mouse_encoder_setopt(encoder, option, ctypes.byref(v))
 
