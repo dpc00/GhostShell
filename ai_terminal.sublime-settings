@@ -957,6 +957,14 @@
     // at once while it was being redesigned rather than patched further.
     // Live: read fresh on every viewport write, no reload needed.
     "scroll_manipulation_enabled": true,
+    // Redraw only the lines that changed (as Terminus does) instead of
+    // rewriting the whole tab on every screen update. Rewriting everything
+    // makes Sublime move the view by itself, which shows up as the text
+    // jumping up and down while typing. Used only when the number of lines is
+    // unchanged; otherwise the whole tab is rewritten as before.
+    // False = always rewrite the whole tab (the behaviour before 2026-09-22).
+    // Live: read fresh on every redraw, no reload needed.
+    "line_diff_render_enabled": true,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {},

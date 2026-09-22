@@ -8152,6 +8152,37 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                     # the permanent host key.
                     _apply_color_regions(view, regions or [])
 
+        if not patched and text and _setting_bool("line_diff_render_enabled", True):
+            # Terminus-style redraw: replace only the lines that changed
+            # (Terminus rewrites dirty lines, never the whole buffer). A whole-
+            # buffer replace makes Sublime lose its place and move the view on
+            # its own, which the viewport fixers then fight -- the up-and-down
+            # "jiggle". Only when the line count is unchanged; otherwise fall
+            # through to the whole-buffer replace below.
+            if not cur:
+                cur = view.substr(sublime.Region(0, view.size()))
+            old_lines = cur.split("\n")
+            new_lines = text.split("\n")
+            if len(old_lines) == len(new_lines):
+                # Start offset of every old line.
+                starts = []
+                offset = 0
+                for line in old_lines:
+                    starts.append(offset)
+                    offset += len(line) + 1
+                # Last line first, so each replace leaves the offsets of the
+                # lines above it unchanged.
+                for i in range(len(old_lines) - 1, -1, -1):
+                    if old_lines[i] != new_lines[i]:
+                        start = starts[i]
+                        view.replace(
+                            edit,
+                            sublime.Region(start, start + len(old_lines[i])),
+                            new_lines[i],
+                        )
+                patched = True
+                _apply_color_regions(view, regions or [])
+
         if not patched:
             view.replace(edit, sublime.Region(0, view.size()), text)
             # Re-apply colour regions every frame: view.replace invalidates the old
