@@ -16,6 +16,7 @@
 	{"caption": "Ai Terminal: Tune Profile…", "command": "ai_terminal_tune_profile"},
 	{"caption": "Ai Terminal: Session Info...", "command": "ai_terminal_session_info"},
 	{"caption": "Ai Terminal: Nuke", "command": "ai_terminal_nuke"},
+	{"caption": "Ai Terminal: Toggle Text Edit Mode (keys and mouse to Sublime)", "command": "ai_terminal_toggle_copy_mode"},
 	{"caption": "Ai Terminal: Switch Panel...", "command": "ai_terminal_switch_panel"},
 	{"caption": "Ai Terminal: Toggle Tab ⇄ Panel", "command": "ai_terminal_toggle_panel"}
 ]

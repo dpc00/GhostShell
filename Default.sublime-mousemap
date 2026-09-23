@@ -15,5 +15,20 @@
 		"press_command": "drag_select",
 		"press_args": {"by": "lines"},
 		"context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]
+	},
+	// Wheel / two-finger trackpad: only while the tab's wheel_to_pty setting
+	// is on (context answered by AiTerminalKeyInterceptor.on_query_context).
+	// Off, these do not apply and Sublime scrolls the tab natively.
+	{
+		"button": "scroll_up",
+		"command": "ai_terminal_trackpad_scroll",
+		"args": {"direction": "up", "amount": 1},
+		"context": [{"key": "ai_terminal_wheel_to_pty", "operator": "equal", "operand": true}]
+	},
+	{
+		"button": "scroll_down",
+		"command": "ai_terminal_trackpad_scroll",
+		"args": {"direction": "down", "amount": 1},
+		"context": [{"key": "ai_terminal_wheel_to_pty", "operator": "equal", "operand": true}]
 	}
 ]

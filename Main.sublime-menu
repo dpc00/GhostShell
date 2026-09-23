@@ -311,6 +311,10 @@
             {
                 "caption": "Nuke Ai Terminal",
                 "command": "ai_terminal_nuke"
+            },
+            {
+                "caption": "Toggle Text Edit Mode (keys and mouse to Sublime)",
+                "command": "ai_terminal_toggle_copy_mode"
             }
         ]
     }
