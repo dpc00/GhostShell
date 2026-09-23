@@ -3,6 +3,11 @@
 Written 2026-09-21 from a read-only inventory (223 MB total). The owner decides; nothing here was deleted.
 "Writer" means the code that creates or appends to it (found by searching the projects and STLogs).
 
+**2026-09-23:** GhostShell's own items moved from `~/data/logs/ai_terminal*` into `~/data/logs/ghostshell/`,
+and the `ai_terminal` prefix was dropped from directory names now that the parent folder scopes them. See
+"GhostShell's own logs moved under ghostshell/" below for the mapping. Historical entries in this file below
+still use the old paths where they describe what was true when written; the current paths are in that section.
+
 ## Delete: no code writes it any more, or it was retired (nothing lost)
 
 | Path | Size | Last written | Why it is safe |
@@ -35,6 +40,27 @@ Written 2026-09-21 from a read-only inventory (223 MB total). The owner decides;
 | `developer_diagnostics_and_runtime_server_error_logs/` (`server_error.log` 2.3 MB, `post_error.log`, `server_runtime.log`) | 4.8 MB | STLogs | Old errors (Jul 28 to Aug 13). Safe to delete. It is STLogs' directory, not GhostShell's. |
 | `developer_diagnostics_and_runtime_server_error_logs/ai_diagnostics.log` | 2.5 MB | STLogs | Written today. Keep while STLogs is in use. |
 | `periodic_automatic_editor_screenshots_for_additional_context/` | empty | STLogs | A feature that produced nothing. |
+
+## GhostShell's own logs moved under ghostshell/ (2026-09-23)
+
+The owner decided `~/data/logs` itself is the location that actually gets noticed and used (proven by this
+very audit), so `AGENTS.md` rule 14's "Sublime locations only" restriction was dropped. What stayed: off by
+default, no folder or file until the owner's dev switch is on, per-file approval and documentation here (rule
+13), and a hard size cap (rule 15). GhostShell's items were moved into their own subfolder and the redundant
+`ai_terminal` prefix was dropped from directory names:
+
+| Old path | New path |
+|---|---|
+| `ai_terminal/agent_broker.log` | `ghostshell/agent_broker.log` |
+| `ai_terminal/scheme_backups/` | `ghostshell/scheme_backups/` |
+| `ai_terminal/settings_debug.log` | `ghostshell/settings_debug.log` |
+| `ai_terminal/vp_diag_id19.jsonl`, `mock_agent_cli.log`, `color_scheme.log` | `ghostshell/` (moved as-is, still dead/no writer) |
+| `ai_terminal_asciinema_casts_for_troubleshooting_rendering/` | `ghostshell/asciinema_casts_for_troubleshooting_rendering/` |
+| `ai_terminal_session_text_logs/` | `ghostshell/session_text_logs/` |
+
+`terminal/log_paths.py` (`LOG_ROOT`), `ai_terminal.py` (`_spawn_broker`, `_durable_scheme_backup`),
+`terminal/cast_recorder.py`, `terminal/raw_debug_log.py` and `terminal/session_text_log.py` were updated to
+match. `pybackup/` was left alone — it isn't GhostShell's.
 
 ## Rule for every agent (also in `AGENTS.md`)
 

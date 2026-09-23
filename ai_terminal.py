@@ -1007,6 +1007,7 @@ class _BrokerPty:
             self.resize(self._cols, self._rows)
 
     def _spawn_broker(self):
+        from terminal.log_paths import LOG_ROOT
         python_exe = _broker_python_exe()
         if not python_exe:
             raise OSError(
@@ -1028,10 +1029,7 @@ class _BrokerPty:
             "--cols", str(self._cols), "--rows", str(self._rows),
             "--scrollback-bytes", str(self._scrollback_bytes),
             "--registry-file", _broker_registry_file(self.pipe_name),
-            "--log-file", os.path.join(
-                os.path.expanduser("~"), "data", "logs", "ai_terminal",
-                "agent_broker.log",
-            ),
+            "--log-file", os.path.join(LOG_ROOT, "agent_broker.log"),
         ]
         if self._profile_name:
             broker_argv += ["--profile-name", self._profile_name]
@@ -2101,12 +2099,13 @@ def _load_scheme_from_disk():
 
 
 def _durable_scheme_backup(scheme_data):
-    """Keep a dated snapshot under ~/data/logs/ai_terminal/scheme_backups/."""
+    """Keep a dated snapshot under ~/data/logs/ghostshell/scheme_backups/."""
     try:
+        from terminal.log_paths import LOG_ROOT
         n = len(scheme_data.get("rules") or [])
         if n < 100:
             return
-        bdir = os.path.expanduser("~/data/logs/ai_terminal/scheme_backups")
+        bdir = os.path.join(LOG_ROOT, "scheme_backups")
         os.makedirs(bdir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(bdir, f"ai_terminal_{n}rules_{ts}.sublime-color-scheme")

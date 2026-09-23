@@ -17,7 +17,7 @@ import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private
 
-TEXT_LOG_DIR = os.path.join(LOG_ROOT, "ai_terminal_session_text_logs")
+TEXT_LOG_DIR = os.path.join(LOG_ROOT, "session_text_logs")
 
 # observe() only queues; the timer writes. Found live 2026-09-14: a
 # streaming tab was writing on every ~30ms render tick and freezing ST.

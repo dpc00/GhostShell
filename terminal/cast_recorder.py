@@ -16,7 +16,7 @@ import traceback
 from .log_paths import LOG_ROOT, makedirs_private, open_private, redact_secrets
 
 CAST_DIR = os.path.join(
-    LOG_ROOT, "ai_terminal_asciinema_casts_for_troubleshooting_rendering"
+    LOG_ROOT, "asciinema_casts_for_troubleshooting_rendering"
 )
 
 
