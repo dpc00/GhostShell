@@ -231,6 +231,13 @@
             "launch_command": [
                 "auggie"
             ],
+            // Auggie sets its own OSC 0/2 window title; let it rename the
+            // tab.
+            "osc_title_updates_tab": true,
+            // UNVERIFIED why close_tab_on_exit is off here specifically --
+            // carried over from the owner's personal override, reason not
+            // re-confirmed.
+            "close_tab_on_exit": false,
             "spawn_env": {}
         },
         "Bash": {
@@ -265,6 +272,13 @@
             "launch_command": [
                 "claude"
             ],
+            // Matches the mouse-tracking finding above: Claude never enables
+            // DEC mouse tracking, so forwarding clicks/wheel to the PTY has
+            // no receiver on the other end. Scroll still goes to the PTY
+            // (wheel_to_pty) since Claude Code reads it for its own history.
+            "mouse_handling": false,
+            "page_keys_to_pty": false,
+            "wheel_to_pty": true,
             "spawn_env": {}
         },
         "Claude --chrome": {
@@ -915,7 +929,11 @@
             // Requires the host to honor this flag in clamp/pin (not only
             // in the scroll_lines interceptor).
             "spawn_env": {},
-            "wheel_to_pty": false
+            "wheel_to_pty": false,
+            // UNVERIFIED why close_tab_on_exit is off here specifically --
+            // carried over from the owner's personal override, reason not
+            // re-confirmed.
+            "close_tab_on_exit": false
         },
         "WSL Bash": {
             "detachable": true,
