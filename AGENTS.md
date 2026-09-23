@@ -53,11 +53,12 @@ Read this before touching anything. These rules come from the owner. They apply 
     the owner's approval. If approved, first add it to `docs/LOG_DIRECTORIES.md` with its writer, purpose, size cap and
     retention, and keep it off by default. The owner should never have to work out what a file is or whether to keep it.
 
-14. Logging is for the owner's own installation, to find bugs. No user of the released package may ever be subjected to
-    it. In the release, logging must be off by default and create no folder or file until the owner's own dev switch
-    is turned on. Where practical the logging code is a dev-only module that the release leaves out. The release must
-    not write anywhere except Sublime's standard locations (`sublime.cache_path()`, `Packages/User`), and never to
-    `~/data` or any path that exists only on the owner's machine.
+14. Logging is for the owner's own installation, to find bugs and to review what an AI agent did. No user of the
+    released package may ever be subjected to it. In the release, logging must be off by default and create no
+    folder or file until the owner's own dev switch is turned on. Where practical the logging code is a dev-only
+    module that the release leaves out. Where the release writes is a case-by-case call, made and recorded per
+    file in `docs/LOG_DIRECTORIES.md` (rule 13) — not fixed to Sublime's own directories, which the owner has
+    found just as easy to lose track of as any other folder.
 
 15. Every log or generated file has a hard size cap, and the default cap is 32 KB. When it is reached the oldest content is
     dropped (rotate or truncate); a log never grows without limit. The owner is told a file exists before it exists

@@ -10,7 +10,7 @@ import traceback
 
 from .log_paths import LOG_ROOT, makedirs_private, open_private
 
-DEBUG_PATH = os.path.join(LOG_ROOT, "ai_terminal_raw_ansi_stream_debug_logs")
+DEBUG_PATH = os.path.join(LOG_ROOT, "raw_ansi_stream_debug_logs")
 _debug_lock = threading.Lock()
 
 

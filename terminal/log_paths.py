@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))
+LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs", "ghostshell"))
 DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
 
 
@@ -33,7 +33,7 @@ def append_log_line(filename, message):
     since losing a log line must never break a render or a settings reload.
     """
     try:
-        path = os.path.join(LOG_ROOT, "ai_terminal", filename)
+        path = os.path.join(LOG_ROOT, filename)
         makedirs_private(os.path.dirname(path))
         with open_private(path, "a", encoding="utf-8") as f:
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
