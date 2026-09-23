@@ -221,6 +221,8 @@ effect of reattachment is that the colours "come back". Mechanism (VERIFIED in c
 persistence flag, so Sublime does not keep them across a restart and they are rebuilt on the first frame after reattach.
 Expected behaviour, not a defect.
 
+**Nuke and the broker, 2026-09-22 (VERIFIED live).** Nuke (ctrl+alt+k) clears the tab and the terminal engine but not the broker's saved scrollback (`_Scrollback`, `tools/agent_broker.py`), so a reattach after a Sublime restart replays the nuked lines. **Owner's decision: leave it.** The broker copy acts as an undo for an accidental Nuke, and pressing ctrl+alt+k again after the restart clears it.
+
 ## 5. Input path: keys and mouse (VERIFIED)
 
 **Key name table: NOT a deviation.** `terminal/keys.py` opens with "Key name -> terminal byte sequences
