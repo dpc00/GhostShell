@@ -585,21 +585,18 @@ those are at least off by default; this one is always on. `_color_scheme_log` ca
 (lines 1949, 1950, 1952) are dead — that logger is the stub noted above — but the file write itself is
 real and runs regardless.
 
-**Paths still hardcoded to `~/data/logs` (VERIFIED, not fixed in this pass — rule 13 requires the owner's
-approval before moving or creating any log location, so this is recorded, not acted on).**
-- `terminal/log_paths.py:14`: `LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs"))`, a module
-  constant, used by `session_text_log.py` and `cast_recorder.py` (both gated off by default via
-  `log_tab_text`/`record_asciicast`, so at least opt-in) and by `raw_debug_log.py` (gated by the
-  `AI_TERMINAL_DEBUG` env var, not a setting — already flagged above).
-- `ai_terminal.sublime-settings:48`: `"color_scheme_log_path"` still defaults to a `~/data/logs/...` string,
-  even though the logger it feeds is now a no-op stub — the setting itself is a personal path shipped in
-  the repo's own defaults.
-- `_durable_scheme_backup`'s `~/data/logs/ai_terminal/scheme_backups` path above, the most urgent of the
-  three because it is the only one that is both hardcoded AND unconditional.
-None of these are Sublime's standard locations (`sublime.cache_path()` or `Packages/User`) as rule 14
-requires for a release. Fixing this needs a decision on where the default should point (likely
-`sublime.cache_path()`) and, for `_durable_scheme_backup` specifically, whether it should exist by default
-at all or become opt-in like its siblings — both are the owner's call before any file is touched.
+**Paths hardcoded to `~/data/logs` (VERIFIED fixed, 2026-09-23).** `terminal/log_paths.py`'s `LOG_ROOT`
+constant (used by `session_text_log.py`, `cast_recorder.py` and `raw_debug_log.py`) and
+`_durable_scheme_backup`'s scheme-backup path were both hardcoded in code. Rule 14 originally required them
+to live under Sublime's own directories (`sublime.cache_path()`/`Packages/User`); the owner instead dropped
+that restriction — `~/data/logs` is the location that actually gets noticed and used on this machine, proven
+by `docs/LOG_DIRECTORIES.md`'s own audit — and both are now driven by the `"log_root"` setting in
+`ai_terminal.sublime-settings` (`terminal/log_paths.py`'s `log_root()`/`configure_log_root()`), which ships a
+real default and raises rather than picking a silent fallback if ever blanked. `raw_debug_log.py` is still
+gated by the `AI_TERMINAL_DEBUG` env var, not a setting — that gap is unchanged, see above.
+
+The dead `"color_scheme_log_path"` setting (fed a no-op stub logger, so it did nothing) was removed entirely
+rather than fixed — see the "Logging and recording" section above.
 
 ## 10. Usage and quota scanning (VERIFIED in code; the biggest trust issue found)
 
@@ -778,7 +775,7 @@ as its own separate process, never imported into the plugin host, so editing it 
 session's own live tab): `python -m py_compile` and `python tools/agent_broker.py --help`, which re-executes the entire top-level
 kernel32 binding block (every `argtypes`/`restype` assignment) under the real Windows ctypes runtime without error.
 
-**Settings check, 2026-09-22 (VERIFIED, rule 7).** Every key in `ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile names, read as a group). Two do nothing: `terminal_font` (its own comment, `ai_terminal.sublime-settings:1033`, calls it a dead key; tabs use Sublime's global font) and `color_scheme_log_path` (its comment says null disables the log, but `terminal/color_scheme_log.py` never reads it; logging is the owner's area). **Open, owner undecided:** both left as they are. Not yet done: a live test that each routing switch in section 5 changes behaviour as its comment says.
+**Settings check, 2026-09-22 (VERIFIED, rule 7).** Every key in `ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile names, read as a group). Two did nothing: `terminal_font` (its own comment, `ai_terminal.sublime-settings:1033`, calls it a dead key; tabs use Sublime's global font) and `color_scheme_log_path` (its comment said null disables the log, but `terminal/color_scheme_log.py` never reads it; logging is the owner's area). **Resolved 2026-09-23:** `color_scheme_log_path` removed from the settings file entirely (it did nothing, so it should not have existed per rule 7). `terminal_font` is still open, owner undecided. Not yet done: a live test that each routing switch in section 5 changes behaviour as its comment says.
 
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 

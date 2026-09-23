@@ -64,11 +64,19 @@ match. `pybackup/` was left alone — it isn't GhostShell's.
 
 **Now a setting.** `~/data/logs/ghostshell` was still a location fixed in code, which is what rule 7 ("everything
 editable through a setting") exists to prevent. `terminal/log_paths.py`'s `LOG_ROOT` constant became `log_root()`
-plus `configure_log_root()`, driven by the new `"log_root"` key in `ai_terminal.sublime-settings` (empty string
-= the default). `_apply_log_root_setting()` in `ai_terminal.py` applies it at `plugin_loaded()` and on every
-settings change, so it is live — no restart needed. `terminal/cast_recorder.py`, `terminal/raw_debug_log.py`
-and `terminal/session_text_log.py` compute their subfolder from `log_root()` at the point each file is opened,
-rather than caching a path at import time, so an edit takes effect on the next log write.
+plus `configure_log_root()`, driven by the new `"log_root"` key in `ai_terminal.sublime-settings`.
+`_apply_log_root_setting()` in `ai_terminal.py` applies it at `plugin_loaded()` and on every settings change, so
+it is live — no restart needed. `terminal/cast_recorder.py`, `terminal/raw_debug_log.py` and
+`terminal/session_text_log.py` compute their subfolder from `log_root()` at the point each file is opened, rather
+than caching a path at import time, so an edit takes effect on the next log write.
+
+**2026-09-23, follow-up: no code fallback.** The first version of `log_root()` fell back to a hardcoded default
+path when the setting was empty — still a location decided in code, just one layer further down, and invisible
+in whatever settings file the owner actually opens. Removed the fallback: `log_root()` now raises if the
+`"log_root"` setting resolves empty, instead of picking a location on its own. The repo's `ai_terminal.sublime-settings`
+carries the real decided path (`"log_root": "~/data/logs/ghostshell"`) as its shipped default, so nothing breaks
+for anyone who installs the package normally — but blanking the setting (in a User override, say) now fails
+loudly the next time something tries to log, rather than silently writing somewhere unreviewed.
 
 ## Rule for every agent (also in `AGENTS.md`)
 

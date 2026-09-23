@@ -76,7 +76,6 @@ session recording, use these User settings:
     "default_profile": "Command Prompt",
     "log_tab_text": false,
     "record_asciicast": false,
-    "color_scheme_log_path": null,
     "shared_spawn_env": {},
     "profiles": {
         "Command Prompt": {
@@ -104,8 +103,9 @@ Review the defaults before running commands with sensitive output:
 
 - **Session transcripts and asciicast recording are disabled by default**
   (`log_tab_text: false`, `record_asciicast: false`). Enabling either writes
-  under `~/data/logs/ghostshell` (the `log_root` setting; empty string means
-  that default). Recordings can contain terminal output and input, including
+  under `~/data/logs/ghostshell` (the `log_root` setting's shipped value;
+  required -- blanking it makes logging fail rather than pick its own
+  location). Recordings can contain terminal output and input, including
   credentials and source code. Profiles can override these settings.
   Disabling recording does not remove existing files or disable all
   diagnostic logs.
