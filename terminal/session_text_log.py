@@ -15,9 +15,11 @@ import threading
 import time
 import traceback
 
-from .log_paths import LOG_ROOT, makedirs_private, open_private
+from .log_paths import log_root, makedirs_private, open_private
 
-TEXT_LOG_DIR = os.path.join(LOG_ROOT, "session_text_logs")
+
+def _text_log_dir():
+    return os.path.join(log_root(), "session_text_logs")
 
 # observe() only queues; the timer writes. Found live 2026-09-14: a
 # streaming tab was writing on every ~30ms render tick and freezing ST.
@@ -73,8 +75,9 @@ class SessionTextLog:
         self._write_timer = None
 
     def open(self, filename_stamp):
-        makedirs_private(TEXT_LOG_DIR)
-        path = os.path.join(TEXT_LOG_DIR, "ai_%s.log" % filename_stamp)
+        text_log_dir = _text_log_dir()
+        makedirs_private(text_log_dir)
+        path = os.path.join(text_log_dir, "ai_%s.log" % filename_stamp)
         handle = open_private(path, "w", encoding="utf-8", newline="\n")
         with self._lock:
             self.file = handle

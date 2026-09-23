@@ -11,8 +11,26 @@ import threading
 import time
 import traceback
 
-LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs", "ghostshell"))
+_DEFAULT_LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs", "ghostshell"))
+_log_root_override = None
 DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
+
+
+def log_root():
+    """Where GhostShell's own logs live. Overridden by the "log_root"
+    setting in ai_terminal.sublime-settings; see configure_log_root()."""
+    return _log_root_override or _DEFAULT_LOG_ROOT
+
+
+def configure_log_root(path):
+    """Apply the "log_root" setting's current value. Called at plugin load
+    and on every settings change; pass None (or "") to go back to the
+    default under the user's home directory."""
+    global _log_root_override
+    _log_root_override = (
+        os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+        if path else None
+    )
 
 
 def makedirs_private(path):
@@ -33,7 +51,7 @@ def append_log_line(filename, message):
     since losing a log line must never break a render or a settings reload.
     """
     try:
-        path = os.path.join(LOG_ROOT, filename)
+        path = os.path.join(log_root(), filename)
         makedirs_private(os.path.dirname(path))
         with open_private(path, "a", encoding="utf-8") as f:
             ts = time.strftime("%Y-%m-%d %H:%M:%S")

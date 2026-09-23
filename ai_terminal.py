@@ -1007,7 +1007,7 @@ class _BrokerPty:
             self.resize(self._cols, self._rows)
 
     def _spawn_broker(self):
-        from terminal.log_paths import LOG_ROOT
+        from .terminal.log_paths import log_root
         python_exe = _broker_python_exe()
         if not python_exe:
             raise OSError(
@@ -1029,7 +1029,7 @@ class _BrokerPty:
             "--cols", str(self._cols), "--rows", str(self._rows),
             "--scrollback-bytes", str(self._scrollback_bytes),
             "--registry-file", _broker_registry_file(self.pipe_name),
-            "--log-file", os.path.join(LOG_ROOT, "agent_broker.log"),
+            "--log-file", os.path.join(log_root(), "agent_broker.log"),
         ]
         if self._profile_name:
             broker_argv += ["--profile-name", self._profile_name]
@@ -2099,13 +2099,13 @@ def _load_scheme_from_disk():
 
 
 def _durable_scheme_backup(scheme_data):
-    """Keep a dated snapshot under ~/data/logs/ghostshell/scheme_backups/."""
+    """Keep a dated snapshot under the "log_root" setting's scheme_backups/."""
     try:
-        from terminal.log_paths import LOG_ROOT
+        from .terminal.log_paths import log_root
         n = len(scheme_data.get("rules") or [])
         if n < 100:
             return
-        bdir = os.path.join(LOG_ROOT, "scheme_backups")
+        bdir = os.path.join(log_root(), "scheme_backups")
         os.makedirs(bdir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(bdir, f"ai_terminal_{n}rules_{ts}.sublime-color-scheme")
@@ -3163,11 +3163,19 @@ def _resolve_secret_refs(env):
 # Same filenames, messages, and failure handling as the former inlined copies.
 
 
+def _apply_log_root_setting(settings=None):
+    """Point every GhostShell log at the "log_root" setting's folder, or
+    back at the default (~/data/logs/ghostshell) when it is empty."""
+    from .terminal.log_paths import configure_log_root
+    configure_log_root(_settings_obj(settings).get("log_root"))
+
+
 def _on_settings_change():
     """Live-apply a settings edit: swap each live terminal's history deque to
     the new cap. Column bounds are picked up by the resize poller's next
     _measure (~750ms), so nothing to do here for cols."""
     _settings_debug_log(">>> _on_settings_change CALLED")
+    _apply_log_root_setting()
     _report_profile_validation()
 
     with _term_lock():
@@ -10236,10 +10244,11 @@ def plugin_loaded():
     if not _PTY_OK:
         print("[ai_terminal] no PTY backend available; commands will report the error.")
     global _clamp_token, _settings
-    _init_dynamic_color_scheme()
     # Bind the settings object and live-apply edits (the callback fires on the
     # main thread right after a settings file write).
     _settings = sublime.load_settings(_SETTINGS_NAME)
+    _apply_log_root_setting(_settings)
+    _init_dynamic_color_scheme()
     _settings.add_on_change("ai_terminal", _on_settings_change)
     _report_profile_validation(_settings)
     # The registry deliberately survives module reloads so active ConPTY
