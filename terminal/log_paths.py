@@ -11,21 +11,28 @@ import threading
 import time
 import traceback
 
-_DEFAULT_LOG_ROOT = os.path.expanduser(os.path.join("~", "data", "logs", "ghostshell"))
 _log_root_override = None
 DEBUG = bool(os.environ.get("AI_TERMINAL_DEBUG"))
 
 
 def log_root():
-    """Where GhostShell's own logs live. Overridden by the "log_root"
-    setting in ai_terminal.sublime-settings; see configure_log_root()."""
-    return _log_root_override or _DEFAULT_LOG_ROOT
+    """Where GhostShell's own logs live. Set entirely by the "log_root"
+    setting in ai_terminal.sublime-settings -- no fallback path is picked
+    in code. Raises if the setting is empty or was never applied, so a
+    blank setting fails loudly instead of writing somewhere unreviewed."""
+    if not _log_root_override:
+        raise RuntimeError(
+            'The "log_root" setting in ai_terminal.sublime-settings is '
+            "empty -- GhostShell does not choose a log location on its "
+            "own. Set it to a real path."
+        )
+    return _log_root_override
 
 
 def configure_log_root(path):
     """Apply the "log_root" setting's current value. Called at plugin load
-    and on every settings change; pass None (or "") to go back to the
-    default under the user's home directory."""
+    and on every settings change; an empty/missing path leaves log_root()
+    raising until a real one is set."""
     global _log_root_override
     _log_root_override = (
         os.path.abspath(os.path.expandvars(os.path.expanduser(path)))

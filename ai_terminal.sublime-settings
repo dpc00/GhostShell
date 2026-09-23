@@ -42,10 +42,6 @@
     // can set "close_tab_on_exit": false to keep a tab open after exit (e.g.
     // to read a final error/update message at leisure).
     "close_tab_on_exit": true,
-    // Path for the color-scheme-scope diagnostic log. The plugin appends scope-
-    // registration and flush events here. Edit to redirect, or set null to disable
-    // color-scheme logging entirely. Changes take effect after plugin reload.
-    "color_scheme_log_path": "~/data/logs/developer_diagnostics_and_runtime_server_error_logs/color_scheme.log",
     // Live status-bar readout (follow/tui/cols×rows/vp_y) instead of reading
     // console prints after the fact -- see ai/TODO.md 2026-08-27 session.
     // Off by default (extra text in every terminal tab's status bar
@@ -127,11 +123,12 @@
     ],
     // Where GhostShell's own logs go: the broker's lifecycle log, scheme
     // backups, session text logs (log_tab_text) and asciicasts
-    // (record_asciicast). Empty string means the default,
-    // ~/data/logs/ghostshell. Set an absolute path to move it -- e.g.
+    // (record_asciicast). Required -- there is no fallback location picked
+    // in code; an empty value here makes every logger raise until it is
+    // set. Set an absolute path to move it -- e.g.
     // "%LOCALAPPDATA%\\GhostShell\\logs" (environment variables and ~ are
     // expanded). Live: takes effect on save, no restart needed.
-    "log_root": "",
+    "log_root": "~/data/logs/ghostshell",
     // Append whatever appears in an ai_terminal tab to a plain-text file
     // under log_root's session_text_logs folder. The file only grows: lines
     // that leave the live last row are appended as they go, and the last
