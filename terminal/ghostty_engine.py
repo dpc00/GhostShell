@@ -294,7 +294,11 @@ class GhosttyParser:
         self._last_scrollback_rows = -1
 
     def reset(self):
-        gvt.check(self._g.terminal_reset(self._term), "ghostty_terminal_reset")
+        # ghostty_terminal_reset returns nothing (void, ghostty_vt.py:875),
+        # so there is no result code to check. Passing its None to
+        # gvt.check() raised on every call, so Nuke (ctrl+alt+k) never
+        # cleared the engine and the old screen came back on the next paint.
+        self._g.terminal_reset(self._term)
         self._last_scrollback_rows = -1
         self._sync()
 
