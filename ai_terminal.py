@@ -3723,6 +3723,10 @@ class _Terminal:
             self._last_cols, self._last_rows = cols, rows
         # Record and render only a size applied to both the child and parser.
         self._cast("r", f"{int(cols)}x{int(rows)}")
+        # The engine rewraps on resize without marking the screen dirty, so
+        # the scheduled render returned early and the rewrapped text waited
+        # for the app's next output (measured live 2026-09-22: 1.76 s).
+        self.screen.dirty = True
         _schedule_render(self)
 
     def snapshot(self):
@@ -3923,6 +3927,24 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
                 return None
         return window.active_view()
 
+    # Window commands that change every view's width or height without any
+    # view setting changing, so _on_layout_setting_change never hears of them.
+    _LAYOUT_COMMANDS = frozenset((
+        "toggle_minimap", "toggle_side_bar", "toggle_status_bar",
+        "toggle_tabs", "toggle_menu", "set_layout", "toggle_full_screen",
+        "toggle_distraction_free",
+    ))
+
+    def on_post_window_command(self, window, command_name, args):
+        """Ask each terminal's layout watcher to re-measure right away."""
+        if command_name not in self._LAYOUT_COMMANDS:
+            return
+        with _term_lock():
+            terms = list(_term_registry().values())
+        for term in terms:
+            if term._watcher is not None:
+                term._watcher.request()
+
     def on_window_command(self, window, command_name, args):
         if command_name not in self._CLOSE_COMMANDS:
             return None
@@ -4010,9 +4032,13 @@ class _LayoutWatcher:
     # Was 250ms forever-tick. Event-driven request() + 2s poll is enough;
     # PTY resize does not need sub-second polling when the user owns the tab.
     _POLL_MS = 2000
+    # How many quick re-checks in a row _run may schedule to confirm a new
+    # size before falling back to the poll (see _run).
+    _MAX_FAST_CONFIRMS = 3
 
     def __init__(self, term):
         self.term = term
+        self._fast_confirms = 0
         self._pending = False
         self._token = None
         self._last_measure = None
@@ -4082,7 +4108,17 @@ class _LayoutWatcher:
             self._candidate = size
             self._candidate_count = 1
         if self._candidate_count < 2:
+            # Confirm a new size _DEBOUNCE_MS from now instead of on the
+            # next 2 s poll: waiting for the poll made a minimap toggle take
+            # up to 4 s to resize (measured live 2026-09-22). Capped, so a
+            # size that keeps flipping (the scrollbar case above) falls back
+            # to the poll instead of re-checking every 150 ms forever.
+            if (size != (self.term._last_cols, self.term._last_rows)
+                    and getattr(self, "_fast_confirms", 0) < self._MAX_FAST_CONFIRMS):
+                self._fast_confirms = getattr(self, "_fast_confirms", 0) + 1
+                self.request()
             return
+        self._fast_confirms = 0
         self._candidate = None
         self._candidate_count = 0
         cols, rows = size
