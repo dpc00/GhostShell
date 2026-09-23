@@ -774,6 +774,8 @@ as its own separate process, never imported into the plugin host, so editing it 
 session's own live tab): `python -m py_compile` and `python tools/agent_broker.py --help`, which re-executes the entire top-level
 kernel32 binding block (every `argtypes`/`restype` assignment) under the real Windows ctypes runtime without error.
 
+**Settings check, 2026-09-22 (VERIFIED, rule 7).** Every key in `ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile names, read as a group). Two do nothing: `terminal_font` (its own comment, `ai_terminal.sublime-settings:1033`, calls it a dead key; tabs use Sublime's global font) and `color_scheme_log_path` (its comment says null disables the log, but `terminal/color_scheme_log.py` never reads it; logging is the owner's area). **Open, owner undecided:** both left as they are. Not yet done: a live test that each routing switch in section 5 changes behaviour as its comment says.
+
 ## 13. Status summary of every deviation from Terminus (2026-09-21)
 
 | # | Deviation | Status |
