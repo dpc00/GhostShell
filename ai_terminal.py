@@ -674,6 +674,81 @@ def _broker_process_matches(pid, created_at):
         _k32.CloseHandle(handle)
 
 
+# OpenProcess failure codes (winerror.h) that _broker_confirmed_dead tells
+# apart: "no such process" is proof the broker is gone; "access denied" means
+# a live process we may not inspect, so it is never treated as dead.
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87
+
+
+def _broker_confirmed_dead(pid, created_at):
+    """True only when the broker in a registry record is certainly gone.
+
+    Stricter than `not _broker_process_matches(...)`, which also answers
+    False for a live broker it merely failed to inspect. Used to delete a
+    dead broker's leftover files, so any doubt means "not dead":
+      - no such process (OpenProcess -> ERROR_INVALID_PARAMETER), or it has
+        exited (GetExitCodeProcess != STILL_ACTIVE);
+      - the PID now belongs to another program (not python.exe/pythonw.exe);
+      - the PID was reused: that process started 5+ minutes away from the
+        record's created_at (the same window _broker_process_matches uses).
+    Access denied, a failed query, a missing PID, or a non-Windows host all
+    answer False.
+    """
+    if os.name != "nt" or _k32 is None or pid is None:
+        return False
+    try:
+        handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    except (TypeError, ValueError):
+        return False
+    if not handle:
+        return ctypes.get_last_error() == _ERROR_INVALID_PARAMETER
+    try:
+        code = DWORD(0)
+        if not _k32.GetExitCodeProcess(handle, byref(code)):
+            return False
+        if code.value != _STILL_ACTIVE:
+            return True
+        size = DWORD(260)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not _k32.QueryFullProcessImageNameW(handle, 0, buf, byref(size)):
+            return False
+        if os.path.basename(buf.value).lower() not in ("python.exe", "pythonw.exe"):
+            return True
+        if created_at is None:
+            return False
+        creation, exit_t, kernel, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+        if not _k32.GetProcessTimes(
+            handle, byref(creation), byref(exit_t), byref(kernel), byref(user)
+        ):
+            return False
+        return abs(_filetime_to_unix(creation) - float(created_at)) >= 300
+    finally:
+        _k32.CloseHandle(handle)
+
+
+def _remove_dead_broker_files(registry_path):
+    """Delete a dead broker's registry record and its saved screen.
+
+    A broker removes these itself in its own `finally` (tools/agent_broker.py
+    _remove_registry). One ended from outside -- Task Manager, a crash --
+    never gets there, and until 2026-09-22 nothing else removed them, so
+    each such session left a record plus a 2 MB .scrollback file forever
+    (found live: three from 09-18 and 09-21, two ended via Task Manager).
+    Only called after _broker_confirmed_dead.
+    """
+    root, _ext = os.path.splitext(registry_path)
+    for target in (registry_path, root + ".scrollback"):
+        try:
+            os.unlink(target)
+            print("[ai_terminal] removed dead broker file %s" % target)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            print("[ai_terminal] could not remove dead broker file %s:\n%s"
+                  % (target, traceback.format_exc()))
+
+
 def _registered_brokers(profile_name=None, cwd=None):
     """Return newest-first broker records matching a restored terminal."""
     folder = _broker_registry_dir()
@@ -697,6 +772,10 @@ def _registered_brokers(profile_name=None, cwd=None):
             if not _broker_process_matches(
                 record.get("broker_pid"), record.get("created_at")
             ):
+                if _broker_confirmed_dead(
+                    record.get("broker_pid"), record.get("created_at")
+                ):
+                    _remove_dead_broker_files(path)
                 continue
             if profile_name and record.get("profile_name") != profile_name:
                 continue

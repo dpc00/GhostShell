@@ -221,6 +221,8 @@ effect of reattachment is that the colours "come back". Mechanism (VERIFIED in c
 persistence flag, so Sublime does not keep them across a restart and they are rebuilt on the first frame after reattach.
 Expected behaviour, not a defect.
 
+**Dead brokers' files, 2026-09-22 (VERIFIED live).** A broker removes its registry record and 2 MB `.scrollback` only in its own `finally` (`tools/agent_broker.py:1220`), so one ended from outside (Task Manager, a crash) left both forever. Found: three such records from 09-18 and 09-21; the owner's own note in the 01:27 session recording confirms two were ended from Task Manager. `_registered_brokers` now removes the files of a record whose broker `_broker_confirmed_dead` proves gone (no such process, exited, a different program on the PID, or a start time 5+ minutes off); access denied or any failed query keeps the record. Live run: the three dead records and their 6 files removed, both live sessions kept and still recoverable.
+
 **Nuke and the broker, 2026-09-22 (VERIFIED live).** Nuke (ctrl+alt+k) clears the tab and the terminal engine but not the broker's saved scrollback (`_Scrollback`, `tools/agent_broker.py`), so a reattach after a Sublime restart replays the nuked lines. **Owner's decision: leave it.** The broker copy acts as an undo for an accidental Nuke, and pressing ctrl+alt+k again after the restart clears it.
 
 ## 5. Input path: keys and mouse (VERIFIED)
