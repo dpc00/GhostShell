@@ -2650,6 +2650,34 @@ def _wheel_to_pty_enabled(term):
     )
 
 
+def _app_wants_mouse(term):
+    """True when the app in this tab has requested mouse tracking (DECSET
+    9/1000/1002/1003).
+
+    GhostShell follows Ghostty here (the reference for this path, owner
+    2026-09-23): mouse events go only to an app that asked for them, in the
+    mode it asked for -- Ghostty's isMouseReporting() is its mouse-reporting
+    setting AND the terminal's requested mode (~/tools/ghostty
+    src/Surface.zig:3640). mouse_handling / wheel_to_pty are that setting;
+    this is the requested mode. An app that never asked (Claude Code,
+    PowerShell) keeps Sublime's own clicks, selection and scrolling.
+    """
+    return bool(term is not None and term.screen.mouse_tracking)
+
+
+def _mouse_goes_to_app(term):
+    """True when mouse events in this tab should go to the app now: the app
+    asked (_app_wants_mouse) and Text Edit Mode (term.copy_mode) is off.
+
+    Text Edit Mode hands the whole tab to Sublime -- keys already, and since
+    2026-09-23 the mouse too (owner's choice over a second, mouse-only
+    toggle; same role as Ghostty's toggle_mouse_reporting, one tab, in memory
+    only). The mouse_handling / wheel_to_pty settings are checked separately
+    by each caller.
+    """
+    return _app_wants_mouse(term) and not getattr(term, "copy_mode", False)
+
+
 def _page_keys_to_pty(term):
     """Whether PageUp/PageDown should reach the PTY instead of paging the
     Sublime view.
@@ -5626,6 +5654,10 @@ def _encode_pty_mouse(
 ):
     """Encode one mouse report via libghostty-vt. Empty if filtered.
 
+    Encodes in the tracking mode and format the app requested; callers only
+    get here when _mouse_goes_to_app(term) is true (Ghostty's model, see
+    _app_wants_mouse).
+
     Falls back to mouse.py only if the parser encoder is missing.
     """
     encode = getattr(getattr(term, "parser", None), "encode_mouse", None)
@@ -5740,7 +5772,7 @@ def _arm_or_cancel_copyfirst_tap(view, term, event):
             if arm is None or arm[2] != g:
                 return  # cancelled (drag or newer tap)
             t._cf_tap = None
-            if not t.screen.mouse_tracking or not t.pty.is_alive():
+            if not _mouse_goes_to_app(t) or not t.pty.is_alive():
                 return
             sgr = t.screen.mouse_sgr
             try:
@@ -5798,11 +5830,9 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
     Touchpad notes: taps are short; we auto-release quickly until motion is
     seen, then keep the hold longer for drag-grab. Double-tap window is wide.
     """
-    if not _mouse_handling_enabled(term):
+    if not _mouse_handling_enabled(term) or not _mouse_goes_to_app(term):
         return False
     mode = term.screen.mouse_tracking
-    if not mode:
-        return False
     cell = _event_to_pty_cell(view, term, event)
     if cell is None and discrete_click:
         cell = getattr(term, "_last_mouse_cell", None)
@@ -5815,6 +5845,12 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
         return False
     col, row = cell
     term._last_mouse_cell = (col, row)
+    # This click goes to the app, so Sublime never sees it and can't clear
+    # its own selection. Clear it here, as Ghostty does before reporting a
+    # click (~/tools/ghostty src/Surface.zig:3910): a selection left behind
+    # pauses this tab's painting (_selection_paint_blocked), and nothing but
+    # another Shift-click freed it (found live 2026-09-23).
+    _clear_view_selection(view, term)
     # User is interacting with the TUI chrome — don't yank viewport to bottom.
     _set_auto_follow(term, False)
     sgr = term.screen.mouse_sgr
@@ -5878,86 +5914,30 @@ def _route_mouse_click(view, term, event, *, discrete_click=False):
     return True
 
 
-def _scroll_tick_count(amount):
-    """How many fine scroll steps for one gesture (feel, not max throughput).
-
-    Keep this low: stacking PageUp×N + arrows×N + dual wheel felt jumpy even
-    when the *direction* was correct.
-    """
-    try:
-        a = abs(float(amount))
-    except (TypeError, ValueError):
-        a = 1.0
-    if a <= 0:
-        return 1
-    if a < 1.0:
-        return 1
-    if a < 2.5:
-        return 2
-    return min(3, int(round(a)))
-
-
 def _route_mouse_wheel(view, term, amount):
-    """Forward trackpad scroll to the PTY using *content-grab* semantics.
+    """Send one scroll gesture to the PTY as mouse-wheel events, nothing else.
 
-    The user drags the *text* (like grabbing the buffer), not the scroll
-    thumb. That is the opposite of the TUI scroll-button, which moves the
-    *view*:
+    Called only when wheel_to_pty is on and the app asked for the mouse
+    (_app_wants_mouse; see its two callers). Sends wheel up/down reports
+    (buttons 64/65) and never translates the wheel into arrow keys or
+    PageUp/PageDown (owner, 2026-09-22: no hidden translations).
 
-      amount > 0 → text dragged downward on screen → reveal older (above)
-      amount < 0 → text dragged upward on screen   → reveal newer (below)
-
-    Internally we still emit Page/arrow/wheel "up" for older and "down" for
-    newer; only the sign of `amount` vs finger motion is content-grab.
-
-    Feel: fine steps (wheel + arrows); one Page only on a fling.
+    Direction is content-grab: amount > 0 drags the text down and asks for
+    older history (wheel up), amount < 0 wheel down. Sublime gives no pointer
+    position for a scroll, so the report is placed at _wheel_locus.
     """
-    if not _mouse_handling_enabled(term):
-        # Single choke point: gating every caller individually missed
-        # _clamp_vp_loop's near_fit branch (fires independent of tui_like),
-        # which kept sending mouse/arrow sequences to the PTY even after the
-        # input-command interceptors were disabled. Confirmed live: SGR mouse
-        # click/release sequences ("\x1b[<0;N;M" / "m") were still present in
-        # the recorded 'i' stream for a Qwen session after that first fix.
-        return True
     try:
-        # amount > 0 → older history (keys/wheel "up")
         see_older = float(amount) > 0
     except (TypeError, ValueError):
         see_older = True
-    n = _scroll_tick_count(amount)
     _set_auto_follow(term, False)
     term._last_scroll_send_t = time.time()
-
-    win32 = 9001 in term.screen.private_modes
-    parts = []
-    if win32:
-        arrow = _encode_win32_key("up" if see_older else "down")
-    else:
-        try:
-            arrow = _get_key_code("up" if see_older else "down")
-        except (KeyError, AttributeError):
-            arrow = "\x1b[A" if see_older else "\x1b[B"
-    parts.append(arrow * n)
-    if term.screen.mouse_tracking:
-        col, row = _wheel_locus(view, term)
-        btn = _BTN_WHEEL_UP if see_older else _BTN_WHEEL_DOWN
-        parts.append(
-            "".join(
-                _encode_pty_mouse(term, btn, col, row, press=True) or ""
-                for _ in range(n)
-            )
-        )
-    if n >= 3:
-        if win32:
-            page = _encode_win32_key("pageup" if see_older else "pagedown")
-        else:
-            try:
-                page = _get_key_code("pageup" if see_older else "pagedown")
-            except (KeyError, AttributeError):
-                page = "\x1b[5~" if see_older else "\x1b[6~"
-        parts.append(page)
-    term.send_string("".join(parts))
+    col, row = _wheel_locus(view, term)
+    btn = _BTN_WHEEL_UP if see_older else _BTN_WHEEL_DOWN
+    # One scroll event from Sublime = one wheel report (one notch).
+    report = _encode_pty_mouse(term, btn, col, row, press=True) or ""
+    if report:
+        term.send_string(report)
     return True
 
 
@@ -6028,18 +6008,27 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
             # moves the app's real cursor, not just ST's own selection. Skip
             # for modifier-drags (text selection) and multi-click (word/line
             # select) -- those are never cursor-placement gestures.
-            tracked = _mouse_handling_enabled(term) and bool(term.screen.mouse_tracking)
+            tracked = _mouse_handling_enabled(term) and _mouse_goes_to_app(term)
             # Bisection gate (ai_terminal.sublime-settings): off by default --
             # see settings comment.
             if (
                 not modified
                 and not multi
                 and not tracked
+                and not term.copy_mode
                 and _setting_bool("click_to_cursor_fallback_enabled", False, profile_name=_term_profile_name(term))
             ):
                 _route_click_to_cursor_fallback(view, term, event)
-            if not _mouse_handling_enabled(term):
+            if not _mouse_handling_enabled(term) or not _mouse_goes_to_app(term):
                 return None
+            # The click below goes to the PTY and is swallowed, so Sublime
+            # never gets the mouse-down it would use to focus this pane.
+            # Focus it here, as every terminal does on a click, then send the
+            # click unchanged (found live 2026-09-23: clicks in an unfocused
+            # Claude pane with mouse_handling on never focused it).
+            window = view.window()
+            if window is not None and not _same_view(window.active_view(), view):
+                window.focus_view(view)
             raw = sublime.load_settings(_SETTINGS_NAME).get(
                 "drag_forwards_by_default", True
             )
@@ -6057,21 +6046,18 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
                     _mouse_force_release(term, view.id())
                     _arm_st_select_guard(term)
                     return None
-                if term.screen.mouse_tracking:
-                    if multi:
-                        _cancel_copyfirst_tap(term)
-                        if _route_mouse_click(
-                            view, term, event, discrete_click=True
-                        ):
-                            return ("ai_terminal_noop", {})
-                        return None
-                    # Tap vs drag: arm a delayed full PTY click; cancel if the
-                    # pointer moves to another cell (then ST keeps the select).
-                    if _arm_or_cancel_copyfirst_tap(view, term, event):
-                        return ("ai_terminal_noop", {})
-                else:
+                # mouse_handling is on and the app asked (checked above).
+                if multi:
                     _cancel_copyfirst_tap(term)
-                    _arm_st_select_guard(term)
+                    if _route_mouse_click(
+                        view, term, event, discrete_click=True
+                    ):
+                        return ("ai_terminal_noop", {})
+                    return None
+                # Tap vs drag: arm a delayed full PTY click; cancel if the
+                # pointer moves to another cell (then ST keeps the select).
+                if _arm_or_cancel_copyfirst_tap(view, term, event):
+                    return ("ai_terminal_noop", {})
                 return None
             # Mouse-first: Shift/Ctrl-drag select; plain drag → PTY when tracking.
             if modified:
@@ -6081,12 +6067,12 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
             if _route_mouse_click(view, term, event, discrete_click=multi):
                 return ("ai_terminal_noop", {})
             return None
-        # Two-finger trackpad / mouse wheel: ALWAYS swallow for terminal views.
-        # Returning None lets ST pan the view a few px; our clamp loop then
-        # snaps it back — the "tab jumps then restores" glitch.
-        # Always forward vertical scroll to the PTY (wheel if mouse tracking,
-        # else PageUp/Down) and pin the viewport so the tab never visibly pans.
-        if command_name in ("scroll_lines", "scroll_horizontally") and not _wheel_to_pty_enabled(term):
+        # Two-finger trackpad / mouse wheel with wheel_to_pty on and an app
+        # that asked for the mouse: swallow the scroll and send it to the PTY
+        # as mouse-wheel events only (_route_mouse_wheel), then pin the
+        # viewport so the tab never visibly pans. Otherwise Sublime scrolls.
+        if command_name in ("scroll_lines", "scroll_horizontally") and not (
+                _wheel_to_pty_enabled(term) and _mouse_goes_to_app(term)):
             return None
         if command_name in ("scroll_lines", "scroll_horizontally"):
             args = args or {}
@@ -6118,12 +6104,23 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
         # through custom move/move_to calls. Only ctrl+alt+c (the toggle
         # itself, bound unconditionally) still reaches this plugin while in
         # copy mode.
-        if key != "ai_terminal_copy_mode":
+        #
+        # ai_terminal_wheel_to_pty: gates Default.sublime-mousemap's
+        # scroll_up/scroll_down bindings, so the wheel/trackpad reaches
+        # ai_terminal_trackpad_scroll only while wheel_to_pty is on; off, the
+        # binding does not apply and Sublime scrolls the tab natively. Without
+        # these bindings no scroll ever reached the plugin (found live
+        # 2026-09-22: a two-finger swipe sent no scroll_lines command).
+        if key not in ("ai_terminal_copy_mode", "ai_terminal_wheel_to_pty"):
             return None
         if not view.settings().get(_VIEW_SETTING):
             return None
         term = _Terminal.from_id(view.id())
-        val = bool(term.copy_mode) if term is not None else False
+        if key == "ai_terminal_wheel_to_pty":
+            val = bool(term is not None and _wheel_to_pty_enabled(term)
+                       and _mouse_goes_to_app(term))
+        else:
+            val = bool(term.copy_mode) if term is not None else False
         if operator == sublime.OP_EQUAL:
             return val == bool(operand)
         if operator == sublime.OP_NOT_EQUAL:
@@ -7635,8 +7632,17 @@ class AiTerminalToggleCopyModeCommand(sublime_plugin.TextCommand):
     history recall or fighting a TUI's own cursor. Escape or toggling again
     exits copy mode and re-pins the viewport to the live prompt.
 
-    Bound to ctrl+alt+c inside an Ai terminal view. No menu/palette entry.
+    The mouse too (2026-09-23): while on, clicks, drags and the wheel stay
+    with Sublime even in an app that asked for the mouse (_mouse_goes_to_app)
+    -- the one-tab, in-memory hand-back Ghostty's toggle_mouse_reporting
+    gives, chosen by the owner over a separate mouse-only toggle.
+
+    Reachable from the toolbar ("Text Edit Mode: On/Off", shows the state),
+    Ai Terminal menu, Command Palette, and ctrl+alt+c inside an Ai terminal.
     """
+
+    def is_enabled(self):
+        return _Terminal.from_id(self.view.id()) is not None
 
     def run(self, edit):
         term = _Terminal.from_id(self.view.id())
@@ -8948,9 +8954,9 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
 # toggle would lie about what it does. Separate bug, out of scope for this
 # panel to paper over.
 _LIVE_TUNABLE_PROFILE_KEYS = (
-    ("mouse_handling", "Route mouse events (clicks/wheel/drag) to the PTY as DEC mouse-tracking sequences", False),
+    ("mouse_handling", "Send clicks and drags to apps that ask for the mouse, in the mode they ask for; apps that do not ask keep Sublime's clicks and selection", False),
     ("page_keys_to_pty", "Send PageUp/PageDown to the PTY instead of native Sublime scroll", False),
-    ("wheel_to_pty", "Send mouse-wheel scroll to the PTY too (defaults to following mouse_handling)", False),
+    ("wheel_to_pty", "Send the mouse wheel to apps that ask for the mouse, as wheel events (never keys); otherwise Sublime scrolls (defaults to following mouse_handling)", False),
     ("home_end_native", "Home/End go to native Sublime line/buffer navigation instead of the PTY", False),
     ("pin_viewport", "Hard-pin the viewport to the bottom whenever mouse-tracking is on (_tui_like)", True),
     ("force_tui_like", "Treat this app as a fullscreen TUI (pin viewport) even with no alt-screen/mouse-tracking DECSET", False),
@@ -9914,7 +9920,7 @@ class AiTerminalTrackpadScrollCommand(sublime_plugin.TextCommand):
             return
 
         term = _Terminal.from_id(view.id())
-        if term is None or not _wheel_to_pty_enabled(term):
+        if term is None or not (_wheel_to_pty_enabled(term) and _mouse_goes_to_app(term)):
             view.run_command("scroll_lines", {"amount": signed})
             return
 
@@ -10022,6 +10028,8 @@ def _hover_poll_tick():
         return
     if not _mouse_handling_enabled(term):
         return
+    if getattr(term, "copy_mode", False):
+        return  # Text Edit Mode: the mouse belongs to Sublime
     if int(term.screen.mouse_tracking or 0) < 1003:
         return  # clicks/drag already routed via _route_mouse_click; only "any-event" needs hover
 
