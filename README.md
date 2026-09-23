@@ -104,11 +104,11 @@ Review the defaults before running commands with sensitive output:
 
 - **Session transcripts and asciicast recording are disabled by default**
   (`log_tab_text: false`, `record_asciicast: false`). Enabling either writes
-  under `~/data/logs/ai_terminal_session_text_logs` and
-  `~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering`.
-  Recordings can contain terminal output and input, including credentials and
-  source code. Profiles can override these settings. Disabling recording does
-  not remove existing files or disable all diagnostic logs.
+  under `~/data/logs/ghostshell` (the `log_root` setting; empty string means
+  that default). Recordings can contain terminal output and input, including
+  credentials and source code. Profiles can override these settings.
+  Disabling recording does not remove existing files or disable all
+  diagnostic logs.
 - Detachable brokers retain a bounded output replay buffer and local registry
   records. Their temporary launch files include the child environment. A
   detachable session's broker process persists in the background across

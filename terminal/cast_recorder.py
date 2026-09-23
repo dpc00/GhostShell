@@ -13,11 +13,11 @@ import threading
 import time
 import traceback
 
-from .log_paths import LOG_ROOT, makedirs_private, open_private, redact_secrets
+from .log_paths import log_root, makedirs_private, open_private, redact_secrets
 
-CAST_DIR = os.path.join(
-    LOG_ROOT, "asciinema_casts_for_troubleshooting_rendering"
-)
+
+def _cast_dir():
+    return os.path.join(log_root(), "asciinema_casts_for_troubleshooting_rendering")
 
 
 class CastRecorder:
@@ -41,12 +41,13 @@ class CastRecorder:
         """Create the .cast file and write its v3 header. Raises on failure
         so the caller can report/roll back -- mirrors the old inline
         try/except in _Terminal.prepare()."""
-        makedirs_private(CAST_DIR)
+        cast_dir = _cast_dir()
+        makedirs_private(cast_dir)
         self._t0 = time.time()
         self._last = self._t0
         stamp = filename_stamp or time.strftime("%Y-%m-%d_%H%M%S")
         fname = f"ai_{stamp}.cast"
-        path = os.path.join(CAST_DIR, fname)
+        path = os.path.join(cast_dir, fname)
         header = {
             "version": 3,
             "term": {

@@ -62,6 +62,14 @@ default, no folder or file until the owner's dev switch is on, per-file approval
 `terminal/cast_recorder.py`, `terminal/raw_debug_log.py` and `terminal/session_text_log.py` were updated to
 match. `pybackup/` was left alone — it isn't GhostShell's.
 
+**Now a setting.** `~/data/logs/ghostshell` was still a location fixed in code, which is what rule 7 ("everything
+editable through a setting") exists to prevent. `terminal/log_paths.py`'s `LOG_ROOT` constant became `log_root()`
+plus `configure_log_root()`, driven by the new `"log_root"` key in `ai_terminal.sublime-settings` (empty string
+= the default). `_apply_log_root_setting()` in `ai_terminal.py` applies it at `plugin_loaded()` and on every
+settings change, so it is live — no restart needed. `terminal/cast_recorder.py`, `terminal/raw_debug_log.py`
+and `terminal/session_text_log.py` compute their subfolder from `log_root()` at the point each file is opened,
+rather than caching a path at import time, so an edit takes effect on the next log write.
+
 ## Rule for every agent (also in `AGENTS.md`)
 
 No agent may create a log file, log directory or output location, or move an existing one, without the owner's

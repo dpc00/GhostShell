@@ -125,13 +125,20 @@
     "launch_command": [
         "cmd.exe"
     ],
+    // Where GhostShell's own logs go: the broker's lifecycle log, scheme
+    // backups, session text logs (log_tab_text) and asciicasts
+    // (record_asciicast). Empty string means the default,
+    // ~/data/logs/ghostshell. Set an absolute path to move it -- e.g.
+    // "%LOCALAPPDATA%\\GhostShell\\logs" (environment variables and ~ are
+    // expanded). Live: takes effect on save, no restart needed.
+    "log_root": "",
     // Append whatever appears in an ai_terminal tab to a plain-text file
-    // under ~/data/logs/ai_terminal_session_text_logs. The file only grows:
-    // lines that leave the live last row are appended as they go, and the
-    // last row is written when the session closes. Point an agent at this
-    // file to review what showed up in that tab, regardless of which
-    // CLI/agent was running -- this operates below the application layer,
-    // so it works identically for cmd, bash, PowerShell, or any profile.
+    // under log_root's session_text_logs folder. The file only grows: lines
+    // that leave the live last row are appended as they go, and the last
+    // row is written when the session closes. Point an agent at this file
+    // to review what showed up in that tab, regardless of which CLI/agent
+    // was running -- this operates below the application layer, so it
+    // works identically for cmd, bash, PowerShell, or any profile.
     //
     // Off by default for a public release. Set true globally, or set
     // "log_tab_text": true on a specific profile, to opt in.
@@ -920,7 +927,7 @@
         }
     },
     // Record every ai_terminal session as an asciicast v3 file under
-    // ~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering.
+    // log_root's asciinema_casts_for_troubleshooting_rendering folder.
     // Off by default for a public release; set true globally, or set
     // "record_asciicast": true on a specific profile, to opt in. Legacy
     // per-profile AI_TERMINAL_LOG_LINES values remain supported but are

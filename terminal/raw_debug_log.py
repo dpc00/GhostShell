@@ -8,16 +8,20 @@ import os
 import threading
 import traceback
 
-from .log_paths import LOG_ROOT, makedirs_private, open_private
+from .log_paths import log_root, makedirs_private, open_private
 
-DEBUG_PATH = os.path.join(LOG_ROOT, "raw_ansi_stream_debug_logs")
 _debug_lock = threading.Lock()
+
+
+def _debug_path():
+    return os.path.join(log_root(), "raw_ansi_stream_debug_logs")
 
 
 def debug_log(data):
     try:
-        makedirs_private(DEBUG_PATH)
-        with open_private(os.path.join(DEBUG_PATH, "raw.log"), "ab") as f:
+        debug_path = _debug_path()
+        makedirs_private(debug_path)
+        with open_private(os.path.join(debug_path, "raw.log"), "ab") as f:
             with _debug_lock:
                 f.write(data)
     except OSError:
