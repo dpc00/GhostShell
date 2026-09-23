@@ -29,41 +29,63 @@ from ctypes.wintypes import BOOL, DWORD, FILETIME, HANDLE, LPCWSTR, SHORT, WORD
 if sys.platform != "win32":
     sys.exit("attach_console.py is Windows-only (named pipes).")
 
+# --- Win32 constants (values from the Windows SDK headers named per group) ---
+# CreateFileW access rights (winnt.h): read the broker's output pipe, write
+# its input and control pipes.
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
+# CreateFileW creation disposition (fileapi.h): open a pipe that must already
+# exist (the broker created it); never create one.
 _OPEN_EXISTING = 3
+# What CreateFileW returns on failure: the HANDLE value -1.
 _INVALID_HANDLE_VALUE = HANDLE(-1).value
-_ERROR_PIPE_BUSY = 231
-_ERROR_BROKEN_PIPE = 109
-_ERROR_HANDLE_EOF = 38
-_ERROR_NO_DATA = 232
-_ERROR_FILE_NOT_FOUND = 2
+# GetLastError codes (winerror.h) this file reacts to:
+_ERROR_PIPE_BUSY = 231       # every pipe instance has a client; wait and retry
+_ERROR_BROKEN_PIPE = 109     # the broker closed its end; stop relaying
+_ERROR_HANDLE_EOF = 38       # end of data on the pipe; stop relaying
+_ERROR_NO_DATA = 232         # the pipe is being closed; stop relaying
+_ERROR_FILE_NOT_FOUND = 2    # the pipe does not exist (yet); retry until timeout
+# GetExitCodeProcess result while the process is still running (minwinbase.h).
 _STILL_ACTIVE = 259
+# OpenProcess access right (winnt.h): the least access that still allows
+# GetExitCodeProcess, QueryFullProcessImageNameW and GetProcessTimes.
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# GetStdHandle selectors (processenv.h): this console's keyboard and screen.
 _STD_INPUT_HANDLE = -10
 _STD_OUTPUT_HANDLE = -11
-_ENABLE_PROCESSED_INPUT = 0x0001
-_ENABLE_LINE_INPUT = 0x0002
-_ENABLE_ECHO_INPUT = 0x0004
-_ENABLE_MOUSE_INPUT = 0x0010
-_ENABLE_EXTENDED_FLAGS = 0x0080
-_ENABLE_QUICK_EDIT_MODE = 0x0040
-_ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
-_ENABLE_PROCESSED_OUTPUT = 0x0001
-_ENABLE_WRAP_AT_EOL_OUTPUT = 0x0002
-_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-_ENABLE_DISABLE_NEWLINE_AUTO_RETURN = 0x0008
+# Console INPUT mode flags (consoleapi.h), see _enable_raw_vt for which are
+# cleared and set:
+_ENABLE_PROCESSED_INPUT = 0x0001          # console handles Ctrl+C itself
+_ENABLE_LINE_INPUT = 0x0002               # ReadFile waits for Enter
+_ENABLE_ECHO_INPUT = 0x0004               # console echoes typed keys
+_ENABLE_MOUSE_INPUT = 0x0010              # report mouse events as input
+_ENABLE_EXTENDED_FLAGS = 0x0080           # required to change QUICK_EDIT
+_ENABLE_QUICK_EDIT_MODE = 0x0040          # mouse selects text in the console
+_ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200   # keys arrive as VT escape bytes
+# Console OUTPUT mode flags (consoleapi.h), all set by _enable_raw_vt:
+_ENABLE_PROCESSED_OUTPUT = 0x0001             # act on control characters
+_ENABLE_WRAP_AT_EOL_OUTPUT = 0x0002           # wrap at the right edge
+_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004  # interpret VT escape sequences
+_ENABLE_DISABLE_NEWLINE_AUTO_RETURN = 0x0008  # LF moves down only, like a VT
+# Code page for SetConsoleCP/SetConsoleOutputCP: UTF-8, so bytes relayed from
+# the broker are shown as the child wrote them.
 _CP_UTF8 = 65001
 
 
+# Win32 COORD (wincontypes.h): a column/row pair in the console buffer.
 class _COORD(Structure):
     _fields_ = [("X", SHORT), ("Y", SHORT)]
 
 
+# Win32 SMALL_RECT (wincontypes.h): the visible window inside the console
+# buffer, inclusive on all four sides.
 class _SMALL_RECT(Structure):
     _fields_ = [("Left", SHORT), ("Top", SHORT), ("Right", SHORT), ("Bottom", SHORT)]
 
 
+# Win32 CONSOLE_SCREEN_BUFFER_INFO (wincon.h), filled by
+# GetConsoleScreenBufferInfo. Only srWindow is used: _console_size turns it
+# into the visible columns x rows sent to the broker as RESIZE.
 class _CONSOLE_SCREEN_BUFFER_INFO(Structure):
     _fields_ = [
         ("dwSize", _COORD),
@@ -74,17 +96,29 @@ class _CONSOLE_SCREEN_BUFFER_INFO(Structure):
     ]
 
 
+# kernel32.dll, the Win32 base API. use_last_error=True keeps each call's
+# GetLastError value for ctypes.get_last_error(), which connect() and the
+# pumps read to tell a busy or closed pipe from a real failure.
+# argtypes/restype are declared for every function so ctypes passes 64-bit
+# HANDLEs and pointers correctly instead of guessing int.
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+# Named-pipe CLIENT group (fileapi.h, namedpipeapi.h): open the broker's
+# pipes by name (\\.\pipe\NAME, NAME-in, NAME-ctl), read and write bytes on
+# them, close them, and wait for a busy pipe to free an instance.
 _k32.CreateFileW.argtypes = [LPCWSTR, DWORD, DWORD, c_void_p, DWORD, DWORD, HANDLE]
 _k32.CreateFileW.restype = HANDLE
 _k32.ReadFile.argtypes = [HANDLE, POINTER(c_char), DWORD, POINTER(DWORD), c_void_p]
-_k32.ReadFile.restype = ctypes.c_int
+_k32.ReadFile.restype = BOOL
 _k32.WriteFile.argtypes = [HANDLE, ctypes.c_char_p, DWORD, POINTER(DWORD), c_void_p]
-_k32.WriteFile.restype = ctypes.c_int
+_k32.WriteFile.restype = BOOL
 _k32.CloseHandle.argtypes = [HANDLE]
-_k32.CloseHandle.restype = ctypes.c_int
+_k32.CloseHandle.restype = BOOL
 _k32.WaitNamedPipeW.argtypes = [LPCWSTR, DWORD]
-_k32.WaitNamedPipeW.restype = ctypes.c_int
+_k32.WaitNamedPipeW.restype = BOOL
+# Console group (processenv.h, consoleapi.h, wincon.h): get this window's
+# keyboard and screen handles, switch them to raw VT mode and back, read the
+# visible size for RESIZE, set UTF-8, and stop Ctrl+C from killing the relay
+# so the byte 0x03 reaches the child instead.
 _k32.GetStdHandle.argtypes = [ctypes.c_int]
 _k32.GetStdHandle.restype = HANDLE
 _k32.GetConsoleMode.argtypes = [HANDLE, POINTER(DWORD)]
@@ -101,6 +135,9 @@ _k32.SetConsoleOutputCP.argtypes = [DWORD]
 _k32.SetConsoleOutputCP.restype = BOOL
 _k32.SetConsoleCtrlHandler.argtypes = [c_void_p, BOOL]
 _k32.SetConsoleCtrlHandler.restype = BOOL
+# Process-check group (processthreadsapi.h, winbase.h): used only by
+# _pid_is_alive and _broker_process_matches to confirm a registry record's
+# broker_pid is still the same live python broker, not a recycled PID.
 _k32.OpenProcess.argtypes = [DWORD, BOOL, DWORD]
 _k32.OpenProcess.restype = HANDLE
 _k32.GetExitCodeProcess.argtypes = [HANDLE, POINTER(DWORD)]
@@ -114,7 +151,9 @@ _k32.GetProcessTimes.restype = BOOL
 
 
 def _pid_is_alive(pid):
+    """True if a process with this PID exists and has not exited."""
     try:
+        # Least-privilege handle: enough for GetExitCodeProcess below.
         handle = _k32.OpenProcess(
             _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
         )
@@ -123,8 +162,9 @@ def _pid_is_alive(pid):
               file=sys.stderr)
         return False
     if not handle:
-        return False
+        return False  # no such process, or not ours to open
     try:
+        # Exit code STILL_ACTIVE (259) means the process is still running.
         code = DWORD(0)
         return bool(_k32.GetExitCodeProcess(handle, byref(code))) and (
             code.value == _STILL_ACTIVE
@@ -137,6 +177,8 @@ _EPOCH_AS_FILETIME = 116444736000000000  # 1601-01-01 -> 1970-01-01, in 100ns un
 
 
 def _filetime_to_unix(ft):
+    """Win32 FILETIME (100 ns ticks since 1601, split in two 32-bit halves)
+    to Unix seconds, to compare with the registry's created_at."""
     value = (ft.dwHighDateTime << 32) | ft.dwLowDateTime
     return (value - _EPOCH_AS_FILETIME) / 10000000.0
 
@@ -163,6 +205,9 @@ def _broker_process_matches(pid, created_at):
     if not handle:
         return False
     try:
+        # Full path of the process's .exe. 260 = MAX_PATH; size is in and
+        # out (buffer length in, characters written out). Flag 0 = Win32
+        # path format.
         size = DWORD(260)
         buf = ctypes.create_unicode_buffer(size.value)
         if not _k32.QueryFullProcessImageNameW(handle, 0, buf, byref(size)):
@@ -172,6 +217,7 @@ def _broker_process_matches(pid, created_at):
             return False
         if created_at is None:
             return True
+        # GetProcessTimes fills all four; only the creation time is used.
         creation = FILETIME()
         exit_t = FILETIME()
         kernel = FILETIME()
@@ -179,7 +225,8 @@ def _broker_process_matches(pid, created_at):
         if not _k32.GetProcessTimes(
             handle, byref(creation), byref(exit_t), byref(kernel), byref(user)
         ):
-            return True
+            return True  # can't read the start time; the exe check passed
+        # Same broker if it started within 5 minutes of its registry record.
         started = _filetime_to_unix(creation)
         return abs(started - float(created_at)) < 300
     finally:
@@ -230,8 +277,15 @@ def find_sessions():
 
 
 def connect(path, access, timeout_s=10.0):
+    """Open one broker pipe as a client, retrying until timeout_s.
+
+    Retries while the pipe is busy (another client holds every instance) or
+    not created yet; any other error is raised at once.
+    """
     deadline = time.time() + timeout_s
     while True:
+        # Arguments: pipe path, read or write access, no sharing, default
+        # security, open an existing pipe only, no flags, no template file.
         h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, 0, None)
         if h != _INVALID_HANDLE_VALUE:
             return h
@@ -239,6 +293,7 @@ def connect(path, access, timeout_s=10.0):
         if time.time() > deadline:
             raise ctypes.WinError(err)
         if err == _ERROR_PIPE_BUSY:
+            # Block up to 2 s for an instance to free, then try again.
             _k32.WaitNamedPipeW(path, 2000)
         elif err == _ERROR_FILE_NOT_FOUND:
             time.sleep(0.2)
@@ -271,6 +326,8 @@ def connect_output(pipe_name):
         raise output_error
 
     try:
+        # One Ctrl+L byte on the input pipe; WriteFile reports the bytes
+        # written through `written`, and None = no overlapped I/O.
         written = DWORD(0)
         redraw = b"\x0c"
         if not _k32.WriteFile(h_in, redraw, len(redraw), byref(written), None):
@@ -283,6 +340,11 @@ def connect_output(pipe_name):
 
 
 def _console_size(h_out):
+    """Visible (columns, rows) of this console window, or None if unknown.
+
+    srWindow is the visible part of the (possibly taller) console buffer;
+    its edges are inclusive, hence the +1.
+    """
     info = _CONSOLE_SCREEN_BUFFER_INFO()
     if not _k32.GetConsoleScreenBufferInfo(h_out, byref(info)):
         return None
@@ -294,6 +356,9 @@ def _console_size(h_out):
 
 
 def _send_resize(h_ctl, cols, rows):
+    """Tell the broker the new size over its control pipe ("RESIZE c r\\n",
+    the same line ai_terminal.py sends). Result ignored: a lost resize
+    only leaves the old size until the next change."""
     if h_ctl is None:
         return
     line = ("RESIZE %d %d\n" % (cols, rows)).encode("utf-8")
@@ -302,6 +367,8 @@ def _send_resize(h_ctl, cols, rows):
 
 
 def _enable_raw_vt(h_in, h_out):
+    """Put this console in raw VT mode; return the old (input, output) modes
+    so main() can restore them on exit."""
     in_mode = DWORD(0)
     out_mode = DWORD(0)
     if not _k32.GetConsoleMode(h_in, byref(in_mode)):
@@ -348,7 +415,12 @@ def _enable_raw_vt(h_in, h_out):
 
 
 def _pump_output(handle, h_con_out, stop_evt):
-    buf = (c_char * 4096)()
+    """Copy the broker's output pipe to this console until either side ends.
+
+    WriteFile to the console handle is the direct path; if it fails (output
+    redirected, no console) the bytes go to sys.stdout instead.
+    """
+    buf = (c_char * 4096)()  # 4 KB read buffer
     n = DWORD(0)
     while not stop_evt.is_set():
         ok = _k32.ReadFile(handle, buf, 4096, byref(n), None)
@@ -369,7 +441,12 @@ def _pump_output(handle, h_con_out, stop_evt):
 
 
 def _pump_input(h_con_in, h_in, stop_evt):
-    buf = (c_char * 256)()
+    """Copy raw keyboard bytes from this console to the broker's input pipe.
+
+    In raw VT mode ReadFile returns keys as soon as they are typed, already
+    encoded as VT bytes, so they are forwarded unchanged.
+    """
+    buf = (c_char * 256)()  # keystrokes arrive in small bursts
     n = DWORD(0)
     while not stop_evt.is_set():
         ok = _k32.ReadFile(h_con_in, buf, 256, byref(n), None)
@@ -382,6 +459,13 @@ def _pump_input(h_con_in, h_in, stop_evt):
 
 
 def _watch_resize(h_con_out, h_ctl, stop_evt):
+    """Send the console size once, then again whenever it changes.
+
+    A 250 ms poll. Windows reports console size changes only as
+    WINDOW_BUFFER_SIZE_EVENT records through ReadConsoleInput; the raw
+    ReadFile loop in _pump_input never sees them, so there is no event here
+    to wait on instead (rule 10).
+    """
     last = _console_size(h_con_out)
     if last is not None:
         _send_resize(h_ctl, last[0], last[1])
@@ -434,6 +518,7 @@ def main():
     print("[attach] connected to \\\\.\\pipe\\%s (+ -in) -- close this window "
           "to detach (session keeps running)" % pipe_name, file=sys.stderr)
 
+    # This console's own keyboard and screen handles.
     h_con_in = _k32.GetStdHandle(_STD_INPUT_HANDLE)
     h_con_out = _k32.GetStdHandle(_STD_OUTPUT_HANDLE)
     saved = None
@@ -462,6 +547,7 @@ def main():
     finally:
         stop_evt.set()
         if saved is not None:
+            # Give the window back its normal (cooked) console modes.
             _k32.SetConsoleMode(h_con_in, saved[0])
             _k32.SetConsoleMode(h_con_out, saved[1])
         print("\n[attach] detached (session keeps running)", file=sys.stderr)
