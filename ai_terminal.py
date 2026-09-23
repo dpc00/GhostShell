@@ -9741,9 +9741,19 @@ class AiTerminalNukeCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
         view = self.view
+        term = _Terminal.from_id(view.id())
+        # Save what the tab shows into the session text log first; clearing
+        # it would otherwise drop those lines from the log (see
+        # SessionTextLog.keep_current_tab).
+        log = getattr(term, "_text_log", None) if term else None
+        if log is not None and hasattr(log, "keep_current_tab"):
+            try:
+                log.keep_current_tab()
+            except OSError:
+                print("[ai_terminal] nuke: saving tab to text log failed:\n%s"
+                      % traceback.format_exc())
         view.set_read_only(False)
         view.replace(edit, sublime.Region(0, view.size()), "")
-        term = _Terminal.from_id(view.id())
         if term:
             with term._lock:
                 if hasattr(term.parser, "reset"):

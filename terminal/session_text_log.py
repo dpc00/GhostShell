@@ -163,6 +163,22 @@ class SessionTextLog:
                 _stats["write_seconds_max"] = elapsed
         self._dirty = False
 
+    def keep_current_tab(self):
+        """Move everything the tab shows now into the kept lines.
+
+        For a tab that is about to be cleared (Nuke, ctrl+alt+k). The next
+        paint cannot be lined up with a blank screen, so without this every
+        line on the tab at that moment was dropped from the log instead of
+        kept (found live 2026-09-22).
+        """
+        with self._lock:
+            if self.file is None or not self._prev:
+                return
+            self._kept.extend(self._prev)
+            self._prev = []
+            self._dirty = True
+            self._write_tab_locked()
+
     def flush_live_lines(self, lines):
         self.observe(lines)
 
