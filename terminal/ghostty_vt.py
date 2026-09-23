@@ -233,7 +233,9 @@ class GhosttyError(RuntimeError):
         self.call = call
         self.result = result
         super().__init__(
-            "%s failed: %s (%d)"
+            # %s, not %d: result can be None (a void call passed to check()
+            # by mistake), and %d then crashed while building this message.
+            "%s failed: %s (%s)"
             % (call, _RESULT_NAMES.get(result, "unknown result"), result)
         )
 
