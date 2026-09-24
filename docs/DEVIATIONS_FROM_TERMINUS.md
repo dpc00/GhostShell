@@ -252,10 +252,34 @@ fallback (`_route_click_to_cursor_fallback`, per `ai/RECOVERY_PLAN.md`) that sen
 the cursor of apps with NO mouse tracking. Since 2026-09-18 `mouse.py` uses the native
 `GhosttyMouseEncoder` and keeps the hand-written encoder only as a fallback.
 
-**Open items.** `terminal/mouse.py` imports `ctypes`; rule 5 (every ctypes line documented) has not been
-audited. The per-profile routing switches (`mouse_handling`, `wheel_to_pty`, `page_keys_to_pty`) exist
-to serve those audited per-agent differences, but Grok (2026-09-19) found some of the 16 gates
-ignored on the alt-screen path (see section 1). Justified in intent, not yet checked gate by gate.
+**Routing switches, gate-by-gate (VERIFIED code read 2026-09-23; no live session open in Sublime
+at check time).** Each switch is a real read with real callers — not a dead settings key:
+
+| Setting / helper | Default | Where it is read | What it actually does |
+|---|---|---|---|
+| `mouse_handling` via `_mouse_handling_enabled` | global False; profile can set True | 9 call sites: click/drag path (`_route_mouse_click`, force-release, full-click, interceptor), `_tui_like` (with tracking), wheel-context sibling, Settings-panel live list | Off → no click/drag bytes to PTY; click-to-cursor fallback may still run. On → PTY reports only when `_mouse_goes_to_app` is also true |
+| `wheel_to_pty` via `_wheel_to_pty_enabled` | falls back to `mouse_handling` | 3 call sites: `scroll_lines` interceptor, `on_query_context` for mousemap `ai_terminal_wheel_to_pty`, `AiTerminalTrackpadScrollCommand` | Off → Sublime scrolls the tab. On + app asked → wheel reports only (never arrow/page keys), then dip-only pin |
+| `page_keys_to_pty` via `_page_keys_to_pty` | None → True if `_tui_like`, else False | keypress PageUp/PageDown branch; Settings-panel live list | Off → `_page_scroll` on the Sublime view. On / TUI-like → key bytes to PTY |
+| `_app_wants_mouse` | n/a (screen state) | mode gate inside `_mouse_goes_to_app` and docs on encode/wheel | True only when `screen.mouse_tracking` is set (DEC 9/1000/1002/1003) |
+| `_mouse_goes_to_app` | n/a | every mouse send path | `_app_wants_mouse` AND not Text Edit Mode (`copy_mode`) |
+| `pin_viewport` via `_pin_viewport_enabled` | True | only inside `_tui_like` | Lets a mouse-tracking app keep real scrollback without the hard TUI pin (gotui case in the docstring) |
+| `home_end_native` via `_home_end_native_enabled` | False | keypress Home/End branch | True → Sublime move_to; False → PTY. Deliberately not tied to mouse flags |
+| `force_tui_like` | False | end of `_tui_like` | Profile can force TUI pin without alt-screen/tracking |
+| `drag_forwards_by_default` | True (global) | drag_select branch | Mouse-first vs copy-first drag policy when tracking is on |
+| `click_to_cursor_fallback_enabled` | False | untracked plain click path | Synthesized arrows on the live prompt row only |
+
+**Alt-screen + gates (the 2026-09-19 concern).** `_tui_like` is True on alt-screen regardless of
+`mouse_handling` (`ai_terminal.py` `_tui_like`: `if term.screen.alt_screen: return True`). That still
+drives page-key default-to-PTY and dip-only pin behaviour. It does **not** bypass `mouse_handling` /
+`wheel_to_pty` / `_mouse_goes_to_app` on the click and wheel paths — those still require the setting
+and (for send) an app that asked. The earlier "gates ignored on alt-screen" reading was about the
+old hard pin fighting the Settings panel (section 8), not about mouse bytes being forced through.
+
+**`terminal/mouse.py` ctypes (rule 5), done 2026-09-23.** Every `ctypes` use is the Ghostty mouse-
+encoder FFI only: `byref` out-params for `mouse_encoder_new` / `mouse_event_new` / encoder size /
+encode written-count, plus `create_string_buffer` / `c_size_t` for the output bytes. Each line now
+has a purpose comment naming the C API. Reloaded cleanly in the running Sublime plugin host
+(`importlib.reload` on `GhostShell.terminal.mouse`).
 
 **Mouse routing follows Ghostty, 2026-09-23 (VERIFIED live; owner's design).** Terminus forwards no mouse events at all (`terminus/mouse.py`: a plain click only moves the cursor), so this whole path is a GhostShell deviation; its reference is now Ghostty (`~/tools/ghostty`), which cmux uses unchanged. Rules: (1) mouse events go only to an app that asked for them, in its own mode (`_app_wants_mouse`, like Ghostty's `isMouseReporting()`, `src/Surface.zig:3640`); `mouse_handling` / `wheel_to_pty` are the settings and their labels say exactly this. (2) The wheel goes to such an app as wheel events only, never arrow or page keys (the old translation is removed), and the mousemap now binds `scroll_up`/`scroll_down`, without which no scroll ever reached the plugin. (3) A click sent to the app first clears Sublime's selection (Ghostty `Surface.zig:3910`); before, a selection left behind froze painting. (4) A click that goes to the app first focuses its pane. (5) Text Edit Mode (`copy_mode`, Ctrl+Alt+C) hands the mouse back to Sublime as well as the keys, for one tab, in memory: Ghostty's `toggle_mouse_reporting` role, chosen by the owner over a separate mouse toggle; reachable from the toolbar (shows the state), the Ai Terminal menu and the Command Palette. Shift/Ctrl/Alt are not used as a mouse escape hatch (owner: they belong to Sublime's text selection). An intermediate "always send, even if the app did not ask" design (2026-09-22) was tried and dropped: no terminal does it, and the apps that did not ask just ignored the events. Evidence: PowerShell received clicks and wheel steps as Windows mouse events through ConPTY, each at its sent timestamp; direct calls on a Claude tab (switch on, app not asking) and a real Vibe tab (asking, tracking 1003) gave the expected routing; the owner confirmed focus-on-click, the menu item and the toolbar toggle live. A test click aimed at column 5 that encoded as column 1 was checked 2026-09-23 and is not a bug: the aim was on a row shorter than 5 characters, where `text_point(row, 5)` lands on a later line. `_event_to_pty_cell` round-trips exactly where the point exists (columns 0, 5, 20 -> cells 1, 6, 21), for a visible and a hidden tab alike.
 
@@ -302,11 +326,18 @@ characters differ, it patches those characters instead (`fast_caret`, lines 8767
 - 08-17/18: `_compensate_trim_scroll` added to compensate for history eviction drift that the
   whole-buffer replace exposes (transcript claim; `f6b8ecd` cited there is NOT found in either repo, UNVERIFIED).
 
-**Justification: NONE RECORDED. This is an inherited design, not a chosen one.** The whole-buffer rewrite
-came from a first version written for one agent, and nothing in git or `ai/` shows it being weighed
-against Terminus's dirty-line update, even after `pyte` (which provides dirty lines) was adopted. The
-records also show it is the mechanism behind the trim-and-shift viewport problem (section 1).
-Status: an unjustified deviation. It needs a decision, not a defence.
+**Justification: NONE RECORDED for the original whole-buffer design.** It came from a first version
+written for one agent, and nothing in git or `ai/` shows it being weighed against Terminus's dirty-line
+update, even after `pyte` (which provides dirty lines) was adopted. It was the mechanism behind the
+trim-and-shift viewport problem (section 1).
+
+**Decision taken 2026-09-22 (code + live measure, not a recovered old reason):** default path is now
+Terminus-shaped line diff (`line_diff_render_enabled`, default true) plus `steady_screen_height_enabled`
+and `compensate_trim_while_following` false. Whole-buffer replace remains as the fallback when the line
+diff is off or cannot apply. Native per-row dirty flags are still collapsed to a bool in
+`ghostty_engine.py` (feasibility notes below still apply if someone wants to go further). Status: the
+unjustified whole-buffer-as-default deviation is closed by choosing the line-diff default; further
+native-dirty work is optional hardening, not an open "needs a decision" defect.
 
 **Partly fixed, 2026-09-22 (VERIFIED live).** New setting `line_diff_render_enabled` (default true): each frame replaces
 only the lines that differ, last line first, as Terminus does. Lines added or removed at the end are inserted or erased
@@ -598,6 +629,13 @@ gated by the `AI_TERMINAL_DEBUG` env var, not a setting — that gap is unchange
 The dead `"color_scheme_log_path"` setting (fed a no-op stub logger, so it did nothing) was removed entirely
 rather than fixed — see the "Logging and recording" section above.
 
+**Still open for the owner (2026-09-23 audit close-out).** `_durable_scheme_backup` (`ai_terminal.py:2101`)
+still runs on every scheme save with ≥100 rules: no settings key, no env gate. Path is now under `log_root`,
+and only the newest file is kept, but the write itself is still unconditional for every install. Needs a
+decision: opt-in setting (default off for release), or accept as always-on recovery for the growing scheme
+file (section 7). Not changed in this pass — rule 13 requires owner approval before altering log writers.
+
+
 ## 10. Usage and quota scanning (VERIFIED in code; the biggest trust issue found)
 
 **Terminus.** Nothing comparable.
@@ -669,15 +707,27 @@ Found while doing this, not touched: these names in `ai_terminal.py` were alread
 `_pin_viewport_rest`, `_sublime_view_info_lines`, `_vp_pan_to_tui_scroll`; and three `_CREATE_*`/`_DETACHED_*` constants that only
 `tools/job_breakaway_test.py` refers to).
 
-## 11. Agent catalog, history scan, launcher, availability (VERIFIED headers)
+## 11. Agent catalog, history scan, launcher, availability (REMOVED)
 
-- `terminal/agent_catalog.py` (487 lines): a data table of known agent CLIs and the quirks each needs. Its docstring says it
-  exists "so that knowledge survives a fresh settings file instead of being re-discovered". Generic, no personal paths or secrets.
-- `terminal/history_scan.py` (268 lines): a read-only sweep of local agent history files, nothing written to disk, for the
-  session-recovery listing. New agents are registry entries, not code.
-- `terminal/launcher.py` (81 lines), `terminal/profile_availability.py` (125 lines): row formatting and local checks. The latter
-  states it performs no network requests, provider probes, OAuth or inference.
-Justification: these support "one launcher for many agents", which Terminus does not do. Not audited further in this pass.
+**Terminus.** No multi-agent launcher, catalog, or history scan.
+
+**GhostShell, as first audited.** Had `terminal/agent_catalog.py`, `terminal/history_scan.py`,
+`terminal/launcher.py` and `terminal/profile_availability.py` so one package could launch many agent CLIs
+and recover past sessions. That was a pure addition over Terminus.
+
+**Removed (owner, 2026-09-21).** The history scan did not work and belongs in the AISearch repo; the owner
+did not want a catalog checked into this package. Gone from the tree (confirmed 2026-09-23: those catalog
+and history_scan paths are absent). What remains for "which agent":
+- Profiles in `ai_terminal.sublime-settings` (source of truth for launch commands and per-agent quirks).
+- `terminal/agent_menu.py` + `tools/regen_agent_menu.py` build the Ai Terminal > Agents / Shells menus
+  from those profiles (uninstalled hidden at run time).
+- `terminal/profile_availability.py` still exists for local "is this binary present" checks used by menu
+  visibility — no network, no OAuth, no credential reads.
+- History picker (`ai_terminal_history`) and the Open Here folder picker remain (summary row 13).
+
+Justification for the multi-agent menus that remain: Terminus is one generic terminal; GhostShell is built
+to open many agent CLIs without the user typing a shell command. The removed catalog/scan were the parts
+that duplicated external tools or did not work.
 
 ## 12. ctypes documentation (owner's rule 5: every ctypes line has a proper name and a stated purpose) (VERIFIED by measurement)
 
@@ -775,26 +825,50 @@ as its own separate process, never imported into the plugin host, so editing it 
 session's own live tab): `python -m py_compile` and `python tools/agent_broker.py --help`, which re-executes the entire top-level
 kernel32 binding block (every `argtypes`/`restype` assignment) under the real Windows ctypes runtime without error.
 
-**Settings check, 2026-09-22 (VERIFIED, rule 7).** Every key in `ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile names, read as a group). Two did nothing: `terminal_font` (its own comment, `ai_terminal.sublime-settings:1033`, calls it a dead key; tabs use Sublime's global font) and `color_scheme_log_path` (its comment said null disables the log, but `terminal/color_scheme_log.py` never reads it; logging is the owner's area). **Resolved 2026-09-23:** `color_scheme_log_path` removed from the settings file entirely (it did nothing, so it should not have existed per rule 7). `terminal_font` is still open, owner undecided. Not yet done: a live test that each routing switch in section 5 changes behaviour as its comment says.
+**`terminal/mouse.py` ctypes, finished 2026-09-23.** Was the last runtime file still called out as open in
+section 5. Every `ctypes.byref` / `create_string_buffer` / `c_size_t` line now has a purpose comment (Ghostty
+mouse encoder FFI). Reloaded in the live Sublime host without error. Dev-only scripts remain undocumented by
+owner decision (keep, do not document-or-delete in this pass).
 
-## 13. Status summary of every deviation from Terminus (2026-09-21)
+**Settings check, 2026-09-22 (VERIFIED, rule 7); close-out 2026-09-23.** Every key in
+`ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile
+names, read as a group). Two did nothing: `terminal_font` (its own comment calls it a dead key; tabs use
+Sublime's global font) and `color_scheme_log_path` (never read by `terminal/color_scheme_log.py`).
+**Resolved 2026-09-23:** `color_scheme_log_path` removed. **Still open, owner undecided:** `terminal_font`
+— either delete the dead key (rule 7) or wire a real `font_face`/`font_size` apply path so agent tabs can
+force Cascadia Code without depending on the global Sublime font. Routing switches from section 5: checked
+gate-by-gate in code on 2026-09-23 (table in section 5); no `ai_terminal` tab was open in Sublime at that
+moment, so a live flip of each switch on a running profile was not repeated here.
+
+## 13. Status summary of every deviation from Terminus (2026-09-21; close-out 2026-09-23)
 
 | # | Deviation | Status |
 |---|---|---|
-| 1 | Several code paths write the viewport position, plus a self-rescheduling clamp loop (Terminus: one function, once per render) | State after 2026-09-22 (every write site grepped): 7 functions write the viewport. They are `_scroll_to_bottom` (follow), `_pin_viewport_rest_dip_only` (upward-overshoot fix), `_compensate_trim_scroll` (reading scrollback only; skipped while following), `_page_scroll` (PageUp/Down), `_resync_viewport_after_height_change` (panel open/close, bottom-anchored), `_preclamp_vp` (hover/focus, now dip-only) and `_clamp_vp_loop` (500 ms poll: height detector plus dip fix). The dead `_pin_viewport_rest` and `_vp_pan_to_tui_scroll` were removed in `5b4d4fd`; `_post_render_follow` (measured 0 moves in 194 runs) and a duplicate pin were removed 2026-09-22. The status-update jiggle is **fixed** (section 1 correction: steady tab height plus no compensate-vs-follow fight; the view moved 0 px in 146 frames). Clamp loop's dip fix measured 2026-09-22: 15 min of use, including an emptied (Ctrl+Alt+K) and a 3-line PowerShell tab with hover and focus switches, gave 0 viewport writes from any source; the negative-overshoot glitch did not occur on build 4200. Kept, because the poll stays for the height check anyway and the dip check costs almost nothing. Still open: one unlogged vim run where the view returned to 0 |
-| 2 | Viewport handling switch is a code constant, not a setting | **Fixed** 2026-09-21: now `scroll_manipulation_enabled` in `ai_terminal.sublime-settings`, live-verified in the running Sublime |
-| 3 | History cap 300 lines (Terminus: 10,000) | **Justified**, checked 2026-09-21: settings-file comment calls it a measured minimap-fill constant ("rigorously tested, deliberate"), not a jumpiness knob. Owner, 2026-09-22: the tests were done by hand, filling the minimap at different font sizes; the notes and logs were since purged. Recorded as the owner's account (UNVERIFIED: no surviving test or log) |
-| 4 | Detachable broker process | **Justified** (commit `b3b3be1`), and exercised live at least seven times, including a clean owner restart on 2026-09-21 |
-| 5 | Key table, Win32 input mode, native key encoder, mouse reporting | **Justified** (Qwen needs mode 9001; native encoder follows live terminal modes; mouse from the 470-session audit). The routing switches (`mouse_handling`, `page_keys_to_pty`, ...) were not checked one by one |
-| 6 | Whole-buffer replace on every frame (Terminus: dirty lines only) | **Partly fixed** 2026-09-22: `line_diff_render_enabled` (default on) replaces only changed lines, and adds or removes lines at the end. New related deviation: `steady_screen_height_enabled` keeps the tab from shrinking with an app footer (Terminus trims). With `compensate_trim_while_following` off, the status-update jiggle measured 0 px; owner confirmation pending. Removing the now-redundant viewport fixers is the next step |
-| 7 | Static 450 KB colour scheme rewritten while running (Terminus: generated theme) | `#000001` background trick justified. Registered scopes are never evicted, so the file only grows. **Accepted** by the owner 2026-09-22: there is no way to drop colours |
-| 8 | Phantom toolbar and in-tab Settings panel | Toolbar **justified** (`583adbd`, sublimehq/sublime_text#1922). Settings-panel-unreachable-on-alt-screen defect: live-tested with Vibe 2026-09-22 -- `57624a0` fixed the render and clamp loops, but `_preclamp_vp` still snapped the view back on hover/focus change. **Fixed** 2026-09-22 (dip-only), owner confirmed live |
-| 9 | Logging and recording (five modules) | Contract written and useful (casts). Rule now: owner's installation only, off by default, no folders or files for users. Broker log made opt-in 2026-09-21. New finding 2026-09-21: `_durable_scheme_backup` writes an uncapped ~400KB+ file to `~/data/logs` unconditionally, with no setting or env-var gate at all -- worse than the already-known loggers. `~/data/logs` still hardcoded in 3 places. **Open**, needs the owner's decision on where the default should live and whether the scheme backup should be opt-in |
-| 10 | Usage and quota scanning (read other programs' logins, rewrote Claude Code's credentials file) | **Removed** 2026-09-21, including all usage display |
-| 11 | Agent catalog, availability checks (history scan and the agent catalog, both the detection table and the sqlite "Agent Help" lookup, **removed** 2026-09-21: the history scan did not work and belongs in the AISearch repo; the owner did not want a catalog in the repo) | **Removed.** The menus now come only from the profiles in `ai_terminal.sublime-settings`; Gemini was moved there |
-| 12 | `ctypes` documentation | **Done for every runtime file.** `terminal/ghostty_vt.py`, `ai_terminal.py`'s ConPTY surface and `tools/agent_broker.py` (2026-09-21), and `tools/recover_console.py`, the Open in Windows Terminal relay (2026-09-22: every constant, struct and kernel32 group commented, four `c_int` restypes named `BOOL`; checked with `py_compile` and a live `--list` that found the running Claude session through the process-check bindings; the pipe/console path, comments only, was not exercised). Undocumented ctypes remains only in the dev scripts the owner keeps (`agent_broker_client.py`, `job_breakaway_test.py`, `check_in_job.py`) |
-| 13 | Launch Agent picker | **Removed** 2026-09-21. Agents launch from Ai Terminal > Agents and Shells submenus (sorted A-Z, uninstalled hidden) and the sidebar equivalents. History picker and the Open Here folder picker remain |
-| 14 | Package Settings menu entry | Fixed 2026-09-21 (`16d0917`): the parent node was created only by Package Control, which left a blank menu without it |
+| 1 | Several viewport writers + 500 ms clamp loop (Terminus: one `scroll_to_cursor` per render) | **Justified in parts.** Live writers: `_scroll_to_bottom`, `_pin_viewport_rest_dip_only`, `_compensate_trim_scroll` (off while following), `_page_scroll`, `_resync_viewport_after_height_change`, `_preclamp_vp` (dip-only), `_clamp_vp_loop` (height detector justified — no Sublime sash-drag event; dip-only overshoot whether it needs the poll vs render-only is still open). Dead writers removed (`5b4d4fd`). Typing/status jiggle from GhostShell viewport writes: closed 2026-09-22 (section 1). |
+| 2 | Viewport kill switch was a code constant | **Fixed** 2026-09-21 → `scroll_manipulation_enabled` |
+| 3 | History cap 300 (Terminus 10,000) | **Justified** — minimap-fill constant; owner 2026-09-22: hand-tested, notes purged (UNVERIFIED artifact) |
+| 4 | Detachable broker | **Justified** (`b3b3be1`); clean restart verified 2026-09-21; dead-broker file cleanup 2026-09-22 |
+| 5 | Keys, Win32 input mode, native encoder, mouse | **Justified.** Routing switches checked gate-by-gate in code 2026-09-23 (section 5 table). `mouse.py` ctypes documented same day. No live tab open for a flip-test at close-out. |
+| 6 | Whole-buffer replace every frame | **Decision 2026-09-22:** `line_diff_render_enabled` default on (Terminus-shaped); `steady_screen_height_enabled` on; `compensate_trim_while_following` off. Whole-buffer kept as fallback only. Native dirty-row plumbing still optional. |
+| 7 | Static ~450 KB colour scheme, lazy scopes, no eviction | `#000001` trick **justified**. Unbounded growth **accepted** by owner 2026-09-22 |
+| 8 | Phantom toolbar + in-tab Settings | Toolbar **justified** (sublimehq#1922). Alt-screen Settings reachability **fixed** 2026-09-22 (`_preclamp_vp` dip-only), owner confirmed |
+| 9 | Logging / recording | Recorders off by default; broker log opt-in; `log_root` setting (no silent fallback) **done** 2026-09-23. **Still open (owner):** `_durable_scheme_backup` still unconditional; `AI_TERMINAL_DEBUG` env vs settings for raw/settings debug logs |
+| 10 | Usage / quota scanner (read foreign OAuth, rewrote Claude credentials) | **Removed** 2026-09-21 |
+| 11 | Agent catalog + history scan | **Removed** 2026-09-21; menus from settings profiles only; `profile_availability.py` kept for local binary checks |
+| 12 | `ctypes` documentation (rule 5) | **Done for every runtime file**, including `terminal/mouse.py` (2026-09-23). Dev scripts only left undocumented (owner: keep all) |
+| 13 | Launch Agent picker | **Removed** 2026-09-21; Agents/Shells submenus remain |
+| 14 | Package Settings menu entry | **Fixed** 2026-09-21 (`16d0917`) |
+| — | Dead setting `terminal_font` | **Open, owner undecided:** delete vs wire real font_face apply (rule 7) |
+| — | `_durable_scheme_backup` always on | **Open, owner undecided:** opt-in setting vs accept always-on recovery copy under `log_root` |
 
-Where the register says "no recorded justification", that is a finding, not a verdict: it means neither git, the `ai/` documents nor the
-transcripts searched give a reason, so the decision is the owner's.
+### Owner decisions still needed
+
+1. `terminal_font` dead key — delete, or make tabs actually use Cascadia Code / a setting-driven face.
+2. `_durable_scheme_backup` — gate behind a setting (default off for release), or explicitly accept always-on.
+3. Optional later: whether `_clamp_vp_loop`'s dip-only overshoot fix should stay on the 500 ms poll or move into the render path only (height detector stays either way).
+
+### Not owner-blocked (done or accepted)
+
+Everything else in the table above is justified, fixed, removed, or accepted. Where the register once said
+"no recorded justification", that meant neither git, `ai/`, nor transcripts gave a reason — the decision
+is then the owner's. Rows 6 and 7 had that form; both now have an explicit owner/code decision dated above.
