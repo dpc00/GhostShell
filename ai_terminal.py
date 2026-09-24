@@ -2338,10 +2338,61 @@ _SETTINGS_NAME = "ai_terminal.sublime-settings"
 _settings = None  # sublime.Settings; (re)bound in plugin_loaded
 
 
+_profiles_cache = None  # (signature, merged catalog); see _all_profiles
+
+
+def _deep_merge(base, override):
+    """Merge two dicts the way VS Code does (configurationModels.mergeContents):
+    where both sides hold a dict, merge them key by key, recursively; anything
+    else in `override` (a string, a number, a list) replaces the value in
+    `base` outright."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _read_profiles_layer(resource_path):
+    """The "profiles" dict from ONE settings file, read on its own so Sublime's
+    one-level merge cannot hide the other layer. {} if missing or malformed."""
+    try:
+        data = sublime.decode_value(sublime.load_resource(resource_path))
+    except Exception:
+        return {}
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    return profiles if isinstance(profiles, dict) else {}
+
+
+def _file_mtime(path):
+    """Modification time of `path` in nanoseconds, or None if it cannot be read."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
 def _all_profiles(s):
-    """The profiles defined in ai_terminal.sublime-settings, as a dict (empty if missing or malformed)."""
-    explicit = s.get("profiles", {}) or {}
-    return dict(explicit) if isinstance(explicit, dict) else {}
+    """The profile catalog: the shipped ai_terminal.sublime-settings, then the
+    user's Packages/User copy layered over it profile by profile. A profile
+    the user sets to null is removed. The result is cached until either file
+    changes on disk, because profile lookups run on every key and wheel event."""
+    global _profiles_cache
+    packages = sublime.packages_path()
+    signature = (
+        _file_mtime(os.path.join(packages, "User", _SETTINGS_NAME)),
+        _file_mtime(os.path.join(packages, "GhostShell", _SETTINGS_NAME)),
+    )
+    if _profiles_cache is None or _profiles_cache[0] != signature:
+        merged = _deep_merge(
+            _read_profiles_layer("Packages/GhostShell/" + _SETTINGS_NAME),
+            _read_profiles_layer("Packages/User/" + _SETTINGS_NAME),
+        )
+        catalog = {name: profile for name, profile in merged.items() if profile is not None}
+        _profiles_cache = (signature, catalog)
+    return dict(_profiles_cache[1])
 
 
 def _settings_obj(settings=None):
@@ -3175,6 +3226,8 @@ def _on_settings_change():
     the new cap. Column bounds are picked up by the resize poller's next
     _measure (~750ms), so nothing to do here for cols."""
     _settings_debug_log(">>> _on_settings_change CALLED")
+    global _profiles_cache
+    _profiles_cache = None
     _apply_log_root_setting()
     _report_profile_validation()
 
@@ -9004,25 +9057,91 @@ _RELAUNCH_REQUIRED_PROFILE_KEYS = (
 )
 
 
-def _toggle_profile_bool(profile_name, key, default):
-    """Flip one boolean in profile_name's explicit override dict and persist
-    it to ai_terminal.sublime-settings's "profiles" key. Returns the new
-    value. Shared by AiTerminalTuneProfileCommand's quick panel and the
-    in-tab settings panel (_add_close_toolbar's panel_html /
-    AiTerminalTuneProfileSetCommand) so both write through identically --
-    see the "profiles" merge-order note on AiTerminalTuneProfileCommand.
-    """
-    base = dict(_profile_settings(profile_name) or {})
-    new_value = not bool(base.get(key, default))
-    base[key] = new_value
+def _write_profile_key_to_package_file(profile_name, key, value):
+    """Set one top-level boolean key of one profile in the shipped
+    ai_terminal.sublime-settings by editing its text in place, so every comment
+    (the VERIFIED / UNVERIFIED findings) survives; VS Code edits settings the
+    same way (jsonEdit.setProperty). Never parse and re-dump the file: that
+    would delete all of them. Returns True when the file was changed, False
+    (nothing written) when the profile header is not found exactly once or the
+    file is not a loose file on disk.
 
-    explicit_s = sublime.load_settings(_SETTINGS_NAME)
-    profiles = explicit_s.get("profiles", {}) or {}
-    if not isinstance(profiles, dict):
-        profiles = {}
-    profiles[profile_name] = base
-    explicit_s.set("profiles", profiles)
+    The file's layout is fixed: a profile header sits at 8 spaces of
+    indentation and its own keys at 12, so nested keys such as spawn_env
+    entries (16 spaces) are never touched.
+    """
+    path = os.path.join(sublime.packages_path(), "GhostShell", _SETTINGS_NAME)
+    if not os.path.isfile(path):
+        return False
+    with open(path, encoding="utf-8", newline="") as handle:
+        lines = handle.read().splitlines(keepends=True)
+
+    header = '        "%s": {' % profile_name
+    starts = [i for i, line in enumerate(lines) if line.rstrip() == header]
+    if len(starts) != 1:
+        return False
+    start = starts[0]
+    end = start + 1
+    while end < len(lines) and lines[end].rstrip() not in ("        },", "        }"):
+        end += 1
+    if end >= len(lines):
+        return False
+
+    literal = "true" if value else "false"
+    key_prefix = '            "%s"' % key
+    for i in range(start + 1, end):
+        if lines[i].startswith(key_prefix):
+            body = lines[i].rstrip("\r\n")
+            eol = lines[i][len(body):]
+            head, colon, _old_value = body.partition(":")
+            comma = "," if body.rstrip().endswith(",") else ""
+            lines[i] = "%s%s %s%s%s" % (head, colon, literal, comma, eol)
+            break
+    else:
+        eol = "\r\n" if lines[start].endswith("\r\n") else "\n"
+        lines.insert(start + 1, '            "%s": %s,%s' % (key, literal, eol))
+
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write("".join(lines))
+    return True
+
+
+def _toggle_profile_bool(profile_name, key, default):
+    """Flip one boolean of profile_name and persist it. Returns the value now in
+    effect (unchanged if it could not be saved).
+
+    Where it is saved depends on "profile_tuner_writes_package_file":
+    - true (the developer's own setting, in Packages/User): edit the shipped
+      ai_terminal.sublime-settings, so the finding ships with the package.
+      Nothing is written to Packages/User.
+    - false (every end user): write ONLY this profile's changed key to the
+      "profiles" block of Packages/User. _all_profiles layers that over the
+      shipped profile key by key, so the block never shadows the other profiles.
+    """
+    global _profiles_cache
+    base = _profile_settings(profile_name) or {}
+    new_value = not bool(base.get(key, default))
+    settings = sublime.load_settings(_SETTINGS_NAME)
+
+    if settings.get("profile_tuner_writes_package_file", False):
+        if _write_profile_key_to_package_file(profile_name, key, new_value):
+            return new_value
+        sublime.status_message(
+            "Ai terminal: could not edit the shipped settings file for %s.%s"
+            % (profile_name, key)
+        )
+        return not new_value
+
+    user_profiles = _read_profiles_layer("Packages/User/" + _SETTINGS_NAME)
+    one_profile = dict(user_profiles.get(profile_name) or {})
+    one_profile[key] = new_value
+    user_profiles[profile_name] = one_profile
+    settings.set("profiles", user_profiles)
     sublime.save_settings(_SETTINGS_NAME)
+    # Sublime writes the file a moment later; show the new value right away.
+    # The cache is rebuilt from disk once the file's modification time moves.
+    if _profiles_cache is not None and profile_name in _profiles_cache[1]:
+        _profiles_cache[1][profile_name] = dict(_profiles_cache[1][profile_name], **{key: new_value})
     return new_value
 
 
@@ -9052,11 +9171,11 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
       need "New Session (Relaunch)" instead (which also throws the
       conversation away, unlike this).
 
-    Writes into ai_terminal.sublime-settings's "profiles" key. The override is written as a full
-    profile dict, not just the
-    changed key: _all_profiles() merges explicit over generated per-name
-    (dict.update), not per-key, so a partial override would silently drop
-    the rest of the profile (launch_command, spawn_env, ...).
+    Saving: see _toggle_profile_bool. An end user's change puts only that
+    profile's changed key in Packages/User's "profiles" block, which
+    _all_profiles() layers over the shipped profile key by key. With
+    "profile_tuner_writes_package_file" on (the developer) the shipped file is
+    edited instead and Packages/User is not touched.
 
     A WindowCommand, not a TextCommand -- see _tab_menu_target_view for why
     Tab Context.sublime-menu needs that to reach the right-clicked tab

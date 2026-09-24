@@ -47,6 +47,11 @@
     // Off by default (extra text in every terminal tab's status bar
     // otherwise). Read fresh every render tick, no reload needed.
     "debug_status_bar_enabled": false,
+    // Developer switch: when true, the profile tuner edits THIS shipped file
+    // (one key of one profile, comments kept) instead of writing to
+    // Packages/User. Set it in your own Packages/User settings, never here.
+    // Ignored unless the package is a loose folder, not a .sublime-package.
+    "profile_tuner_writes_package_file": false,
     // The default profile to run if no profile name is explicitly requested.
     // Ships as a plain Command Prompt so a first install works with no CLI
     // or API account; switch to an agent profile (e.g. "Claude") once one
@@ -919,6 +924,7 @@
             "spawn_env": {}
         },
         "Ori omp": {
+            "mouse_handling": true,
             // `ori omp` -- Ori launches omp with its OpenRouter environment.
             // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
             "detachable": true,
