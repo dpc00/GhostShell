@@ -360,6 +360,35 @@
                 // "GOOGLE_PROJECT_NUMBER":"782908338549",
             }
         },
+        "Claude → OpenRouter": {
+            // Claude Code straight to OpenRouter, the setup in OpenRouter's own
+            // guide (https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration,
+            // read 2026-09-24): base URL without /v1, the key in
+            // ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY explicitly empty.
+            // Exists because `ori claude` starts Claude with ANTHROPIC_AUTH_TOKEN
+            // empty and every request fails with 401 Missing Authentication
+            // header (VERIFIED 2026-09-24 by reading the child process
+            // environment; see the "Ori Claude" profile).
+            // The key is NOT in this file: "$secret:OPENROUTER_API_KEY" is read
+            // from Packages/User/ai_terminal_secrets.sublime-settings. If that
+            // entry is missing the variable is dropped and Claude falls back
+            // to its normal login.
+            // The three keys below are the "Claude" profile's viewport and
+            // input findings; this is the same Claude Code program.
+            // UNVERIFIED: not yet seen working in a live tab.
+            "detachable": true,
+            "launch_command": [
+                "claude"
+            ],
+            "mouse_handling": false,
+            "page_keys_to_pty": false,
+            "wheel_to_pty": true,
+            "spawn_env": {
+                "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+                "ANTHROPIC_AUTH_TOKEN": "$secret:OPENROUTER_API_KEY",
+                "ANTHROPIC_API_KEY": ""
+            }
+        },
         "Cline": {
             // Cline CLI (npm, bare 'cline' package). Mouse tracking: the
             // unauthenticated welcome/sign-in screen (4 provider buttons)
