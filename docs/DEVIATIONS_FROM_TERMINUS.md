@@ -275,7 +275,7 @@ drives page-key default-to-PTY and dip-only pin behaviour. It does **not** bypas
 and (for send) an app that asked. The earlier "gates ignored on alt-screen" reading was about the
 old hard pin fighting the Settings panel (section 8), not about mouse bytes being forced through.
 
-**`terminal/mouse.py` ctypes (rule 5), done 2026-09-23.** Every `ctypes` use is the Ghostty mouse-
+**`terminal/mouse.py` ctypes (rule 9), done 2026-09-23.** Every `ctypes` use is the Ghostty mouse-
 encoder FFI only: `byref` out-params for `mouse_encoder_new` / `mouse_event_new` / encoder size /
 encode written-count, plus `create_string_buffer` / `c_size_t` for the output bytes. Each line now
 has a purpose comment naming the C API. Reloaded cleanly in the running Sublime plugin host
@@ -729,7 +729,7 @@ Justification for the multi-agent menus that remain: Terminus is one generic ter
 to open many agent CLIs without the user typing a shell command. The removed catalog/scan were the parts
 that duplicated external tools or did not work.
 
-## 12. ctypes documentation (owner's rule 5: every ctypes line has a proper name and a stated purpose) (VERIFIED by measurement)
+## 12. ctypes documentation (AGENTS.md rule 9: every ctypes line has a proper name and a stated purpose) (VERIFIED by measurement)
 
 Terminus uses no `ctypes` for its terminal (it uses the Python `pyte` emulator and Python pty modules). GhostShell uses `ctypes` for the
 native Ghostty engine, the Windows ConPTY and the broker. Measured 2026-09-21 with `ctypes_audit.py` (method: a code line that uses
@@ -784,7 +784,7 @@ kernel32 binding block now has a docstring/comment: `_COORD`, `_SECURITY_ATTRIBU
 why the group exists at all (e.g. the heap group backs `InitializeProcThreadAttributeList`'s two-call size-then-alloc pattern --
 confirmed against the real call site, not guessed). Also documented: `_Pty.start`/`_start_child`/`_close_pc`/`write`/`is_alive`/
 `kill`/`_close_handles`/`_release_attr_list` (all previously undocumented despite the class itself having a one-line docstring --
-that one-liner does not actually explain the ConPTY calls inside, so rule 5's spirit, not just its letter, called for more), and
+that one-liner does not actually explain the ConPTY calls inside, so rule 9's spirit, not just its letter, called for more), and
 the mouse-hover `_POINT` struct and `_hover_poll_tick` (Win32 `GetCursorPos`/`ScreenToClient`). All grounded in the standard,
 well-documented Win32 APIs involved (ConPTY, process/thread creation, heap, cursor) -- no guessing. A crude reimplementation of the
 line-counting audit undercounts this file specifically (it only matches the literal substring `ctypes`, missing the many lines
@@ -855,7 +855,7 @@ moment, so a live flip of each switch on a running profile was not repeated here
 | 9 | Logging / recording | Recorders off by default; broker log opt-in; `log_root` setting (no silent fallback) **done** 2026-09-23. **Still open (owner):** `_durable_scheme_backup` still unconditional; `AI_TERMINAL_DEBUG` env vs settings for raw/settings debug logs |
 | 10 | Usage / quota scanner (read foreign OAuth, rewrote Claude credentials) | **Removed** 2026-09-21 |
 | 11 | Agent catalog + history scan | **Removed** 2026-09-21; menus from settings profiles only; `profile_availability.py` kept for local binary checks |
-| 12 | `ctypes` documentation (rule 5) | **Done for every runtime file**, including `terminal/mouse.py` (2026-09-23). Dev scripts only left undocumented (owner: keep all) |
+| 12 | `ctypes` documentation (rule 9) | **Done for every runtime file**, including `terminal/mouse.py` (2026-09-23). Dev scripts only left undocumented (owner: keep all) |
 | 13 | Launch Agent picker | **Removed** 2026-09-21; Agents/Shells submenus remain |
 | 14 | Package Settings menu entry | **Fixed** 2026-09-21 (`16d0917`) |
 | — | Dead setting `terminal_font` | **Open, owner undecided:** delete vs wire real font_face apply (rule 7) |
