@@ -873,3 +873,32 @@ moment, so a live flip of each switch on a running profile was not repeated here
 Everything else in the table above is justified, fixed, removed, or accepted. Where the register once said
 "no recorded justification", that meant neither git, `ai/`, nor transcripts gave a reason — the decision
 is then the owner's. Rows 6 and 7 had that form; both now have an explicit owner/code decision dated above.
+
+## 14. Profile catalog is merged in code, and the profile tuner writes one key (2026-09-24)
+
+**Terminus:** shell definitions are one list, `shell_configs`, in `Terminus.sublime-settings`, read through
+`sublime.load_settings` (UNVERIFIED: from a DeepWiki summary of randy3k/Terminus, not read in source). Terminus never writes
+settings back to `Packages/User` (same UNVERIFIED source), and neither does SublimeREPL or LSP (also UNVERIFIED, DeepWiki).
+
+**GhostShell:** profiles are one `profiles` dictionary keyed by name, and the profile tuner (`_toggle_profile_bool`) does write
+settings. Two changes, both in `ai_terminal.py`:
+
+1. **The catalog is merged by GhostShell, not by Sublime.** `_all_profiles` reads the shipped `ai_terminal.sublime-settings` and the
+   user's `Packages/User` copy separately and merges them with `_deep_merge`: two dictionaries merge key by key, anything else
+   (string, number, list) in the later layer replaces the earlier value, and a profile set to `null` is removed. These are
+   the rules of VS Code's `mergeContents` (VERIFIED: microsoft/vscode `src/vs/platform/configuration/common/configurationModels.ts`,
+   `mergeContents`; layer order `default, application, user, workspace, memory` at `getWorkspaceConsolidatedConfiguration`).
+   The null-removes rule is UNVERIFIED (DeepWiki says it lives in `TerminalProfileService`; not read).
+2. **The tuner writes one key of one profile.** Justification: Sublime merges settings one level deep, so ANY `profiles` key in
+   `Packages/User` used to replace the whole shipped dictionary, and the old tuner wrote a copy of every profile there (found live
+   2026-09-23 and again 2026-09-24: 48 profiles copied, the shipped ones hidden). With the developer switch
+   `profile_tuner_writes_package_file` on, the tuner instead edits one key in the shipped file as text and keeps every comment,
+   the way VS Code edits settings (VERIFIED: `src/vs/base/common/jsonEdit.ts` `setProperty` splices one edit into the text).
+
+**Not done:** the profiles are still in one file. Per-tool settings files (`LSP-<tool>.sublime-settings` style) were researched and
+rejected for now; the naming was not settled.
+
+**Verified live 2026-09-24 (sublime-mcp `eval_python`):** catalog of 48 profiles read from both layers; an end-user tuner toggle
+wrote only that profile's key to `Packages/User`; with the dev switch on, a toggle added exactly one line to the shipped
+`Ori omp` profile and left `Packages/User` without a `profiles` block. The `_deep_merge` rules were also checked on sample data
+outside Sublime.
