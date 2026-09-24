@@ -204,6 +204,90 @@
                         }
                     },
                     {
+                        "caption": "Ori",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori"
+                        }
+                    },
+                    {
+                        "caption": "Ori Claude",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Claude"
+                        }
+                    },
+                    {
+                        "caption": "Ori Codex",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Codex"
+                        }
+                    },
+                    {
+                        "caption": "Ori Grok",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Grok"
+                        }
+                    },
+                    {
+                        "caption": "Ori OpenCode",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori OpenCode"
+                        }
+                    },
+                    {
+                        "caption": "Ori Hermes",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Hermes"
+                        }
+                    },
+                    {
+                        "caption": "Ori omp",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori omp"
+                        }
+                    },
+                    {
+                        "caption": "Ori Prime Agent",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Prime Agent"
+                        }
+                    },
+                    {
+                        "caption": "Ori Kilo",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Kilo"
+                        }
+                    },
+                    {
+                        "caption": "Ori Cline",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Cline"
+                        }
+                    },
+                    {
+                        "caption": "Ori Pi",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Pi"
+                        }
+                    },
+                    {
+                        "caption": "Ori Muse",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Ori Muse"
+                        }
+                    },
+                    {
                         "caption": "Pi",
                         "command": "ai_terminal_open_here",
                         "args": {

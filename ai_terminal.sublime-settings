@@ -734,10 +734,17 @@
             // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED --
             // no live session recorded yet. Safe defaults only until a real
             // TUI walk (see agent_tui_catalog.sqlite3) captures it.
+            // The four keys below were toggled live in the profile tuner
+            // (2026-09-23) and had leaked into Packages/User; moved here so
+            // the finding ships with the package.
             "detachable": true,
             "launch_command": [
                 "omp"
             ],
+            "page_keys_to_pty": false,
+            "pin_viewport": false,
+            "osc_title_updates_tab": true,
+            "close_tab_on_exit": false,
             "spawn_env": {}
         },
         "OpenCode": {
@@ -848,6 +855,128 @@
                 // "ANTHROPIC_API_KEY":"",
                 // "ANTHROPIC_BASE_URL":"http://localhost:11434",
             }
+        },
+        "Ori": {
+            // Ori (@ori-runtime/cli, ~/.local/bin/ori.exe) -- OpenRouter's
+            // local harness. Bare `ori` runs `ori code`, its own interactive
+            // TUI (needs a terminal, so it only works inside a PTY tab).
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED --
+            // no live session recorded yet. Safe defaults only.
+            "detachable": true,
+            "launch_command": [
+                "ori"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Claude": {
+            // `ori claude` -- Ori launches claude with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "claude"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Codex": {
+            // `ori codex` -- Ori launches codex with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "codex"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Grok": {
+            // `ori grok` -- Ori launches grok with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "grok"
+            ],
+            "spawn_env": {}
+        },
+        "Ori OpenCode": {
+            // `ori opencode` -- Ori launches opencode with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "opencode"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Hermes": {
+            // `ori hermes` -- Ori launches hermes with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "hermes"
+            ],
+            "spawn_env": {}
+        },
+        "Ori omp": {
+            // `ori omp` -- Ori launches omp with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "omp"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Prime Agent": {
+            // `ori prime-agent` -- Ori launches prime-agent with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "prime-agent"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Kilo": {
+            // `ori kilo` -- Ori launches kilo with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "kilo"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Cline": {
+            // `ori cline` -- Ori launches cline with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "cline"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Pi": {
+            // `ori pi` -- Ori launches pi with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "pi"
+            ],
+            "spawn_env": {}
+        },
+        "Ori Muse": {
+            // `ori muse` -- Ori launches muse with its OpenRouter environment.
+            // Mouse tracking / alt-screen / page-key behavior: UNCONFIRMED -- no live session recorded yet.
+            "detachable": true,
+            "launch_command": [
+                "ori",
+                "muse"
+            ],
+            "spawn_env": {}
         },
         "Pi": {
             // @earendil-works/pi-coding-agent. Confirmed across multiple
