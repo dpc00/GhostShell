@@ -834,9 +834,10 @@ owner decision (keep, do not document-or-delete in this pass).
 `ai_terminal.sublime-settings` was checked for a read in the code: 32 of 37 are read (3 more are profile
 names, read as a group). Two did nothing: `terminal_font` (its own comment calls it a dead key; tabs use
 Sublime's global font) and `color_scheme_log_path` (never read by `terminal/color_scheme_log.py`).
-**Resolved 2026-09-23:** `color_scheme_log_path` removed. **Still open, owner undecided:** `terminal_font`
-— either delete the dead key (rule 7) or wire a real `font_face`/`font_size` apply path so agent tabs can
-force Cascadia Code without depending on the global Sublime font. Routing switches from section 5: checked
+**Resolved 2026-09-23:** `color_scheme_log_path` removed. **Resolved 2026-09-23 (owner):** `terminal_font`
+deleted. The real keys `font_face` and `font_size` (read at `ai_terminal.py:4409-4418`, global and per profile)
+now sit in the settings file at their default values (`""` and `null`, meaning Sublime's own font), because the
+owner has not picked a font yet. VERIFIED live 2026-09-23 via `eval_python`: Sublime loads `font_face`=`""`, `font_size`=`null`, `terminal_font` absent. UNVERIFIED: a running tab was not inspected. Routing switches from section 5: checked
 gate-by-gate in code on 2026-09-23 (table in section 5); no `ai_terminal` tab was open in Sublime at that
 moment, so a live flip of each switch on a running profile was not repeated here.
 
@@ -858,12 +859,12 @@ moment, so a live flip of each switch on a running profile was not repeated here
 | 12 | `ctypes` documentation (rule 9) | **Done for every runtime file**, including `terminal/mouse.py` (2026-09-23). Dev scripts only left undocumented (owner: keep all) |
 | 13 | Launch Agent picker | **Removed** 2026-09-21; Agents/Shells submenus remain |
 | 14 | Package Settings menu entry | **Fixed** 2026-09-21 (`16d0917`) |
-| — | Dead setting `terminal_font` | **Open, owner undecided:** delete vs wire real font_face apply (rule 7) |
+| — | Dead setting `terminal_font` | **Removed** 2026-09-23; `font_face`/`font_size` stay as editable settings, default = Sublime's font |
 | — | `_durable_scheme_backup` always on | **Open, owner undecided:** opt-in setting vs accept always-on recovery copy under `log_root` |
 
 ### Owner decisions still needed
 
-1. `terminal_font` dead key — delete, or make tabs actually use Cascadia Code / a setting-driven face.
+1. ~~`terminal_font`~~ — resolved 2026-09-23, see the table above.
 2. `_durable_scheme_backup` — gate behind a setting (default off for release), or explicitly accept always-on.
 3. Optional later: whether `_clamp_vp_loop`'s dip-only overshoot fix should stay on the 500 ms poll or move into the render path only (height detector stays either way).
 
