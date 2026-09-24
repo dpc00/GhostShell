@@ -68,6 +68,14 @@
                 }
             },
             {
+                "caption": "Claude → OpenRouter",
+                "command": "ai_terminal_open_here",
+                "args": {
+                    "paths": [],
+                    "profile": "Claude → OpenRouter"
+                }
+            },
+            {
                 "caption": "Cline",
                 "command": "ai_terminal_open_here",
                 "args": {
