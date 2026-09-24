@@ -629,11 +629,11 @@ gated by the `AI_TERMINAL_DEBUG` env var, not a setting — that gap is unchange
 The dead `"color_scheme_log_path"` setting (fed a no-op stub logger, so it did nothing) was removed entirely
 rather than fixed — see the "Logging and recording" section above.
 
-**Still open for the owner (2026-09-23 audit close-out).** `_durable_scheme_backup` (`ai_terminal.py:2101`)
-still runs on every scheme save with ≥100 rules: no settings key, no env gate. Path is now under `log_root`,
-and only the newest file is kept, but the write itself is still unconditional for every install. Needs a
-decision: opt-in setting (default off for release), or accept as always-on recovery for the growing scheme
-file (section 7). Not changed in this pass — rule 13 requires owner approval before altering log writers.
+**Not an open decision (owner, 2026-09-23).** `_durable_scheme_backup` (`ai_terminal.py:2101`) still runs on
+every scheme save with ≥100 rules, unconditionally. The owner's reason for it: it compensated for old bad code
+that deleted the scheme file when the plugin reloaded without a Sublime restart. That bug is fixed, so there is
+little danger of losing the scheme now and the backup is a leftover safety net. Left in place, unchanged; the
+owner has nothing to decide here.
 
 
 ## 10. Usage and quota scanning (VERIFIED in code; the biggest trust issue found)
@@ -853,19 +853,19 @@ moment, so a live flip of each switch on a running profile was not repeated here
 | 6 | Whole-buffer replace every frame | **Decision 2026-09-22:** `line_diff_render_enabled` default on (Terminus-shaped); `steady_screen_height_enabled` on; `compensate_trim_while_following` off. Whole-buffer kept as fallback only. Native dirty-row plumbing still optional. |
 | 7 | Static ~450 KB colour scheme, lazy scopes, no eviction | `#000001` trick **justified**. Unbounded growth **accepted** by owner 2026-09-22 |
 | 8 | Phantom toolbar + in-tab Settings | Toolbar **justified** (sublimehq#1922). Alt-screen Settings reachability **fixed** 2026-09-22 (`_preclamp_vp` dip-only), owner confirmed |
-| 9 | Logging / recording | Recorders off by default; broker log opt-in; `log_root` setting (no silent fallback) **done** 2026-09-23. **Still open (owner):** `_durable_scheme_backup` still unconditional; `AI_TERMINAL_DEBUG` env vs settings for raw/settings debug logs |
+| 9 | Logging / recording | Recorders off by default; broker log opt-in; `log_root` setting (no silent fallback) **done** 2026-09-23. `_durable_scheme_backup` unconditional, accepted (see the note in the logging section); **still open (owner):** `AI_TERMINAL_DEBUG` env vs settings for raw/settings debug logs |
 | 10 | Usage / quota scanner (read foreign OAuth, rewrote Claude credentials) | **Removed** 2026-09-21 |
 | 11 | Agent catalog + history scan | **Removed** 2026-09-21; menus from settings profiles only; `profile_availability.py` kept for local binary checks |
 | 12 | `ctypes` documentation (rule 9) | **Done for every runtime file**, including `terminal/mouse.py` (2026-09-23). Dev scripts only left undocumented (owner: keep all) |
 | 13 | Launch Agent picker | **Removed** 2026-09-21; Agents/Shells submenus remain |
 | 14 | Package Settings menu entry | **Fixed** 2026-09-21 (`16d0917`) |
 | — | Dead setting `terminal_font` | **Removed** 2026-09-23; `font_face`/`font_size` stay as editable settings, default = Sublime's font |
-| — | `_durable_scheme_backup` always on | **Open, owner undecided:** opt-in setting vs accept always-on recovery copy under `log_root` |
+| — | `_durable_scheme_backup` always on | **Accepted** 2026-09-23: was a safety net for a since-fixed reload bug that deleted the scheme; left as is |
 
 ### Owner decisions still needed
 
 1. ~~`terminal_font`~~ — resolved 2026-09-23, see the table above.
-2. `_durable_scheme_backup` — gate behind a setting (default off for release), or explicitly accept always-on.
+2. ~~`_durable_scheme_backup`~~ — not a decision; see the table above.
 3. Optional later: whether `_clamp_vp_loop`'s dip-only overshoot fix should stay on the 500 ms poll or move into the render path only (height detector stays either way).
 
 ### Not owner-blocked (done or accepted)
