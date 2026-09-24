@@ -16,7 +16,7 @@ Cx/Cy are 1-based cell columns/rows within the PTY grid.
 
 Without 1006, legacy X10 (CSI M Cb+32 Cx+32 Cy+32) is used (coords ≤ 223).
 """
-import ctypes
+import ctypes  # create_string_buffer / c_size_t / byref for GhosttyMouseEncoder FFI only
 
 
 # Button codes (base, before modifier bits)
@@ -109,10 +109,13 @@ def _native_handles():
 
         g = gvt.Ghostty(gvt.load_library())
         enc = gvt.GhosttyMouseEncoder()
+        # byref(enc): Ghostty writes the encoder handle into this out-param
+        # (ghostty/vt/mouse/encoder.h: ghostty_mouse_encoder_new).
         if g.mouse_encoder_new(None, ctypes.byref(enc)) != gvt.SUCCESS:
             _NATIVE = False
             return None
         evt = gvt.GhosttyMouseEvent()
+        # byref(evt): same out-param pattern for ghostty_mouse_event_new.
         if g.mouse_event_new(None, ctypes.byref(evt)) != gvt.SUCCESS:
             g.mouse_encoder_free(enc)
             _NATIVE = False
@@ -122,6 +125,8 @@ def _native_handles():
         # release, motion, and wheel all encode. Format is set per call.
         g.mouse_encoder_setopt_int(enc, gvt.MOUSE_ENCODER_OPT_EVENT, gvt.MOUSE_TRACKING_ANY)
         size = gvt.mouse_encoder_size(4096, 4096, 1, 1)
+        # byref(size): GhosttyMouseEncoderSize is a C struct; pass pointer so
+        # ghostty_mouse_encoder_setopt can read cell/pixel dimensions.
         g.mouse_encoder_setopt(enc, gvt.MOUSE_ENCODER_OPT_SIZE, ctypes.byref(size))
         _NATIVE = (gvt, g, enc, evt)
         return _NATIVE
@@ -223,6 +228,8 @@ def _encode_mouse_native(
         evt, gvt.GhosttyMousePosition(float(col - 1), float(row - 1))
     )
 
+    # create_string_buffer: mutable C char[128] for the encoder's output bytes.
+    # c_size_t + byref(written): out-param for how many bytes were written.
     buf = ctypes.create_string_buffer(128)
     written = ctypes.c_size_t(0)
     rc = g.mouse_encoder_encode(enc, evt, buf, len(buf), ctypes.byref(written))
