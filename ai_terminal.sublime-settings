@@ -98,13 +98,15 @@
     // footer height wobbles does not jiggle the viewport. Default 0
     // (follow the real last line). Override per profile.
     "follow_ignore_trailing_lines": 0,
-    // Font for ai_terminal tabs only (this is the key the plugin actually
-    // reads). Must be a monospace font with full box-drawing (U+2500-
-    // U+257F), block-element (U+2580-U+259F), and misc TUI symbol coverage
-    // (U+23BF, U+23F8, U+2733, U+273B, U+2802, U+2B1D). Cascadia Code ships
-    // with Windows 10+ and has all of these. A profile can override this
-    // with its own "font_face"/"font_size".
-    "font_face": "Cascadia Code",
+    // Font for ai_terminal tabs only. "" (empty) = default: the tab uses
+    // Sublime's own font. To pick one, put a font name here, e.g.
+    // "Cascadia Code". Any profile can override with its own "font_face".
+    // A TUI needs a monospace font with box-drawing (U+2500-U+257F) and
+    // block-element (U+2580-U+259F) coverage.
+    "font_face": "",
+    // Font size for ai_terminal tabs only. null = default: Sublime's own
+    // size. A profile can override with its own "font_size".
+    "font_size": null,
     // host_cursor_paint_enabled: render.py's paint_host_cursor -- synthesizes
     // a visible block/bar/underline/hollow glyph or reverse-video cell on top
     // of the plain rendered text. False = rely solely on the real ST caret
@@ -1052,16 +1054,6 @@
     // "block_caret": false,
     // "caret_style": "solid",
     // "caret_extra_width": 0,
-    // DEAD KEY, kept only so this comment isn't lost: "terminal_font" was
-    // never actually read by ai_terminal.py -- the plugin reads "font_face"/
-    // "font_size" (see _term_render / lines ~3866-3880), which were never
-    // set anywhere in this file. So every terminal tab, including agents
-    // whose TUIs paint block-element glyphs (Copilot's startup mascot, box-
-    // drawing borders, etc.), has been running on whatever ST's *global*
-    // font_face is, not Cascadia Code -- confirmed 2026-09-05 after a
-    // garbled-character report on GitHub Copilot's tab turned out to be a
-    // font coverage gap. Real key below.
-    "terminal_font": "Cascadia Code",
     // user_owns_caret_enabled: term._user_owns_caret -- lets a manual click/
     // selection outside the live prompt row permanently hold the ST caret in
     // place instead of the render loop re-snapping it to the PTY cursor every
