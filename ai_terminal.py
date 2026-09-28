@@ -929,19 +929,24 @@ class _BrokerPty:
         self._h_ctl = None
         self._alive = False
         self._io_lock = threading.Lock()
+        self._last_pipe_error = None
+        self._broker_error_file = _broker_registry_file(pipe_name) + ".launch.broker-error"
 
     def _try_connect(self, path, access, timeout_s):
         """Retry CreateFileW against a named pipe until it opens or
         timeout_s elapses, distinguishing "pipe exists but busy" (wait on
         it via WaitNamedPipeW) from "pipe doesn't exist yet" (poll instead --
         WaitNamedPipeW does not wait for first creation, per MSDN)."""
+        self._last_pipe_error = None
         deadline = time.time() + timeout_s
         while True:
             h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, 0, None)
             if h != _INVALID_HANDLE_VALUE:
+                self._last_pipe_error = None
                 return h
             err = ctypes.get_last_error()
             if time.time() > deadline:
+                self._last_pipe_error = (path, err)
                 return None
             if err == _ERROR_PIPE_BUSY:
                 # An instance exists but is taken -- WaitNamedPipeW actually
@@ -953,7 +958,37 @@ class _BrokerPty:
                 # it does not wait for first creation -- so poll instead.
                 time.sleep(0.1)
             else:
+                self._last_pipe_error = (path, err)
                 return None
+
+    def _connection_failure_detail(self):
+        detail = ""
+        if self._last_pipe_error is not None:
+            path, error = self._last_pipe_error
+            try:
+                error_text = ctypes.FormatError(error).strip()
+            except (AttributeError, OSError):
+                error_text = ""
+            detail = f"\nLast CreateFileW error: {error} for {path}"
+            if error_text:
+                detail += f" ({error_text})"
+        if not self._allow_spawn:
+            return detail
+        try:
+            with open(self._broker_error_file, "r", encoding="utf-8") as handle:
+                startup_error = handle.read(16000).strip()
+        except FileNotFoundError:
+            startup_error = ""
+        except OSError as error:
+            startup_error = f"Could not read broker failure diagnostic: {error}"
+        if startup_error:
+            detail += f"\nBroker failure diagnostic:\n{startup_error}"
+        else:
+            detail += (
+                "\nNo broker failure traceback was recorded. The broker may still "
+            f"be starting; if it exited, check {self._broker_error_file}"
+            )
+        return detail
 
     def start(self):
         # Two separate unidirectional pipes (<name> broker-writes/we-read,
@@ -983,7 +1018,7 @@ class _BrokerPty:
             if h_out is None:
                 raise OSError(
                     f"could not connect to agent_broker.py on pipe {self.pipe_name!r} "
-                    f"after spawning it"
+                    f"after spawning it{self._connection_failure_detail()}"
                 )
             print(f"[ai_terminal] spawned new detachable session on pipe {self.pipe_name!r}")
         else:
@@ -994,7 +1029,10 @@ class _BrokerPty:
         if h_in is None:
             _k32.CloseHandle(h_out)
             self._h_out = None
-            raise OSError(f"could not connect to input pipe for {self.pipe_name!r}")
+            raise OSError(
+                f"could not connect to input pipe for {self.pipe_name!r}"
+                f"{self._connection_failure_detail()}"
+            )
         self._h_in = h_in
         self._alive = True
 
@@ -1024,6 +1062,7 @@ class _BrokerPty:
             candidate = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
             if os.path.isfile(candidate):
                 broker_exe = candidate
+        launch_file = _broker_registry_file(self.pipe_name) + ".launch"
         broker_argv = [
             "--pipe-name", self.pipe_name,
             "--cols", str(self._cols), "--rows", str(self._rows),
@@ -1035,7 +1074,6 @@ class _BrokerPty:
             broker_argv += ["--profile-name", self._profile_name]
         if self._cwd:
             broker_argv += ["--cwd", self._cwd]
-        launch_file = _broker_registry_file(self.pipe_name) + ".launch"
         os.makedirs(os.path.dirname(launch_file), exist_ok=True)
         fd = os.open(launch_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:

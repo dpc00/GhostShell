@@ -778,7 +778,7 @@
             "page_keys_to_pty": false,
             "pin_viewport": false,
             "osc_title_updates_tab": true,
-            "close_tab_on_exit": false,
+            "close_tab_on_exit": true,
             "spawn_env": {}
         },
         "OpenCode": {

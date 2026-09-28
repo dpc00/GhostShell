@@ -14,6 +14,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -346,7 +347,7 @@ class _Pty:
         if not ok:
             err = ctypes.get_last_error()
             raise OSError(
-                f"CreateProcessW failed (GetLastError {err}) for cmdline: {self._cmdline!r}"
+                f"CreateProcessW failed (GetLastError {err}) while launching child process"
             )
         self._hProcess = pi.hProcess
         self._hThread = pi.hThread
@@ -735,6 +736,7 @@ class _OutputServer:
         self._pty = pty
         self._scrollback = scrollback
         self._client_handle = None
+        self._ever_connected = False
         self._client_lock = threading.Lock()
         # The listen handle currently blocked in ConnectNamedPipe, waiting
         # for the *next* client -- distinct from _client_handle above,
@@ -798,6 +800,10 @@ class _OutputServer:
         with self._client_lock:
             self._client_handle = None
 
+    @property
+    def ever_connected(self):
+        return self._ever_connected
+
     def run_forever(self):
         """Accept-loop, one client at a time, until the child exits: create
         one named-pipe instance (CreateNamedPipeW), block in ConnectNamedPipe
@@ -850,6 +856,7 @@ class _OutputServer:
                     self._write(handle, self._scrollback.snapshot())
                     self._write(handle, _REPLAY_END)
                     self._client_handle = handle
+                    self._ever_connected = True
             except OSError:
                 _k32.CloseHandle(handle)
                 continue
@@ -1141,7 +1148,7 @@ def _remove_registry(path):
             pass
 
 
-def main():
+def _main():
     own_argv, child_argv, launch_env = _load_launch_file(sys.argv[1:])
 
     p = argparse.ArgumentParser(
@@ -1207,18 +1214,71 @@ def main():
 
     print("[agent_broker] serving \\\\.\\pipe\\%s (+ -in, -ctl) -- Ctrl+C to stop and kill the child"
           % args.pipe_name)
+    child_exit_code = None
+    exited_before_client = False
+    early_exit_output = b""
     try:
         out_server.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        child_exit_code = pty.exit_code()
+        exited_before_client = (
+            not out_server.ever_connected and child_exit_code is not None
+        )
+        if exited_before_client:
+            early_exit_output = scrollback.snapshot()
         print("[%s] broker stopping normally; child_alive=%r child_exit_code=%r" % (
             time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(), pty.exit_code(),
         ))
         pty.kill()
         scrollback.close()
         _remove_registry(args.registry_file)
+    if exited_before_client:
+        child_output = early_exit_output[-8192:].decode("utf-8", errors="replace")
+        child_output = re.sub(
+            r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))",
+            "",
+            child_output,
+        )
+        child_output = "".join(
+            char for char in child_output
+            if char in "\n\t" or char.isprintable()
+        ).strip()
+        output_detail = (
+            "\nCaptured child output (last 8192 bytes):\n" + child_output
+            if child_output else "\nThe child produced no capturable terminal output."
+        )
+        raise RuntimeError(
+            "child process exited before the broker pipe accepted a client "
+            "(exit code %s)" % child_exit_code + output_detail
+        )
     print("[agent_broker] child exited, broker stopping")
+
+
+def main():
+    try:
+        _main()
+    except BaseException:
+        startup_error_file = None
+        argv = sys.argv[1:]
+        if len(argv) == 2 and argv[0] == "--launch-file":
+            startup_error_file = argv[1] + ".broker-error"
+        if startup_error_file:
+            try:
+                with open(startup_error_file, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        time.strftime("%Y-%m-%d %H:%M:%S")
+                        + " broker failed:\n"
+                        + traceback.format_exc()
+                    )
+            except OSError as error:
+                print(
+                    "[agent_broker] could not write startup diagnostic %s: %s"
+                    % (startup_error_file, error),
+                    file=sys.stderr,
+                )
+        raise
 
 
 if __name__ == "__main__":
