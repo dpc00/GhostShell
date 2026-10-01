@@ -193,6 +193,7 @@
             }
         },
         "Antigravity": {
+            "mouse_handling": true,
             // Google Antigravity CLI. Shim resolved via PATH (shutil.which +
             // PATHEXT); if Sublime was started before the shim's directory
             // was added to PATH, restart Sublime or override "launch_command"
@@ -518,6 +519,7 @@
             "spawn_env": {}
         },
         "Dos Console": {
+            "mouse_handling": false,
             "launch_command": [
                 "cmd.exe"
             ],
