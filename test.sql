@@ -1,1 +1,0 @@
-SELECT * FROM trajectory_meta LIMIT 5;
