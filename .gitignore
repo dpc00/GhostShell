@@ -47,4 +47,3 @@ terminal/bin/conpty/
 
 # Agent-tool leftovers that do not belong in the package.
 .augmentignore
-.ori/
