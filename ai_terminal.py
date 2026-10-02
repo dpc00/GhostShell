@@ -49,6 +49,8 @@ from functools import lru_cache
 import sublime
 import sublime_plugin
 
+from .tools import conpty_api
+
 # ─── ctypes ConPTY binding (guarded: a failure must not crash the plugin load) ─────
 
 _PTY_OK = False
@@ -262,6 +264,14 @@ class _Pty:
         # also cannot launch npm .cmd shims without prior _resolve_launch_argv.
         self._cmdline = subprocess.list2cmdline(self.argv)
         self._cwd = cwd or None
+        # Which ConPTY to use (see tools/conpty_api.py).  A profile names a folder in its
+        # spawn_env; the value is for this class, not the child, so it is removed from the
+        # child's environment.  Anything wrong falls back to Windows' built-in ConPTY.
+        self._conpty_folder = ""
+        if isinstance(env, dict) and conpty_api.CONPTY_FOLDER_ENV_VAR in env:
+            env = dict(env)
+            self._conpty_folder = env.pop(conpty_api.CONPTY_FOLDER_ENV_VAR) or ""
+        self._conpty = None         # chosen in start()
         self._env = env
         self._cols = cols
         self._rows = rows
@@ -284,11 +294,13 @@ class _Pty:
             raise OSError("CreatePipe(output) failed")
 
         hPC = HANDLE()
+        self._conpty = conpty_api.select_api(_k32, self._conpty_folder)
+        print("[ai_terminal] ConPTY: %s" % self._conpty.source)
         # restype=HRESULT: ctypes raises OSError itself on a failing result, so
         # the hr check below never ran and the raise leaked both pipe ends.
         try:
-            hr = _k32.CreatePseudoConsole(_COORD(self._cols, self._rows),
-                                          hPipePtyIn, hPipePtyOut, 0, byref(hPC))
+            hr = self._conpty.create(_COORD(self._cols, self._rows),
+                                     hPipePtyIn, hPipePtyOut, 0, byref(hPC))
         except OSError:
             _k32.CloseHandle(hPipePtyIn)
             _k32.CloseHandle(hPipePtyOut)
@@ -404,7 +416,7 @@ class _Pty:
         exit watcher thread and an explicit kill() can't double-close)."""
         with self._pc_lock:
             if self._hPC is not None:
-                _k32.ClosePseudoConsole(self._hPC)
+                (self._conpty or conpty_api.builtin_api(_k32)).close(self._hPC)
                 self._hPC = None
 
     def read(self, on_data):
@@ -458,7 +470,7 @@ class _Pty:
         # the child keeps its old winsize, so full-screen TUIs draw at the
         # wrong width until a later resize succeeds -- report, don't propagate.
         try:
-            hr = _k32.ResizePseudoConsole(self._hPC, _COORD(cols, rows))
+            hr = (self._conpty or conpty_api.builtin_api(_k32)).resize(self._hPC, _COORD(cols, rows))
         except OSError as e:
             print(f"[ai_terminal] ResizePseudoConsole({cols}, {rows}) failed: {e}")
             return False
@@ -1588,6 +1600,8 @@ def _add_close_toolbar(term):
         + "</body>"
     )
     size = view.size()
+    if view.settings().get("ai_tsp_native"):
+        size = 0    # omp's native view fills the tab with panels: the toolbar hangs from the first line (above them)
     view.add_phantom(
         _CLOSE_TOOLBAR_PHANTOM_KEY, sublime.Region(size, size), html,
         sublime.LAYOUT_BLOCK, _on_navigate,
@@ -2616,6 +2630,8 @@ def _set_viewport(view, pos, animate=False):
     """Single choke point for every view.set_viewport_position() call in this
     file -- see _scroll_manipulation_enabled. No-op while disabled so the
     user's own scroll position (wheel, drag, keyboard) is never overwritten."""
+    if view.settings().get("ai_tsp_native"):
+        return      # the native TSP view owns scrolling; text-row scroll logic must not move it
     if not _scroll_manipulation_enabled():
         return
     view.set_viewport_position(pos, animate)
@@ -3435,6 +3451,26 @@ class _Terminal:
         self._in_render = False
         self._spawn_env = spawn_env or {}
         self.profile_name = profile_name
+        # Tern Surface Protocol (omp 18.4.4+ native UI). Off unless the profile
+        # sets "tsp_enabled": true. Imported here, not at the top of the file,
+        # so a fault in the TSP modules can never stop the plugin loading.
+        self._tsp = None
+        self._tsp_view = None
+        # Show the TSP document as rich panels (terminal/tsp_view.py) instead of plain
+        # text; any fault turns this off for the tab and the text repaint takes over.
+        self._tsp_native_ok = _profile_bool(profile_name, "tsp_native_view", True)
+        if _profile_bool(profile_name, "tsp_enabled", False):
+            try:
+                from .terminal.tsp_host import TspHost
+                self._tsp = TspHost(
+                    self._tsp_send,
+                    windows_conpty=(os.name == "nt"),
+                    get_cols=lambda: self.screen.cols,
+                    on_change=lambda _surface: _schedule_render(self),
+                )
+            except Exception:
+                print("[ai_terminal] TSP support could not start: %s"
+                      % traceback.format_exc())
         # Last OSC 0/2 title applied to the ST tab (osc_title_updates_tab
         # setting). None means "no app-set title" (never set, or cleared).
         self._applied_osc_title = None
@@ -3774,14 +3810,25 @@ class _Terminal:
             # Bytes can still drain while pty.kill() closes the handles, but
             # they cannot safely be interpreted against stale parser geometry.
             return
+        fed = text
+        if self._tsp is not None:
+            if self._reattach_bootstrap:
+                # The replay of old output holds the program's old protocol messages: drop them
+                # unanswered (they are history) so their JSON is not drawn as text.
+                try:
+                    fed = self._tsp.strip(text)
+                except Exception:
+                    print("[ai_terminal] TSP replay strip failed:\n%s" % traceback.format_exc())
+            else:
+                fed = self._tsp_filter(text)
         with self._lock:
             try:
                 if self._reattach_bootstrap:
                     if data:
                         self._bootstrap_got_bytes = True
-                    self.parser.feed_bootstrap(text)
+                    self.parser.feed_bootstrap(fed)
                 else:
-                    self.parser.feed(text)
+                    self.parser.feed(fed)
             except Exception as e:
                 # Losing the reader thread over one bad chunk would strand a
                 # live child behind a dead-looking tab, so keep reading; the
@@ -3832,6 +3879,13 @@ class _Terminal:
                 if restored:
                     _seed_restored_history(self.screen, restored)
             self._reattach_bootstrap = False
+        if self._tsp is not None:
+            # The program kept running while Sublime was away and this tab has a new TSP host that
+            # knows none of its surfaces: ask it to send everything again (see TspHost.request_resync).
+            try:
+                self._tsp.request_resync()
+            except Exception:
+                print("[ai_terminal] TSP resync request failed:\n%s" % traceback.format_exc())
         _schedule_render(self)
 
     def send_string(self, s, record=True):
@@ -3878,6 +3932,27 @@ class _Terminal:
                 self._pending_input = []
             self._pending_input.append((text, add_newline))
         _arm_pending_input_poll(self)
+
+    def _tsp_send(self, text):
+        # TSP replies and acknowledgements go out through the same ordered writer
+        # as keystrokes and the engine's own query answers (_on_parser_write_pty),
+        # so the hello reply is written before the engine's DA1 answer.
+        self.send_string(text, record=False)
+
+    def _tsp_filter(self, text):
+        """Take TSP messages out of ``text``, answer them, and return what the
+        screen should see: the remaining text plus a repaint of the native UI.
+        Any fault turns TSP off for this tab and passes the text through."""
+        try:
+            rest = self._tsp.filter(text)
+            if self._tsp_native_ok:
+                return rest     # the native view (_tsp_render_native) draws the document
+            return rest + self._tsp.take_paint(self.screen.cols, self.screen.rows)
+        except Exception:
+            print("[ai_terminal] TSP failed, turned off for this tab: %s"
+                  % traceback.format_exc())
+            self._tsp = None
+            return text
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
@@ -4626,6 +4701,11 @@ def _measure(view, profile_name=None):
     else:
         ml = mr = margin
     usable_w = ex[0] - ml - mr
+    if view.settings().get("ai_tsp_native"):
+        # omp's native view draws its text inside panels with padding and borders, so the text has less
+        # room than the tab is wide.  Tell omp the narrower width, or its wide lines (tables, tool lists)
+        # are cut off at the right edge.  Profile key tsp_reserved_width (pixels; 0 = none).
+        usable_w -= _setting_number("tsp_reserved_width", 96, profile_name=profile_name)
     # ST's native gutter (excluded from viewport_extent above) widens by one
     # digit every time total_lines crosses 10**n (999->1000, 9999->10000...).
     # During an active full-history replay that crossing happens repeatedly
@@ -5031,9 +5111,43 @@ def _update_debug_status(term):
         print("[ai_terminal] update debug status failed:\n%s" % traceback.format_exc())
 
 
+def _tsp_render_native(term):
+    """Draw the program's TSP document as rich panels. False on any fault, which
+    turns the native view off for this tab so the text repaint takes over."""
+    if not term._tsp_native_ok or term._tsp is None:
+        return False
+    try:
+        if term._tsp.active_surface() is None:
+            return False        # the program is not drawing natively (yet, or any more)
+        if term._tsp_view is None:
+            from .terminal.tsp_view import TspView
+            term._tsp_view = TspView(
+                term.view, _setting_number("tsp_animation_ms", 250, profile_name=term.profile_name))
+        drawn = term._tsp_view.render(term._tsp, term.screen.cols)
+        term._tsp_native_failures = 0
+        return drawn
+    except Exception:
+        failures = getattr(term, "_tsp_native_failures", 0) + 1
+        term._tsp_native_failures = failures
+        print("[ai_terminal] TSP native view failed (%d): %s" % (failures, traceback.format_exc()))
+        # Never leave an old picture on screen: take every panel down and say so.
+        if term._tsp_view is not None:
+            term._tsp_view.clear()
+        if failures >= 3:
+            term._tsp_native_ok = False
+            term.view.set_status("ai_tsp", "omp native view: OFF after repeated errors, showing plain text")
+        else:
+            term.view.set_status("ai_tsp", "omp native view: ERROR, see the console")
+        return False
+
+
 def _do_render(term):
     view = term.view
     if not view or not view.is_valid():
+        term._render_pending = False
+        return
+    if _tsp_render_native(term):
+        # The program is drawing natively (TSP): its document is shown, not screen text rows.
         term._render_pending = False
         return
     # Defer while selecting/copying: full-buffer replace + caret re-pin wipes it.
@@ -6704,6 +6818,36 @@ class AiTerminalClearWorkingDirectoryCommand(sublime_plugin.WindowCommand):
         return _get_working_dir(self.window) is not None
 
 
+def _with_conpty_folder(extra_env, profile_name):
+    """Add the Windows Terminal ConPTY folder to a profile's spawn environment when it needs one.
+
+    A profile with tsp_enabled needs the newer ConPTY (the built-in one swallows omp's startup
+    questions, so the native view never starts).  A folder the profile names itself is kept.
+    Otherwise the verified files are used when they are already downloaded; if not, the download
+    starts in the background and this tab starts without them (a status message says so), so
+    opening a new tab after it finishes gets the native view.  Nothing else changes.
+    """
+    try:
+        if conpty_api.CONPTY_FOLDER_ENV_VAR in extra_env or not _profile_bool(profile_name, "tsp_enabled", False):
+            return extra_env
+        folder = conpty_api.default_folder_if_ready()
+        if folder:
+            extra_env = dict(extra_env)
+            extra_env[conpty_api.CONPTY_FOLDER_ENV_VAR] = folder
+            return extra_env
+
+        def download():
+            if conpty_api.ensure_default_files(log=print):
+                sublime.set_timeout(lambda: sublime.status_message(
+                    "Ai terminal: the Windows Terminal ConPTY is ready; open a new tab for the native view"), 0)
+
+        sublime.status_message("Ai terminal: downloading the Windows Terminal ConPTY (1.7 MB) for the native view")
+        threading.Thread(target=download, daemon=True).start()
+    except Exception:
+        print("[ai_terminal] could not prepare the Windows Terminal ConPTY:\n%s" % traceback.format_exc())
+    return extra_env
+
+
 def _resolve_profile_launch(profile_name, s=None):
     """Resolve a profile name into (profile_name, argv, extra_env) -- the
     launch_command/spawn_env half of _spawn's old body, split out so
@@ -6726,7 +6870,7 @@ def _resolve_profile_launch(profile_name, s=None):
         argv = _launch_command()
         extra_env = _spawn_env()
         profile_name = "Legacy" if profile_name else None
-    return profile_name, argv, extra_env
+    return profile_name, argv, _with_conpty_folder(extra_env, profile_name)
 
 
 def _spawn(window, path, profile=None):
@@ -7013,6 +7157,7 @@ def _reattach_broker_view(view, pipe_name):
     else:
         argv = _launch_command()
         extra_env = _spawn_env()
+    extra_env = _with_conpty_folder(extra_env, profile_name)
 
     env = _sanitize_pty_env(os.environ, extra_env)
     env = _refresh_path_env(env)
@@ -7512,6 +7657,8 @@ def _compensate_trim_scroll(view, term, vp):
     if term._auto_follow and not _setting_bool(
             "compensate_trim_while_following", False):
         return vp
+    if view.settings().get("ai_tsp_native"):
+        return vp   # the native TSP view owns scrolling
     lh = view.line_height() or 20
     new_y = max(0.0, vp[1] - evicted * lh)
     if new_y != vp[1]:
@@ -8105,7 +8252,10 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # shift+arrow (e.g. a text widget's own select mode) will not see it
         # anymore -- unconditional per explicit request rather than gated on
         # _tui_like().
-        if not alt and not ctrl and shift and key in ("left", "right", "up", "down"):
+        # Not in a tab showing omp's native view: there omp owns the selection (its editor sends the
+        # selection anchor) and Sublime's hidden caret must not move, or the tab scrolls to it.
+        if (not alt and not ctrl and shift and key in ("left", "right", "up", "down")
+                and not self.view.settings().get("ai_tsp_native")):
             by = "characters" if key in ("left", "right") else "lines"
             self.view.run_command(
                 "move", {"by": by, "forward": key in ("right", "down"), "extend": True}
@@ -8293,6 +8443,14 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                         _scroll_to_bottom(self.view)
                         term._last_vp_y = self.view.viewport_position()[1]
                         term._live_anchor_y = term._last_vp_y
+            # The native omp view keeps its input box at the bottom of the tab.  Typing
+            # while scrolled up must bring it into sight, as it does for the text view.
+            native = getattr(term, "_tsp_view", None)
+            if native is not None and term._tsp_native_ok and kl not in _NO_SCROLL_KEYS:
+                try:
+                    native.pin_to_bottom()
+                except Exception:       # a display problem must never stop keys reaching the program
+                    print("[ai_terminal] native view pin_to_bottom failed: %s" % traceback.format_exc())
             term.send_string(code)
 
 
@@ -10055,6 +10213,20 @@ class AiTerminalNoopCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
         pass
+
+
+class AiTerminalNativeClickCommand(sublime_plugin.TextCommand):
+    """Mouse press in a tab that shows omp's native view (TSP panels): do nothing.
+
+    The tab's own text is one empty line; the panels are phantoms.  Sublime's normal press handler
+    (drag_select) puts the caret on that line and then scrolls to show it, which threw the view to the
+    top of the conversation on every click outside a link.  Links in the panels are handled by the
+    phantoms themselves, so nothing is lost.  Bound in Default.sublime-mousemap for tabs whose
+    setting ai_tsp_native is true.  No menu/palette entry.
+    """
+
+    def run(self, edit, **kwargs):
+        return
 
 
 class AiTerminalTrackpadScrollCommand(sublime_plugin.TextCommand):

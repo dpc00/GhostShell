@@ -41,3 +41,5 @@ ai_terminal_agents.sublime-settings
 *.sublime-workspace
 package-metadata.json
 *.sublime-package
+
+terminal/bin/conpty/

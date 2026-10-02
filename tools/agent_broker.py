@@ -32,6 +32,11 @@ from ctypes import (
 )
 from ctypes.wintypes import HANDLE, DWORD, WORD, BOOL, LPCWSTR, LPBYTE, SHORT
 
+try:
+    import conpty_api       # run as a script: tools/ is on sys.path
+except ImportError:
+    from . import conpty_api    # imported as part of the tools package
+
 if os.name != "nt":
     sys.exit("agent_broker.py is Windows-only (ConPTY + named pipes).")
 
@@ -257,6 +262,14 @@ class _Pty:
         self._cmdline = subprocess.list2cmdline(self.argv)
         self._cwd = cwd or None
         self._env = env
+        # Which ConPTY to use (see conpty_api.py). A profile names a folder in its
+        # spawn_env; the value is for this broker, not the child, so it is removed
+        # from the environment the child receives.
+        self._conpty_folder = ""
+        self._conpty = None
+        if isinstance(env, dict) and conpty_api.CONPTY_FOLDER_ENV_VAR in env:
+            self._env = dict(env)
+            self._conpty_folder = self._env.pop(conpty_api.CONPTY_FOLDER_ENV_VAR) or ""
         self._cols = cols
         self._rows = rows
 
@@ -278,8 +291,10 @@ class _Pty:
 
         hPC = HANDLE()
         try:
-            hr = _k32.CreatePseudoConsole(_COORD(self._cols, self._rows),
-                                          hPipePtyIn, hPipePtyOut, 0, byref(hPC))
+            self._conpty = conpty_api.select_api(_k32, self._conpty_folder)
+            print("[agent_broker] ConPTY: %s" % self._conpty.source)
+            hr = self._conpty.create(_COORD(self._cols, self._rows),
+                                     hPipePtyIn, hPipePtyOut, 0, byref(hPC))
         except OSError:
             _k32.CloseHandle(hPipePtyIn)
             _k32.CloseHandle(hPipePtyOut)
@@ -450,7 +465,7 @@ class _Pty:
         exit watcher thread and an explicit kill() can't double-close)."""
         with self._pc_lock:
             if self._hPC is not None:
-                _k32.ClosePseudoConsole(self._hPC)
+                self._conpty.close(self._hPC)
                 self._hPC = None
 
     def read(self, on_data):
@@ -505,7 +520,7 @@ class _Pty:
         if not self._alive or self._hPC is None:
             return False
         try:
-            hr = _k32.ResizePseudoConsole(self._hPC, _COORD(cols, rows))
+            hr = self._conpty.resize(self._hPC, _COORD(cols, rows))
         except OSError as e:
             print(f"[agent_broker] ResizePseudoConsole({cols}, {rows}) failed: {e}")
             return False

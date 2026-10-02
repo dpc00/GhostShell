@@ -781,6 +781,15 @@
             "pin_viewport": false,
             "osc_title_updates_tab": true,
             "close_tab_on_exit": true,
+            // true = answer omp's Tern Surface Protocol probe and show its native UI
+            // as plain text (terminal/tsp_host.py). Off until proven in a live tab.
+            // Takes effect for tabs spawned after the change.
+            "tsp_enabled": false,
+            // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
+            // DA1 sentinel to any terminal (pi-tui terminal.ts). A terminal that
+            // does not answer it gets omp's classic ANSI renderer, which is what
+            // GhostShell gets today. Do NOT set PI_TUI_NATIVE=0 here: it
+            // suppresses the probe and would block TSP support.
             "spawn_env": {}
         },
         "OpenCode": {

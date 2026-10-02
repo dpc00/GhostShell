@@ -23,6 +23,8 @@ BOOLEAN_KEYS = frozenset({
     "page_keys_to_pty",
     "pin_viewport",
     "record_asciicast",
+    "tsp_enabled",
+    "tsp_native_view",
     "user_owns_caret_enabled",
     "wheel_to_pty",
 })
@@ -34,6 +36,8 @@ NUMBER_KEYS = frozenset({
     "min_columns",
     "min_rows",
     "scrollback_history_size",
+    "tsp_animation_ms",
+    "tsp_reserved_width",
 })
 
 STRING_KEYS = frozenset({"tab_close_input"})

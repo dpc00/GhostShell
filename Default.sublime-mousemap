@@ -16,6 +16,23 @@
 		"press_args": {"by": "lines"},
 		"context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}]
 	},
+	// Tabs showing omp's native (TSP) view: a press does nothing, so the view is not scrolled to the caret.
+	// Listed after the drag_select entries above so it wins for these tabs.
+	{
+		"button": "button1", "count": 1,
+		"press_command": "ai_terminal_native_click",
+		"context": [{"key": "setting.ai_tsp_native", "operator": "equal", "operand": true}]
+	},
+	{
+		"button": "button1", "count": 2,
+		"press_command": "ai_terminal_native_click",
+		"context": [{"key": "setting.ai_tsp_native", "operator": "equal", "operand": true}]
+	},
+	{
+		"button": "button1", "count": 3,
+		"press_command": "ai_terminal_native_click",
+		"context": [{"key": "setting.ai_tsp_native", "operator": "equal", "operand": true}]
+	},
 	// Wheel / two-finger trackpad: only while the tab's wheel_to_pty setting
 	// is on (context answered by AiTerminalKeyInterceptor.on_query_context).
 	// Off, these do not apply and Sublime scrolls the tab natively.
