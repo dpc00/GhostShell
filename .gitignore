@@ -8,6 +8,7 @@ pytest-cache-files-*/
 .codex-test-tmp-*/
 .tmp/
 .session-baton.json
+SESSION_BATON*
 
 
 # Built binary artifact -- keep on disk (required at runtime) but don't track in git.
