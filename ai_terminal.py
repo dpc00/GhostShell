@@ -8662,7 +8662,18 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # snap back on every render -- so this threshold does not need
             # to be hair-triggered to fix the race; back to 1.5 line-heights.
             if vp[1] < term._live_anchor_y - lh * 1.5:
-                _set_auto_follow(term, False)
+                # A small drift from where this engine last placed the view
+                # (a palm brushing the trackpad, a layout shrink clamping the
+                # view, pushing the tail up and then typing) is not a scroll
+                # into history. Stay following unless the view is now well
+                # above the position that shows the whole end of the tab (the
+                # status line included): _scroll_to_bottom puts a nudged tail
+                # back on screen on its own, and the follow flag is what
+                # keeps the tab trimmed and following.
+                follow_h = max(0.0, real_h - _follow_ignore_trailing_lines(term) * lh)
+                tail_top_y = rest + follow_h - ve[1] if follow_h > ve[1] else rest
+                if vp[1] < tail_top_y - lh * 12:
+                    _set_auto_follow(term, False)
             # Deliberately no near_bottom-triggered re-engage call here
             # anymore. This render loop runs on every redraw, including
             # an idle spinner/timer redraw that changes no content and that
@@ -8739,8 +8750,23 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             if len(sel) == 1 and sel[0].empty():
                 term._user_owns_caret = False
                 keep_selection = False
+        # Claude Code hides the terminal cursor and parks it in the bottom-right
+        # corner while it redraws the spinner or footer. That corner is not
+        # where input goes; moving the caret there put it below the prompt
+        # (over the status line) and scrolled the view to it. Leave the caret
+        # where it is for that frame; the next frame places it again.
+        screen = term.screen if term is not None else None
+        cursor_parked = bool(
+            screen is not None
+            and not tui_owns_scroll
+            and not screen.cursor_visible
+            and screen.y >= screen.rows - 1
+            and screen.x >= screen.cols - 1
+        )
         if keep_selection:
             pass  # the user's own caret/selection stands; only scroll below
+        elif cursor_parked:
+            pass  # hidden cursor parked bottom-right: keep the caret where it is
         elif cursor_offset is not None and int(cursor_offset) >= 0:
             _place_auto_caret(view, term, min(int(cursor_offset), view.size()))
         elif cursor is not None:
