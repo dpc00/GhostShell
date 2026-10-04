@@ -7852,6 +7852,36 @@ def _place_auto_caret(view, term, pos):
         term._last_auto_caret_pos = pos
 
 
+def _keep_tail_after_reprint(view, term):
+    """Follow the end of the tab when the app reprints a lot of text at once.
+
+    2026-10-03: Claude Code sometimes redraws its whole conversation, adding
+    several screens of text in one frame. The viewport stays at the same
+    pixel row while the tab grows below it, so a viewer who was at (or just
+    above) the end ends up a quarter of the way down the tab, away from the
+    command line. Only that case is handled: the layout grew by more than a
+    screen and a half since the last frame, the viewport has not moved, and
+    it was within half a screen of the old end. A viewer who scrolled further
+    up keeps their place, and ordinary streaming never grows that much in one
+    frame.
+    """
+    if term is None:
+        return
+    vh = view.viewport_extent()[1]
+    lh = view.layout_extent()[1]
+    vy = view.viewport_position()[1]
+    prev = getattr(term, "_prev_layout", None)
+    term._prev_layout = (lh, vy)
+    if prev is None or vh <= 0:
+        return
+    prev_lh, prev_vy = prev
+    gap = prev_lh - (prev_vy + vh)
+    if lh - prev_lh > vh * 1.5 and abs(vy - prev_vy) <= 1 and gap <= vh * 0.5:
+        target = max(0.0, lh - vh - max(0.0, gap))
+        _set_viewport(view, (0.0, target), False)
+        term._prev_layout = (lh, target)
+
+
 def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits):
     """Where the viewport lands after a frame.
 
@@ -7861,6 +7891,7 @@ def _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
     """
     if tui_owns_scroll:
         _pin_viewport_rest_dip_only(view, rest, term)
+        _keep_tail_after_reprint(view, term)
     elif do_follow and not content_fits:
         _scroll_to_bottom(view)
         if term is not None:
