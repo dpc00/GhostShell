@@ -28,7 +28,7 @@ Suspect uncolorized-terminal-unsafe subprocess output (raw ANSI codes
 from tools like `node`, or any CLI that auto-detects a TTY and emits
 color codes) as a trigger worth checking first via the existing
 asciinema troubleshooting workflow at
-`~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering/`.
+`~/data/logs/ai_terminal_asciinema_casts_for_troubleshooting_rendering/` [CHECK 2026-10-05: ~/data/logs was purged, see reference_where_campaign_records_live, so those recordings are probably gone].
 Not yet root-caused -- resize-to-repaint is NOT a reliable fix for this
 particular symptom (unlike the trackpad-zoom freeze, where restoring
 font size did fix it). If it recurs, worth actually digging into

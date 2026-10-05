@@ -20,4 +20,4 @@ The correct upstream target for a bug report is **GhostShell**, not Terminus, ST
 
 Preventively: recommend `Ctrl+End` (or the ST/Terminus scroll-to-bottom command) over a two-finger trackpad drag to reach the bottom of the `ai_terminal` panel — the drag is what risks drifting into a pinch/zoom. The underlying `ai_terminal` auto-scroll-on-new-output gap is worth fixing or reporting separately.
 
-Related: [[project-sublime-mcp-console-fix]] (separate, real bug fixed same session — get_console_win focus-stealing, unrelated to this issue).
+Related: [[reference_console_tee_log_4200]] (the note about the console-capture fix) (separate, real bug fixed same session — get_console_win focus-stealing, unrelated to this issue).
