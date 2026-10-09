@@ -5032,6 +5032,13 @@ def _selection_paint_blocked(view, term):
         # "Debug instrumentation baton"). Let the next paint through; the
         # full-buffer replace will naturally take the selection with it.
         term._paint_block_since = None
+        # Collapse it here. AiTerminalRenderCommand._run asks this same
+        # question again a moment after _do_render released the frame; with
+        # the selection still in place that second call restarts the timer
+        # and blocks, so no frame was ever painted and the tab stayed frozen
+        # on an old screen (seen live 2026-10-08: a line of an answered
+        # permission prompt stayed selected and the view never repainted).
+        _clear_view_selection(view, term)
         return False
     term._paint_block_since = None
     guard = float(getattr(term, "_st_select_guard_until", 0.0) or 0.0)
