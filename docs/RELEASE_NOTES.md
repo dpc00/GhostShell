@@ -1,6 +1,10 @@
 # Release notes
 
 
+## 0.2.1
+
+**Added:** a Muse profile and Ai Terminal menu entries (main menu and side bar) to open it, with its settings in ai_terminal.sublime-settings.
+
 ## 0.2.0
 
 > **Note (2026-09-21):** the owner deleted the whole `tests/` folder that day. References to tests in entries dated on or
