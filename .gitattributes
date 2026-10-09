@@ -9,3 +9,6 @@
 /temp_note.md export-ignore
 /docs/PACKAGE_CONTROL.md export-ignore
 /docs/package-control-entry.json export-ignore
+/.claude export-ignore
+/CLAUDE.md export-ignore
+/AGENTS.md export-ignore
