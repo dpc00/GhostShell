@@ -3,7 +3,13 @@
 
 ## 0.2.1
 
-**Added:** a Muse profile and Ai Terminal menu entries (main menu and side bar) to open it, with its settings in ai_terminal.sublime-settings.
+**Added:** a Muse profile (Muse Code CLI) with entries in the Ai Terminal menu and the side bar menu. It is untuned: no mouse or page-key behaviour is claimed for it.
+
+**Fixed:** when Claude Code redraws its whole conversation in one frame, a viewer who was at the end of the tab is no longer left a quarter of the way down it; the view follows the new end. A viewer who has scrolled further up keeps their place.
+
+**Fixed:** a small drift of the view (a palm brushing the trackpad, a layout shrink, typing after pushing the tail up) no longer switches off following the end of the tab. Following stops only when the view is well above the end.
+
+**Fixed:** Claude Code hides the terminal cursor and parks it in the bottom-right corner while it redraws the spinner or footer. The caret is no longer moved there, which had put it over the status line and scrolled the view to it.
 
 ## 0.2.0
 
