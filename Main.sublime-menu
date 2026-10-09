@@ -176,6 +176,13 @@
                         }
                     },
                     {
+                        "caption": "Muse",
+                        "command": "ai_terminal_open_here",
+                        "args": {
+                            "profile": "Muse"
+                        }
+                    },
+                    {
                         "caption": "omp",
                         "command": "ai_terminal_open_here",
                         "args": {

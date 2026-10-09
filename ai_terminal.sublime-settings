@@ -661,6 +661,21 @@
                 "OPENROUTER_API_KEY": "$secret:OPENROUTER_API_KEY"
             }
         },
+        "Muse": {
+            "detachable": true,
+            // Muse Code CLI 1.4.4 (2026-10-08), installed to
+            // %LOCALAPPDATA%\Programs\muse (muse.cmd shim on the user PATH).
+            // Resolved via PATH like the other shims: if Sublime was started
+            // before the install, restart Sublime or override "launch_command"
+            // with an absolute path in your own User settings.
+            // Untuned: no recorded session yet, so no mouse_handling,
+            // page_keys_to_pty or force_tui_like claims. MCP servers go in
+            // ~/.config/muse/settings.json under "mcpServers".
+            "launch_command": [
+                "muse"
+            ],
+            "spawn_env": {}
+        },
         "Junie": {
             "detachable": true,
             // JetBrains Junie CLI. Shim resolved via PATH (shutil.which +
