@@ -2622,8 +2622,11 @@ def _keep_screen_height_steady(term, rows, trimmed):
     return rows[:len(rows) - term._steady_rows_dropped]
 
 
-def _scroll_manipulation_enabled():
-    return _setting_bool("scroll_manipulation_enabled", True)
+def _scroll_manipulation_enabled(view=None):
+    term = _Terminal.from_id(view.id()) if view is not None else None
+    return _setting_bool(
+        "scroll_manipulation_enabled", True, profile_name=_term_profile_name(term)
+    )
 
 
 def _set_viewport(view, pos, animate=False):
@@ -2632,7 +2635,7 @@ def _set_viewport(view, pos, animate=False):
     user's own scroll position (wheel, drag, keyboard) is never overwritten."""
     if view.settings().get("ai_tsp_native"):
         return      # the native TSP view owns scrolling; text-row scroll logic must not move it
-    if not _scroll_manipulation_enabled():
+    if not _scroll_manipulation_enabled(view):
         return
     view.set_viewport_position(pos, animate)
 
@@ -4044,6 +4047,24 @@ class _Terminal:
         except Exception:
             print("[ai_terminal] status filter failed:\n%s" % traceback.format_exc())
 
+    def _auto_approve_permission(self):
+        """Answer Claude Code's permission prompt with "1" (option 1, Yes) when the
+        setting auto_approve_permissions is on.  The prompt is drawn a moment after
+        the report arrives, so the key goes out half a second later.  Never raises."""
+        try:
+            if not _setting_bool("auto_approve_permissions", False, profile_name=self.profile_name):
+                return
+
+            def approve():
+                try:
+                    self.send_string("1", record=False)
+                except Exception:
+                    print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
+
+            threading.Timer(0.5, approve).start()
+        except Exception:
+            print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
+
     def _status_handle(self, body, terminator):
         """Handle one OSC 7501 sequence: a question or a status report."""
         seen = self.__dict__.setdefault(
@@ -4074,7 +4095,10 @@ class _Terminal:
             previous = records.get(record_id, {}).get("state")
             records[record_id] = pairs  # replaces the whole record
             if state != previous:
-                _play_status_tone(state)
+                _play_status_tone(state, self.profile_name)
+                if (state == "blocked" and pairs.get("kind") == "permission"
+                        and pairs.get("app") == "claude-code"):
+                    self._auto_approve_permission()
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
@@ -5340,7 +5364,7 @@ def _do_render(term):
         # below content (Claude last-row CUP + overflow \\n) is not kept.
         # Empty prompt on the next line is. See trim_display_rows.
         trimmed = _trim_display_rows(rows, cy)
-        if _setting_bool("steady_screen_height_enabled", True):
+        if _setting_bool("steady_screen_height_enabled", True, profile_name=_term_profile_name(term)):
             rows = _keep_screen_height_steady(term, rows, trimmed)
         else:
             rows = trimmed
@@ -6363,9 +6387,12 @@ class AiTerminalKeyInterceptor(sublime_plugin.EventListener):
             window = view.window()
             if window is not None and not _same_view(window.active_view(), view):
                 window.focus_view(view)
-            raw = sublime.load_settings(_SETTINGS_NAME).get(
-                "drag_forwards_by_default", True
-            )
+            _prof = _profile_settings(_term_profile_name(term)) or {}
+            raw = _prof.get("drag_forwards_by_default")
+            if raw is None:
+                raw = sublime.load_settings(_SETTINGS_NAME).get(
+                    "drag_forwards_by_default", True
+                )
             if isinstance(raw, str):
                 forward_by_default = raw.strip().lower() in ("1", "true", "yes", "on")
             else:
@@ -6951,14 +6978,14 @@ _STATUS_TONES = {
 _status_tone_lock = threading.Lock()
 
 
-def _play_status_tone(state):
+def _play_status_tone(state, profile_name=None):
     """Play the tone for a status change, off the reader thread.  Never raises.
 
     winsound.Beep blocks until the note ends, so it runs in its own thread; a tone
     that arrives while another is still playing is skipped rather than queued."""
     try:
         notes = _STATUS_TONES.get(state)
-        if not notes or os.name != "nt" or not _settings_obj().get("status_tones", False):
+        if not notes or os.name != "nt" or not _setting_bool("status_tones", False, profile_name=profile_name):
             return
 
         def play():
@@ -7820,7 +7847,7 @@ def _compensate_trim_scroll(view, term, vp):
     # (line_diff_render_enabled) and no longer changes height with an app's
     # footer (steady_screen_height_enabled).
     if term._auto_follow and not _setting_bool(
-            "compensate_trim_while_following", False):
+            "compensate_trim_while_following", False, profile_name=_term_profile_name(term)):
         return vp
     if view.settings().get("ai_tsp_native"):
         return vp   # the native TSP view owns scrolling
@@ -8771,7 +8798,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                     # the permanent host key.
                     _apply_color_regions(view, regions or [])
 
-        if not patched and text and _setting_bool("line_diff_render_enabled", True):
+        if not patched and text and _setting_bool("line_diff_render_enabled", True, profile_name=_term_profile_name(term)):
             # Terminus-style redraw: replace only the lines that changed
             # (Terminus rewrites dirty lines, never the whole buffer). A whole-
             # buffer replace makes Sublime lose its place and move the view on
@@ -9424,13 +9451,6 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
 # _setting_bool's own `default` argument is at that call site; most are
 # False but a few (close_tab_on_exit, log_tab_text) default True.
 #
-# Deliberately excluded: drag_forwards_by_default -- its one call site
-# (AiTerminalKeypressCommand's drag_select handling) reads
-# `sublime.load_settings(_SETTINGS_NAME).get(...)` directly, global-only,
-# no profile_name passed -- a per-profile override here would write
-# correctly but the running code never checks it, so offering it as a tab
-# toggle would lie about what it does. Separate bug, out of scope for this
-# panel to paper over.
 _LIVE_TUNABLE_PROFILE_KEYS = (
     ("mouse_handling", "Send clicks and drags to apps that ask for the mouse, in the mode they ask for; apps that do not ask keep Sublime's clicks and selection", False),
     ("page_keys_to_pty", "Send PageUp/PageDown to the PTY instead of native Sublime scroll", False),
@@ -9447,6 +9467,13 @@ _LIVE_TUNABLE_PROFILE_KEYS = (
     ("user_owns_caret_enabled", "Let the user's own ST caret placement (not just the app's) drive rendering", False),
     ("close_tab_on_exit", "Close this tab automatically ~1.5s after its process exits", True),
     ("log_tab_text", "Keep a session text log for this tab (also gates asciicast recording upstream)", True),
+    ("scroll_manipulation_enabled", "Let the plugin move the viewport (follow the bottom, pin it); off leaves scrolling entirely to Sublime", True),
+    ("line_diff_render_enabled", "Redraw only the lines that changed each frame instead of replacing the whole buffer", True),
+    ("steady_screen_height_enabled", "Keep the screen height steady when an app's footer grows or shrinks", True),
+    ("compensate_trim_while_following", "Also shift the viewport when old lines are trimmed while following the bottom", False),
+    ("auto_approve_permissions", "Answer Claude Code permission prompts with Yes automatically", False),
+    ("status_tones", "Play a tone when the app's status changes (Windows)", False),
+    ("drag_forwards_by_default", "Forward mouse drags to the app instead of selecting text in Sublime", True),
 )
 
 # Settings baked in once at view/parser/_Terminal bring-up rather than

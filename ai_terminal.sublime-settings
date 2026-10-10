@@ -153,6 +153,11 @@
     // a short rising pair, error = one low note. Idle and working are silent.
     // Windows only. Off by default; set true in your User settings to opt in.
     "status_tones": false,
+    // Answer Claude Code's permission prompts for you: when it reports state=blocked
+    // with kind=permission, send "1" (Yes) half a second later. It approves EVERY
+    // permission prompt, deletes included, and only prompts of that kind (questions
+    // and sign-ins are left alone). Off by default; set true in your User settings.
+    "auto_approve_permissions": false,
     "max_columns": null,
     // Floor and ceiling on the auto-sized terminal width in characters.
     // cols is computed from the viewport width; min_columns is the lower
