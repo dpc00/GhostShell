@@ -147,6 +147,12 @@
     // Off by default for a public release. Set true globally, or set
     // "log_tab_text": true on a specific profile, to opt in.
     "log_tab_text": false,
+    // Play a short tone when a program that reports its status (Program Status
+    // Protocol, OSC 7501; Claude Code does once the profile has "modern_conpty")
+    // changes state: blocked (waiting for you) = two alternating notes, done =
+    // a short rising pair, error = one low note. Idle and working are silent.
+    // Windows only. Off by default; set true in your User settings to opt in.
+    "status_tones": false,
     "max_columns": null,
     // Floor and ceiling on the auto-sized terminal width in characters.
     // cols is computed from the viewport width; min_columns is the lower

@@ -4071,7 +4071,10 @@ class _Terminal:
                     if old_id == record_id or old_id.startswith(record_id + "/"):
                         del records[old_id]
         elif state in self._PS_STATES:
+            previous = records.get(record_id, {}).get("state")
             records[record_id] = pairs  # replaces the whole record
+            if state != previous:
+                _play_status_tone(state)
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
@@ -6935,6 +6938,44 @@ class AiTerminalClearWorkingDirectoryCommand(sublime_plugin.WindowCommand):
 
     def is_visible(self):
         return _get_working_dir(self.window) is not None
+
+
+# Status tones (setting "status_tones"): (frequency Hz, milliseconds) notes per state.
+# Idle and working are silent.  Blocked repeats the two-note alert Donald's old
+# Claude Code Notification hook played.
+_STATUS_TONES = {
+    "blocked": [(1046, 90), (784, 90)] * 4,
+    "done": [(784, 80), (1046, 130)],
+    "error": [(392, 350)],
+}
+_status_tone_lock = threading.Lock()
+
+
+def _play_status_tone(state):
+    """Play the tone for a status change, off the reader thread.  Never raises.
+
+    winsound.Beep blocks until the note ends, so it runs in its own thread; a tone
+    that arrives while another is still playing is skipped rather than queued."""
+    try:
+        notes = _STATUS_TONES.get(state)
+        if not notes or os.name != "nt" or not _settings_obj().get("status_tones", False):
+            return
+
+        def play():
+            if not _status_tone_lock.acquire(blocking=False):
+                return
+            try:
+                import winsound
+                for frequency, milliseconds in notes:
+                    winsound.Beep(frequency, milliseconds)
+            except Exception:
+                pass
+            finally:
+                _status_tone_lock.release()
+
+        threading.Thread(target=play, daemon=True).start()
+    except Exception:
+        print("[ai_terminal] status tone failed:\n%s" % traceback.format_exc())
 
 
 def _with_conpty_folder(extra_env, profile_name):
