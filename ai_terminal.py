@@ -3846,7 +3846,7 @@ class _Terminal:
                         # The question was split between two chunks, so it could
                         # not be answered in its place: answer it now.
                         self._ps_probe_open = False
-                        self.send_string(self._PS_REPLY, record=False)
+                        self.send_string(self._ps_reply(), record=False)
             except Exception as e:
                 # Losing the reader thread over one bad chunk would strand a
                 # live child behind a dead-looking tab, so keep reading; the
@@ -3991,6 +3991,17 @@ class _Terminal:
     _PS_PROBE = re.compile("\x1b\\]7501;\\?[^\x07\x1b]*(?:\x07|\x1b\\\\)")
     _PS_REPLY = "\x1b]7501;?\x1b\\"
 
+    def _ps_reply(self):
+        """Our answer, in a form the program can receive. Windows ConPTY
+        silently drops an OSC sequence written to a program's input, so there
+        the answer is sent as win32-input-mode key events (ESC [ Vk;Sc;Uc;Kd;Cs;Rc _),
+        which ConPTY turns back into the same characters (shown by a listener
+        test on 2026-10-10: the plain OSC never arrived, the encoded one did)."""
+        if os.name != "nt":
+            return self._PS_REPLY
+        return "".join("\x1b[0;0;%d;%d;0;1_" % (ord(char), down)
+                       for char in self._PS_REPLY for down in (1, 0))
+
     def _status_pieces(self, fed):
         """Cut ``fed`` (live output) just after each status question.
         Returns [(text to feed the parser, answer to send after it or None)].
@@ -4008,7 +4019,7 @@ class _Terminal:
             if match is None:
                 pieces.append((rest, None))
                 return pieces
-            pieces.append((rest[:match.end()], self._PS_REPLY))
+            pieces.append((rest[:match.end()], self._ps_reply()))
             self._ps_probe_open = False     # answered in its place
             rest = rest[match.end():]
 
@@ -6930,13 +6941,18 @@ def _with_conpty_folder(extra_env, profile_name):
     """Add the Windows Terminal ConPTY folder to a profile's spawn environment when it needs one.
 
     A profile with tsp_enabled needs the newer ConPTY (the built-in one swallows omp's startup
-    questions, so the native view never starts).  A folder the profile names itself is kept.
-    Otherwise the verified files are used when they are already downloaded; if not, the download
-    starts in the background and this tab starts without them (a status message says so), so
-    opening a new tab after it finishes gets the native view.  Nothing else changes.
+    questions, so the native view never starts).  A profile with modern_conpty asks for it on
+    its own: the built-in ConPTY answers device attributes and mode queries itself, ahead of
+    GhostShell, and drops OSC answers, so Claude Code logs "no reply" for them (measured
+    2026-10-10; with the newer ConPTY it logged programStatus=yes).  A folder the profile names
+    itself is kept.  Otherwise the verified files are used when they are already downloaded; if
+    not, the download starts in the background and this tab starts without them (a status
+    message says so), so opening a new tab after it finishes gets them.  Nothing else changes.
     """
     try:
-        if conpty_api.CONPTY_FOLDER_ENV_VAR in extra_env or not _profile_bool(profile_name, "tsp_enabled", False):
+        wants_modern = (_profile_bool(profile_name, "tsp_enabled", False)
+                        or _profile_bool(profile_name, "modern_conpty", False))
+        if conpty_api.CONPTY_FOLDER_ENV_VAR in extra_env or not wants_modern:
             return extra_env
         folder = conpty_api.default_folder_if_ready()
         if folder:

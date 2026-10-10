@@ -284,6 +284,12 @@
             "mouse_handling": false,
             "page_keys_to_pty": false,
             "wheel_to_pty": true,
+            // true = use the Windows Terminal ConPTY (terminal/bin/conpty) so Claude Code's
+            // startup questions are answered by GhostShell in order. With the built-in ConPTY
+            // Claude logged programStatus=no, kittyKeyboard=no, synchronizedOutput=no;
+            // with this one all of them are yes (claude --debug, 2026-10-10).
+            // Takes effect for tabs spawned after the change.
+            "modern_conpty": true,
             "spawn_env": {}
         },
         "Claude --chrome": {
@@ -805,7 +811,12 @@
             // does not answer it gets omp's classic ANSI renderer, which is what
             // GhostShell gets today. Do NOT set PI_TUI_NATIVE=0 here: it
             // suppresses the probe and would block TSP support.
-            "spawn_env": {"GHOSTSHELL_CONPTY_DIR": "C:/Users/donal/AppData/Local/Programs/Python/Python312/Lib/site-packages/winpty"}
+            // No GHOSTSHELL_CONPTY_DIR here: tsp_enabled makes GhostShell use the verified
+            // Windows Terminal ConPTY files in terminal/bin/conpty (conpty_api.py). This used
+            // to name a winpty folder inside Python 3.12, which was removed on 2026-10-10;
+            // a missing folder silently falls back to the built-in ConPTY, which swallows
+            // omp's startup probes.
+            "spawn_env": {}
         },
         "OpenCode": {
             "detachable": true,
