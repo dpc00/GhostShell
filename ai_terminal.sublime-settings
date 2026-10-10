@@ -266,6 +266,8 @@
             "spawn_env": {}
         },
         "Claude": {
+            "scroll_manipulation_enabled": false,
+            "auto_approve_permissions": false,
             "detachable": true,
             // Mouse tracking: only ever sends the disable form (?1000/1002/
             // 1003l) at startup, never enables -- confirmed across 100+
