@@ -3821,6 +3821,15 @@ class _Terminal:
                     print("[ai_terminal] TSP replay strip failed:\n%s" % traceback.format_exc())
             else:
                 fed = self._tsp_filter(text)
+        if not self._reattach_bootstrap:
+            # Live output only: a replay is history, so its status reports and
+            # questions are not answered or recorded.
+            self._status_filter(text)
+        # A program asks its startup questions in one order and expects the
+        # answers in that same order, so the answer to the status question is
+        # sent between the parser's answers to the questions before it and
+        # after it (see _status_pieces).
+        pieces = [(fed, None)] if self._reattach_bootstrap else self._status_pieces(fed)
         with self._lock:
             try:
                 if self._reattach_bootstrap:
@@ -3828,7 +3837,16 @@ class _Terminal:
                         self._bootstrap_got_bytes = True
                     self.parser.feed_bootstrap(fed)
                 else:
-                    self.parser.feed(fed)
+                    for piece, reply in pieces:
+                        if piece:
+                            self.parser.feed(piece)
+                        if reply:
+                            self.send_string(reply, record=False)
+                    if getattr(self, "_ps_probe_open", False):
+                        # The question was split between two chunks, so it could
+                        # not be answered in its place: answer it now.
+                        self._ps_probe_open = False
+                        self.send_string(self._PS_REPLY, record=False)
             except Exception as e:
                 # Losing the reader thread over one bad chunk would strand a
                 # live child behind a dead-looking tab, so keep reading; the
@@ -3953,6 +3971,96 @@ class _Terminal:
                   % traceback.format_exc())
             self._tsp = None
             return text
+
+    # Program Status Protocol (OSC 7501, spec revision 0.4,
+    # https://www.superlogical.com/rex/docs/build/program-status.md).
+    # A program says what it is doing: ESC ] 7501 ; state=working:id=x ST
+    # (ST is BEL or ESC \). Before that it may ask "do you support this?" with
+    # ESC ] 7501 ; ? ST, and we answer with the states and kinds we accept.
+    # Step one only watches: the text is not changed, nothing is drawn, and
+    # no file is written. What was seen is kept in memory on the terminal:
+    # term.program_status (one record per id) and term.program_status_seen
+    # (the last 100 raw reports, newest last).
+    _PS_STATES = ("idle", "working", "done", "blocked", "error")
+    _PS_KINDS = ("permission", "question", "auth")
+    _PS_START = "\x1b]7501;"
+    _PS_SEQUENCE = re.compile("\x1b\\]7501;(.*?)(\x07|\x1b\\\\)", re.S)
+    _PS_MAX_LENGTH = 4096       # the spec's cap on one whole sequence
+    # The question ESC ] 7501 ; ? ST, and our answer: the bare "?" the spec
+    # allows (it means all five states and all three kinds).
+    _PS_PROBE = re.compile("\x1b\\]7501;\\?[^\x07\x1b]*(?:\x07|\x1b\\\\)")
+    _PS_REPLY = "\x1b]7501;?\x1b\\"
+
+    def _status_pieces(self, fed):
+        """Cut ``fed`` (live output) just after each status question.
+        Returns [(text to feed the parser, answer to send after it or None)].
+        Claude Code asks XTVERSION, the keyboard, the status question, then
+        device attributes, and matches the answers to the questions in that
+        order. The parser answers the questions it knows while it is fed, so
+        feeding up to the end of the status question first puts our answer
+        exactly where it belongs."""
+        if self._PS_START not in fed:
+            return [(fed, None)]
+        pieces = []
+        rest = fed
+        while True:
+            match = self._PS_PROBE.search(rest)
+            if match is None:
+                pieces.append((rest, None))
+                return pieces
+            pieces.append((rest[:match.end()], self._PS_REPLY))
+            self._ps_probe_open = False     # answered in its place
+            rest = rest[match.end():]
+
+    def _status_filter(self, text):
+        """Find OSC 7501 sequences in ``text`` (live output) and handle each.
+        A sequence can be split between two chunks, so an unfinished one is
+        kept in self._ps_pending until its end arrives. Never raises."""
+        try:
+            pending = getattr(self, "_ps_pending", "") + text
+            last_end = 0
+            for match in self._PS_SEQUENCE.finditer(pending):
+                last_end = match.end()
+                self._status_handle(match.group(1), match.group(2))
+            rest = pending[last_end:]
+            start = rest.rfind(self._PS_START)
+            if start >= 0 and len(rest) - start <= self._PS_MAX_LENGTH:
+                rest = rest[start:]
+            else:
+                # Keep only a possible beginning of the start marker.
+                rest = rest[-(len(self._PS_START) - 1):]
+            self._ps_pending = rest
+        except Exception:
+            print("[ai_terminal] status filter failed:\n%s" % traceback.format_exc())
+
+    def _status_handle(self, body, terminator):
+        """Handle one OSC 7501 sequence: a question or a status report."""
+        seen = self.__dict__.setdefault(
+            "program_status_seen", collections.deque(maxlen=100))
+        records = self.__dict__.setdefault("program_status", {})
+        seen.append((time.strftime("%H:%M:%S"), body[:200]))
+        if body.startswith("?"):
+            # Answered by _on_data between the parser's own answers (see
+            # _status_pieces); this flag only covers a question that was split
+            # between two chunks.
+            self._ps_probe_open = True
+            return
+        pairs = {}
+        for part in body.split(":"):
+            key, equals, value = part.partition("=")
+            if equals:
+                pairs[key] = value      # a repeated key: the last one wins
+        state = pairs.get("state")
+        record_id = pairs.get("id", "")
+        if state == "clear":
+            if not record_id:
+                records.clear()
+            else:
+                for old_id in list(records):
+                    if old_id == record_id or old_id.startswith(record_id + "/"):
+                        del records[old_id]
+        elif state in self._PS_STATES:
+            records[record_id] = pairs  # replaces the whole record
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
