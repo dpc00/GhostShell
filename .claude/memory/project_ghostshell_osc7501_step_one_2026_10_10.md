@@ -1,0 +1,18 @@
+---
+name: ghostshell-osc7501-step-one-2026-10-10
+description: 2026-10-10 GhostShell now answers Claude Code's OSC 7501 (Program Status Protocol) probe and records reports in memory; Claude 2.1.296 still sent no status reports; what was learned from its binary
+metadata:
+  type: project
+---
+
+2026-10-10 (uncommitted in `C:\Users\donal\projects\GhostShell\ai_terminal.py`, +71 lines, live on disk; tabs opened after the reload use it, the Claude tab that was running keeps the old code until Sublime restarts). `_Terminal._status_filter` / `_status_handle` run in `_on_data` before `parser.feed`, only for live output (not replay). A probe `ESC ] 7501 ; ? ST` is answered with the bare reply `ESC ] 7501 ; ? ESC \` (the long form with states/kinds and the BEL form were tried first: no difference seen). Reports are kept only in memory: `term.program_status` (record per id) and `term.program_status_seen` (last 100 raw bodies). No file, no screen change (AGENTS.md rules 13/16).
+
+**Seen (test tabs, 14:03 to 14:08, closed afterwards):** the probe arrives at startup (`ESC[?u ESC]7501;?BEL`, also XTVERSION `ESC[>0q`); our answer is queued right after the parser's XTVERSION reply and before the kitty-keyboard reply. A full prompt cycle (PowerShell tool call, "Done.") produced NO status reports in three tabs with three reply forms.
+
+**From the claude.exe binary (2.1.296), searched with a Python byte scan of `C:\Users\donal\.local\bin\claude.exe`:** the probe is sent only if the capability "programStatus" is pending; the reply matches when the parsed input is an OSC with code 7501 and data starting with "?"; then `answer("programStatus", true, "probe: OSC 7501 reply")`. If no reply: settles false, "probe: no reply to OSC 7501 ; ?". Disabled by env `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` (not set here) and for background workers (`CLAUDE_CODE_SESSION_KIND=bg`). The emitter builds `state=...:app=claude-code[:id][:kind][:progress][:title=b64][:msg=b64]` and `state=clear` on exit, and the Okena issue #220 says Claude also sends OSC 133 A/C/D. Why no reports reached us is unknown (suspect another gate such as a feature flag or the UI hook not set); not resolved.
+
+**Later, 14:2x: reply order fixed, still no reports.** Claude asks XTVERSION, `CSI ? u`, the 7501 probe, then `CSI c` and matches answers in that order. Our first versions answered 7501 BEFORE the parser's `?5u` answer (the parser answers while fed, after my filter), so Claude may have taken it as unanswered. `_status_pieces` now feeds the parser up to the end of the probe, then sends the reply, then feeds the rest; a spy on `send_string` showed the order XTVERSION, `?5u`, 7501 reply (correct). Claude still sent no reports (cast shows only the probe; no OSC 133 either, which is expected: those marks need Screen Reader Mode). In the binary the emitting hook `ive(h,R,D)` runs only if the write function exists, `DR().now("programStatus")` is true, and `!wn()` (`wn()` is only true during shutdown); the hook's caller was not found, so the missing gate is unknown (maybe a rollout flag or a UI mode). Diff is now +109/-1 lines in `ai_terminal.py`, uncommitted.
+
+**Filed 2026-10-10 (Donald said "post it"):** anthropics/claude-code#101114 asks what else must be true for Claude Code to send OSC 7501 reports after the probe is answered in order. Check it only when he asks (no polling).
+
+**Next ideas:** find the emitter's call sites in the binary (search `setHooks`/`programStatus` consumers) to see its extra condition; test a real permission prompt in a test tab; only then draw anything on the tab. Do not commit until reports are actually seen (AGENTS.md rule 7a: proven in the running Sublime). Related: [[agentide-debug-trap-2026-10-10]].
