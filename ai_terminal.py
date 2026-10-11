@@ -10771,8 +10771,9 @@ def _clamp_vp_loop():
             except (RuntimeError, AttributeError, TypeError):
                 print("[ai_terminal] clamp-vp: layout measurement failed:\n%s"
                       % traceback.format_exc())
-                near_fit = False
-                lh = 12.0
+                # le/ve are unset (or hold the previous view's values) here, and
+                # the dip check below reads them: skip this view for this tick.
+                continue
 
             if tui_like:
                 # No pan→PTY and no hard-pin. Users own Sublime tab motion
