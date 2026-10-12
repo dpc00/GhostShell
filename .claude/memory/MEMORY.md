@@ -1,4 +1,4 @@
-# Memory index (GhostShell notes)
+﻿# Memory index (GhostShell notes)
 
 Notes from long sessions working on GhostShell. Each is a dated record, so check that it still matches.
 
@@ -16,4 +16,4 @@ Notes from long sessions working on GhostShell. Each is a dated record, so check
 - [Study the named mechanism](feedback_study_the_named_mechanism.md) — 'study X for GhostShell' = the one mechanism he names (Buildview's…
 
 - [close-test-tabs-with-kill-session-2026-10-10](feedback_close_test_tabs_with_kill_session_2026_10_10.md) — never say a tab can't be closed: ai_terminal_kill_session then view.close() by exact id; no focus_view on his Claude tab; no sleep in eval_python
-- [ghostshell-osc7501-step-one-2026-10-10](project_ghostshell_osc7501_step_one_2026_10_10.md) — GhostShell answers Claude Code's OSC 7501 probe, records reports in memory (commit c74757d); Claude 2.1.296 sent no reports yet; issue anthropics/claude-code#101114
+- [ghostshell-osc7501-step-one-2026-10-10](project_ghostshell_osc7501_step_one_2026_10_10.md) — SOLVED and in daily use 2026-10-10/11: Claude Code now sends OSC 7501 reports (root cause: two ConPTY effects; fix: Windows Terminal ConPTY for the Claude profile + 7501 reply as key events; tones on state change); Donald 2026-10-11: it IS working and significantly speeds operation; issue anthropics/claude-code#101114
