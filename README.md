@@ -14,6 +14,9 @@ depending on another terminal package.
 - **Windows 10 version 1809 or newer, or Windows 11**, for ConPTY.
 - Internet access to GitHub on the first terminal launch, to download the
   pinned native library. See [Native library](#native-library) for offline use.
+  Profiles that use the newer ConPTY (the shipped Claude profile) also download
+  it once from NuGet; without it they fall back to Windows' built-in ConPTY. See
+  [Newer ConPTY](#newer-conpty-status-reports-tones-and-auto-approve).
 - Install any shells or AI CLIs you want to use separately and make their
   commands available on `PATH`. GhostShell does not install them or provide
   their accounts, subscriptions, or API access.
@@ -156,6 +159,35 @@ override bypasses the pinned download **and its checksum enforcement**, so use
 only a trusted build. The pinned source revision, fingerprint, and upstream
 [MIT license](terminal/GHOSTTY_LICENSE) are included in `terminal/`.
 
+## Newer ConPTY, status reports, tones and auto-approve
+
+Windows' built-in ConPTY swallows some questions that programs ask the terminal
+at start-up. Profiles that set `modern_conpty` (the shipped **Claude** profile
+does) or `tsp_enabled` use the ConPTY from Windows Terminal instead. On first
+use GhostShell downloads Microsoft's `Microsoft.Windows.Console.ConPTY` NuGet
+package (x64 only), checks the package hash and then each file's hash, and keeps
+`conpty.dll` and `OpenConsole.exe` in `terminal/bin/conpty/` (not tracked in
+Git). A wrong hash, no network or a non-x64 CPU prints one line and the tab uses
+the built-in ConPTY. Provenance: [CONPTY_PROVENANCE.md](terminal/CONPTY_PROVENANCE.md).
+Windows Terminal itself does not have to be installed for this.
+
+With it, Claude Code sends Program Status Protocol (OSC 7501) reports, and
+GhostShell answers the probe and records each change of state (working, idle,
+blocked, done, error). Two optional settings use those reports. Both are off by
+default; set them in your User settings:
+
+- `status_tones`: play a short tone on a change of state (blocked, done or
+  error; idle and working are silent). Windows only.
+- `auto_approve_permissions`: answer Claude Code's permission prompts with Yes.
+  **It approves every permission prompt, deletes included**, and only prompts of
+  that kind. It never types over you: it waits until nothing has been typed into
+  the terminal for `auto_approve_quiet_seconds` (default 2), checks that the
+  prompt is still waiting, and sends Enter (`auto_approve_key` can be `"1"`
+  instead). It gives up and leaves the prompt to you after
+  `auto_approve_max_wait_seconds` (default 300). The shipped Claude profile turns
+  it on for that profile, so check the profile before you rely on the global
+  default.
+
 ## Development and testing
 
 There is no automated test suite. The owner tests in the live Sublime Text with a debugger and sublime-mcp (see
@@ -170,7 +202,6 @@ Repository layout:
 - `terminal/`: renderer, VT bindings, profiles, history, usage, and logging.
 - `tools/`: runtime broker/relay scripts and development utilities. The broker
   scripts must remain in release archives.
-- `tests/`: unit and opt-in integration tests, retained in Git checkouts.
 - `docs/`: user documentation and screenshots.
 
 Maintainers: see the
