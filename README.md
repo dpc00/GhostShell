@@ -23,7 +23,9 @@ depending on another terminal package.
 - **Detachable sessions**, enabled in the current defaults, additionally need
   a standalone Windows Python installation (`python.exe` and `pythonw.exe`),
   PowerShell, and permission to run a temporary task in Windows Task Scheduler.
-  Python 3.12 is used for development. Set `broker_python` to the full path to
+  Use Python 3.8 or newer: the scripts parse as Python 3.8, the package was
+  loaded and tested on Sublime's 3.8 host, and the broker has been run on 3.12
+  and 3.14. Versions older than 3.8 are not supported. Set `broker_python` to the full path to
   `python.exe` if detection picks the wrong interpreter. A Windows Store
   execution alias is not a substitute for an installed interpreter.
 - Windows Terminal is optional, only needed for the Windows Terminal handoff
