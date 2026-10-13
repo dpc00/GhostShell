@@ -3915,6 +3915,8 @@ class _Terminal:
         # this text in sequence. record=False for text nobody actually typed
         # (see _on_parser_write_pty) -- it still gets written to the pty, just
         # not logged as an input event.
+        if record:
+            self._last_typed = time.monotonic()  # auto approve waits for a pause in typing
         self._write_queue.put((s, record))
 
     def queue_input(self, text, add_newline=True):
@@ -4047,17 +4049,41 @@ class _Terminal:
         except Exception:
             print("[ai_terminal] status filter failed:\n%s" % traceback.format_exc())
 
-    def _auto_approve_permission(self):
-        """Answer Claude Code's permission prompt with "1" (option 1, Yes) when the
-        setting auto_approve_permissions is on.  The prompt is drawn a moment after
-        the report arrives, so the key goes out half a second later.  Never raises."""
+    def _permission_prompt_waiting(self, record_id):
+        """True while the status record ``record_id`` still says Claude Code is blocked on a
+        permission prompt (the person may have answered it themselves in the meantime)."""
+        record = self.__dict__.get("program_status", {}).get(record_id)
+        return bool(record) and record.get("state") == "blocked" and record.get("kind") == "permission"
+
+    def _auto_approve_permission(self, record_id=""):
+        """Answer Claude Code's permission prompt when the setting auto_approve_permissions is on.
+        The answer is Enter (the cursor starts on "1) Yes"), or "1" if auto_approve_key is "1".
+        The prompt is drawn a moment after the report arrives, so the first try is half a second
+        later. It never types over the person: if anything was typed into this terminal less than
+        auto_approve_quiet_seconds ago it tries again once that pause has passed (one timer set
+        for the remaining time, no polling), and it gives up after auto_approve_max_wait_seconds.
+        Just before answering it checks that the prompt is still waiting. Never raises."""
         try:
             if not _setting_bool("auto_approve_permissions", False, profile_name=self.profile_name):
                 return
+            quiet = _setting_number("auto_approve_quiet_seconds", 2.0, float, profile_name=self.profile_name)
+            max_wait = _setting_number("auto_approve_max_wait_seconds", 300.0, float, profile_name=self.profile_name)
+            key = "1" if _setting_string("auto_approve_key", "enter", profile_name=self.profile_name) == "1" else "\r"
+            give_up_at = time.monotonic() + max_wait
 
             def approve():
                 try:
-                    self.send_string("1", record=False)
+                    if not self._permission_prompt_waiting(record_id):
+                        return
+                    paused = time.monotonic() - getattr(self, "_last_typed", 0.0)
+                    if paused < quiet:
+                        wait = quiet - paused + 0.05
+                        if time.monotonic() + wait > give_up_at:
+                            print("[ai_terminal] auto approve gave up: still typing after %s s" % max_wait)
+                            return
+                        threading.Timer(wait, approve).start()
+                        return
+                    self.send_string(key, record=False)
                 except Exception:
                     print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
 
@@ -4098,7 +4124,7 @@ class _Terminal:
                 _play_status_tone(state, self.profile_name)
                 if (state == "blocked" and pairs.get("kind") == "permission"
                         and pairs.get("app") == "claude-code"):
-                    self._auto_approve_permission()
+                    self._auto_approve_permission(record_id)
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which

@@ -154,10 +154,19 @@
     // Windows only. Off by default; set true in your User settings to opt in.
     "status_tones": false,
     // Answer Claude Code's permission prompts for you: when it reports state=blocked
-    // with kind=permission, send "1" (Yes) half a second later. It approves EVERY
-    // permission prompt, deletes included, and only prompts of that kind (questions
-    // and sign-ins are left alone). Off by default; set true in your User settings.
+    // with kind=permission, answer Yes. It approves EVERY permission prompt, deletes
+    // included, and only prompts of that kind (questions and sign-ins are left alone).
+    // It never types over you: it waits until nothing has been typed into the terminal
+    // for auto_approve_quiet_seconds, checks that the prompt is still waiting, and only
+    // then answers. Off by default; set true in your User settings.
     "auto_approve_permissions": false,
+    // The answer: "enter" sends Enter (the cursor starts on "1) Yes"); "1" types the
+    // digit 1 instead.
+    "auto_approve_key": "enter",
+    // How long nothing may have been typed into the terminal before the answer is sent.
+    "auto_approve_quiet_seconds": 2.0,
+    // Give up (leave the prompt for you) if you are still typing after this many seconds.
+    "auto_approve_max_wait_seconds": 300,
     "max_columns": null,
     // Floor and ceiling on the auto-sized terminal width in characters.
     // cols is computed from the viewport width; min_columns is the lower
