@@ -153,6 +153,15 @@
     // a short rising pair, error = one low note. Idle and working are silent.
     // Windows only. Off by default; set true in your User settings to opt in.
     "status_tones": false,
+    // Record every place that moves a terminal tab's viewport or caret, plus
+    // every buffer write, to find out why the view sometimes jumps (up to about
+    // a third of the scrollback; the command line above the top of the view while
+    // typing). A sampler appends the last ~200 records to <log_root>/view_trace.jsonl
+    // when the viewport moves up by more than three lines or the caret is off
+    // screen just after a key press. Records positions, sizes and call sites
+    // only: printable characters you type are NOT recorded. Switches itself off
+    // 6 hours after first use in a Sublime session. Off by default.
+    "debug_view_trace": false,
     // Answer Claude Code's permission prompts for you: when it reports state=blocked
     // with kind=permission, answer Yes. It approves EVERY permission prompt, deletes
     // included, and only prompts of that kind (questions and sign-ins are left alone).
@@ -275,6 +284,7 @@
             "spawn_env": {}
         },
         "Claude": {
+            "home_end_native": false,
             "scroll_manipulation_enabled": false,
             "auto_approve_permissions": true,
             "detachable": true,

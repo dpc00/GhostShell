@@ -2634,10 +2634,144 @@ def _set_viewport(view, pos, animate=False):
     file -- see _scroll_manipulation_enabled. No-op while disabled so the
     user's own scroll position (wheel, drag, keyboard) is never overwritten."""
     if view.settings().get("ai_tsp_native"):
+        _gs_trace("set_viewport_skipped_native", view, to=_gs_pos(pos))
         return      # the native TSP view owns scrolling; text-row scroll logic must not move it
     if not _scroll_manipulation_enabled(view):
+        _gs_trace("set_viewport_skipped_disabled", view, to=_gs_pos(pos))
         return
+    _gs_trace("set_viewport", view, to=_gs_pos(pos))
     view.set_viewport_position(pos, animate)
+
+
+# --- view-jump tracing (2026-10-13) -------------------------------------------
+# Donald's reports: the tab jumps up to about 1/3 of the scrollback for no
+# visible reason, and typing sometimes leaves the command line above the top of
+# the view. Off unless the setting "debug_view_trace" is true (and it switches
+# itself off _GS_TRACE_HOURS hours after first use in a session). Every spot in
+# this file that sets the viewport, moves the caret or selection, scrolls, or
+# writes the buffer calls _gs_trace(); other plugins (sublime-mcp, AgentIDE)
+# call it through sublime._gs_trace_hook. A sampler (every 120 ms) watches each
+# terminal tab and appends the last ~200 records to <log_root>/view_trace.jsonl
+# when the viewport moves UP by more than three lines while the layout does not
+# shrink, or when the caret is off screen within 1.5 s of a keypress. Nothing
+# here changes behaviour; it only records.
+_GS_TRACE = collections.deque(maxlen=600)
+_GS_TRACE_META = {"until": 0.0, "last_dump": 0.0, "last_key": 0.0, "warned": False}
+_GS_TRACE_STATE = {}
+_GS_TRACE_HOURS = 6
+
+
+def _gs_pos(pos):
+    try:
+        return [int(pos[0]), int(pos[1])]
+    except Exception:
+        return None
+
+
+def _gs_trace_active():
+    try:
+        if not _setting_bool("debug_view_trace", False):
+            return False
+        now = time.time()
+        if _GS_TRACE_META["until"] == 0.0:
+            _GS_TRACE_META["until"] = now + _GS_TRACE_HOURS * 3600
+        return now < _GS_TRACE_META["until"]
+    except Exception:
+        return False
+
+
+def _gs_trace(kind, view=None, **info):
+    if not _GS_TRACE_META.get("on"):
+        return          # cached by the sampler; costs almost nothing while off
+    try:
+        rec = {"t": round(time.time(), 3), "k": kind}
+        if view is not None and view.is_valid():
+            vp = view.viewport_position()
+            ve = view.viewport_extent()
+            le = view.layout_extent()
+            sel = view.sel()
+            caret = sel[0].b if len(sel) else None
+            rec.update(
+                v=view.id(), vp=[int(vp[0]), int(vp[1])], vh=int(ve[1]), lh=int(le[1]),
+                sz=view.size(), caret=caret, nsel=len(sel),
+                row=(view.rowcol(caret)[0] if caret is not None else None),
+            )
+        rec.update(info)
+        rec["via"] = ["%s:%d" % (f.name, f.lineno) for f in traceback.extract_stack(limit=5)[:-1]]
+        if kind == "keypress":
+            _GS_TRACE_META["last_key"] = rec["t"]
+        _GS_TRACE.append(rec)
+    except Exception:
+        if not _GS_TRACE_META["warned"]:
+            _GS_TRACE_META["warned"] = True
+            print("[ai_terminal] view trace failed:\n%s" % traceback.format_exc())
+
+
+def _gs_trace_dump(reason, view=None):
+    now = time.time()
+    if now - _GS_TRACE_META["last_dump"] < 3.0:
+        return
+    _GS_TRACE_META["last_dump"] = now
+    try:
+        path = os.path.join(log_root(), "view_trace.jsonl")
+        recs = list(_GS_TRACE)[-200:]
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"dump": reason, "t": round(now, 3),
+                                "view": view.id() if view is not None else None,
+                                "n": len(recs)}, default=str) + "\n")
+            for r in recs:
+                f.write(json.dumps(r, default=str) + "\n")
+    except Exception:
+        print("[ai_terminal] view trace dump failed:\n%s" % traceback.format_exc())
+
+
+def _gs_trace_check(v, now):
+    st = _GS_TRACE_STATE.setdefault(v.id(), {})
+    vp = v.viewport_position()
+    ve = v.viewport_extent()
+    le = v.layout_extent()
+    lh = v.line_height() or 18
+    y = vp[1]
+    lay = le[1]
+    sel = v.sel()
+    caret = sel[0].b if len(sel) else None
+    key = (int(y), int(lay), v.size(), caret)
+    if st.get("key") != key:
+        _gs_trace("sample", v)
+        prev_y = st.get("y")
+        prev_lay = st.get("lay")
+        if prev_y is not None and prev_lay is not None:
+            dy = y - prev_y
+            if dy < -3 * lh and lay >= prev_lay - 1:
+                _gs_trace_dump("viewport moved up %d px (layout %d -> %d)" % (-dy, prev_lay, lay), v)
+        st["key"] = key
+        st["y"] = y
+        st["lay"] = lay
+    if caret is not None:
+        cy = v.text_to_layout(caret)[1]
+        off = (cy + lh < y) or (cy > y + ve[1])
+        if off and not st.get("off") and now - _GS_TRACE_META["last_key"] < 1.5:
+            _gs_trace_dump("caret off screen within 1.5 s of a keypress (caret y %d, viewport %d..%d)"
+                           % (cy, y, y + ve[1]), v)
+        st["off"] = off
+
+
+def _gs_trace_sampler(gen):
+    if getattr(sublime, "_gs_trace_gen", 0) != gen:
+        return          # a newer load of this module took over
+    try:
+        _GS_TRACE_META["on"] = _gs_trace_active()
+        if _GS_TRACE_META["on"]:
+            now = time.time()
+            for w in sublime.windows():
+                for v in w.views():
+                    if v.settings().get(_VIEW_SETTING):
+                        _gs_trace_check(v, now)
+    except Exception:
+        if not _GS_TRACE_META["warned"]:
+            _GS_TRACE_META["warned"] = True
+            print("[ai_terminal] view trace sampler failed:\n%s" % traceback.format_exc())
+    sublime.set_timeout(lambda: _gs_trace_sampler(gen), 120)
 
 
 def _term_profile_name(term):
@@ -2659,6 +2793,8 @@ def _set_auto_follow(term, value):
     value = bool(value)
     if term is None:
         return value
+    if getattr(term, "_auto_follow", None) != value:
+        _gs_trace("auto_follow", None, value=value, was=getattr(term, "_auto_follow", None))
     term._auto_follow = value
     screen = getattr(term, "screen", None)
     if screen is not None and hasattr(screen, "set_trim_paused"):
@@ -5084,6 +5220,7 @@ def _clear_view_selection(view, term=None):
         prev = getattr(term, "_in_render", False)
         term._in_render = True
     try:
+        _gs_trace("clear_selection_phantom", view)
         sel = view.sel()
         sel.clear()
         sel.add(sublime.Region(0))
@@ -7880,6 +8017,7 @@ def _compensate_trim_scroll(view, term, vp):
     lh = view.line_height() or 20
     new_y = max(0.0, vp[1] - evicted * lh)
     if new_y != vp[1]:
+        _gs_trace("direct_set_viewport_evict", view, to=_gs_pos((vp[0], new_y)), evicted=evicted)
         view.set_viewport_position((vp[0], new_y), False)
         vp = (vp[0], new_y)
         # Without this, the render loop's own "vp[1] < term._last_vp_y -
@@ -8066,6 +8204,7 @@ def _place_auto_caret(view, term, pos):
     sel = view.sel()
     sel.clear()
     sel.add(sublime.Region(pos, pos))
+    _gs_trace("auto_caret", view, pos=pos)
     if term is not None:
         term._last_auto_caret_pos = pos
 
@@ -8094,6 +8233,9 @@ def _keep_tail_after_reprint(view, term):
         return
     prev_lh, prev_vy = prev
     gap = prev_lh - (prev_vy + vh)
+    if lh - prev_lh > vh * 1.5:
+        _gs_trace("reprint_seen", view, grew=int(lh - prev_lh), moved=int(vy - prev_vy),
+                  gap=int(gap), acts=bool(abs(vy - prev_vy) <= 1 and gap <= vh * 0.5))
     if lh - prev_lh > vh * 1.5 and abs(vy - prev_vy) <= 1 and gap <= vh * 0.5:
         target = max(0.0, lh - vh - max(0.0, gap))
         _set_viewport(view, (0.0, target), False)
@@ -8416,6 +8558,8 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
     def run(self, edit, key="", ctrl=False, alt=False, shift=False):
         if not key:
             return
+        _gs_trace("keypress", self.view, key=(key if len(key) > 1 else "char"),
+                  ctrl=ctrl, alt=alt, shift=shift)   # printable characters are NOT recorded
         term = _Terminal.from_id(self.view.id())
         if term is None:
             # View still tagged as a terminal but PTY owner is gone (reload /
@@ -8467,6 +8611,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                     prev_in_render = getattr(term, "_in_render", False)
                     term._in_render = True
                     try:
+                        _gs_trace("copy_mode_exit_caret", self.view, pos=pos)
                         sel = self.view.sel()
                         sel.clear()
                         sel.add(sublime.Region(pos, pos))
@@ -8477,6 +8622,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                 sublime.status_message("Ai terminal: Text Edit Mode OFF")
                 return
             if not ctrl and not alt and key in ("up", "down", "left", "right", "pageup", "pagedown", "home", "end"):
+                _gs_trace("copy_mode_move", self.view, key=key, shift=shift)
                 if key in ("up", "down"):
                     self.view.run_command("move", {"by": "lines", "forward": key == "down", "extend": shift})
                 elif key in ("left", "right"):
@@ -8518,6 +8664,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # _home_end_native_enabled below) since a readline-style CLI has a
         # real use for them (jump to start/end of the typed command).
         if not alt and ctrl and shift and key in ("home", "end"):
+            _gs_trace("key_native_move", self.view, key=key, ctrl=ctrl, shift=shift, extend=True)
             self.view.run_command(
                 "move_to", {"to": "bof" if key == "home" else "eof", "extend": True}
             )
@@ -8531,6 +8678,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # it silently did nothing -- fell through to the PTY forward below,
         # which no CLI interprets.)
         if not alt and ctrl and not shift and key in ("home", "end"):
+            _gs_trace("key_native_move", self.view, key=key, ctrl=ctrl, shift=shift, extend=False)
             self.view.run_command(
                 "move_to", {"to": "bof" if key == "home" else "eof", "extend": False}
             )
@@ -8586,6 +8734,7 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # of the raw key code going to the PTY. Everyone else forwards to
         # the PTY so the app's own input-line cursor moves normally.
         if not alt and key in ("home", "end", "pageup", "pagedown") and _home_end_native_enabled(term):
+            _gs_trace("key_native_move", self.view, key=key, ctrl=ctrl, shift=shift, profile_opt_in=True)
             if key == "home":
                 self.view.run_command("move_to", {"to": "bof" if ctrl else "bol", "extend": shift})
             elif key == "end":
@@ -8800,6 +8949,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                       % traceback.format_exc())
             return
 
+        _gs_trace("render_write_begin", view, text_len=len(text or ""), fast=fast_caret)
         patched = False
         cur = ""
         diffs = []
@@ -8868,6 +9018,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # regions, and add_regions with the same key replaces what was there.
             _apply_color_regions(view, regions or [])
 
+        _gs_trace("render_write_end", view, patched=patched, ndiff=len(diffs))
         try:
             _record_render_history(view.id(), patched, diffs if patched else [], cur, text)
         except (TypeError, IndexError, RuntimeError, AttributeError):
@@ -10527,11 +10678,13 @@ class AiTerminalTrackpadScrollCommand(sublime_plugin.TextCommand):
         signed = amt if direction == "up" else -amt
 
         if not view.settings().get(_VIEW_SETTING):
+            _gs_trace("scroll_lines", view, amount=signed)
             view.run_command("scroll_lines", {"amount": signed})
             return
 
         term = _Terminal.from_id(view.id())
         if term is None or not (_wheel_to_pty_enabled(term) and _mouse_goes_to_app(term)):
+            _gs_trace("scroll_lines", view, amount=signed)
             view.run_command("scroll_lines", {"amount": signed})
             return
 
@@ -10856,6 +11009,9 @@ def plugin_loaded():
     _init_dynamic_color_scheme()
     _settings.add_on_change("ai_terminal", _on_settings_change)
     _report_profile_validation(_settings)
+    sublime._gs_trace_hook = _gs_trace
+    sublime._gs_trace_gen = getattr(sublime, "_gs_trace_gen", 0) + 1
+    _gs_trace_sampler(sublime._gs_trace_gen)
     # The registry deliberately survives module reloads so active ConPTY
     # sessions are not killed. Upgrade those objects to this generation of the
     # class as well; otherwise an existing tab keeps the old synchronous
@@ -10915,6 +11071,8 @@ def plugin_loaded():
 
 def plugin_unloaded():
     global _clamp_token, _settings, _hover_poll_token
+    sublime._gs_trace_hook = None
+    sublime._gs_trace_gen = getattr(sublime, "_gs_trace_gen", 0) + 1
     if _settings is not None:
         try:
             _settings.clear_on_change("ai_terminal")
