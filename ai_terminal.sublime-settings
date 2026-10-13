@@ -160,8 +160,10 @@
     // when the viewport moves up by more than three lines or the caret is off
     // screen just after a key press. Records positions, sizes and call sites
     // only: printable characters you type are NOT recorded. Switches itself off
-    // 6 hours after first use in a Sublime session. Off by default.
+    // debug_view_trace_hours hours after first use in a Sublime session. Off by
+    // default.
     "debug_view_trace": false,
+    "debug_view_trace_hours": 6,
     // Answer Claude Code's permission prompts for you: when it reports state=blocked
     // with kind=permission, answer Yes. It approves EVERY permission prompt, deletes
     // included, and only prompts of that kind (questions and sign-ins are left alone).

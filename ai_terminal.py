@@ -2674,7 +2674,11 @@ def _gs_trace_active():
             return False
         now = time.time()
         if _GS_TRACE_META["until"] == 0.0:
-            _GS_TRACE_META["until"] = now + _GS_TRACE_HOURS * 3600
+            try:
+                hours = float(_settings_obj(None).get("debug_view_trace_hours", _GS_TRACE_HOURS))
+            except Exception:
+                hours = _GS_TRACE_HOURS
+            _GS_TRACE_META["until"] = now + hours * 3600
         return now < _GS_TRACE_META["until"]
     except Exception:
         return False
