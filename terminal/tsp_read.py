@@ -6,8 +6,11 @@ it into plain text, one entry per top-level panel.  No Sublime dependency except
 sublime-mcp can call it for any terminal tab.
 """
 
+import re
+
 from . import tsp_html, tsp_text
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 DEFAULT_COLS = 100
 DEFAULT_LAST = 20
 DEFAULT_MAX_CHARS = 2000
@@ -18,7 +21,7 @@ def _text(node, cols):
         lines = tsp_text._draw(node, cols)
     except Exception:
         lines = []
-    text = "\n".join(lines).strip("\n")
+    text = _ANSI.sub("", "\n".join(lines)).strip("\n")
     return text if text.strip() else tsp_html.node_text(node)
 
 

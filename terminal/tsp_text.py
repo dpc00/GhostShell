@@ -247,15 +247,34 @@ def _draw_tabs(node, width):
     return [" ".join(parts)]
 
 
+_INVERSE, _INVERSE_OFF = "\x1b[7m", "\x1b[27m"
+_DIM, _DIM_OFF = "\x1b[2m", "\x1b[22m"
+
+
 def _draw_editor(node, width):
     props = node.get("p") or {}
     text = plain(props.get("text"))
-    if not text:
-        text = plain(props.get("placeholder"))
+    ghost = plain(props.get("ghost"))
     cursor = props.get("cursor")
-    if props.get("text") and isinstance(cursor, int) and 0 <= cursor <= len(text):
-        text = text[:cursor] + "▏" + text[cursor:]
-    lines = (text + plain(props.get("ghost"))).split("\n")
+    if text and isinstance(cursor, int) and 0 <= cursor <= len(text):
+        # The caret is the inverse of the character it sits on, so it takes no cell of its own (an inserted bar
+        # pushed the completion one column to the right); at the end of the text it sits on the completion's
+        # first character, the rest of the completion follows dimmed.
+        before, rest = text[:cursor], text[cursor:]
+        if rest and rest[0] != "\n":
+            body = _INVERSE + rest[0] + _INVERSE_OFF + rest[1:]
+            if ghost:
+                body += _DIM + ghost + _DIM_OFF
+        elif ghost:
+            body = _INVERSE + ghost[0] + _INVERSE_OFF + (_DIM + ghost[1:] + _DIM_OFF if ghost[1:] else "") + rest
+        else:
+            body = _INVERSE + " " + _INVERSE_OFF + rest
+        text = before + body
+    else:
+        text = text or plain(props.get("placeholder"))
+        if ghost:
+            text += _DIM + ghost + _DIM_OFF
+    lines = text.split("\n")
     prompt = plain(props.get("prompt")) or "> "
     return [prompt + lines[0]] + lines[1:]
 
