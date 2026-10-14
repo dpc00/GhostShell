@@ -2717,6 +2717,7 @@ def _gs_trace_dump(reason, view=None):
         return
     _GS_TRACE_META["last_dump"] = now
     try:
+        from .terminal.log_paths import log_root
         path = os.path.join(log_root(), "view_trace.jsonl")
         recs = list(_GS_TRACE)[-200:]
         with open(path, "a", encoding="utf-8") as f:
@@ -4202,14 +4203,20 @@ class _Terminal:
         later. It never types over the person: if anything was typed into this terminal less than
         auto_approve_quiet_seconds ago it tries again once that pause has passed (one timer set
         for the remaining time, no polling), and it gives up after auto_approve_max_wait_seconds.
-        Just before answering it checks that the prompt is still waiting. Never raises."""
+        Just before answering it checks that the prompt is still waiting. One answer is not always
+        enough, so while the report still says the prompt is waiting the answer is sent again every
+        auto_approve_repeat_seconds, at most auto_approve_max_presses times (each press goes through
+        the same typing-pause check). Never raises."""
         try:
             if not _setting_bool("auto_approve_permissions", False, profile_name=self.profile_name):
                 return
             quiet = _setting_number("auto_approve_quiet_seconds", 2.0, float, profile_name=self.profile_name)
             max_wait = _setting_number("auto_approve_max_wait_seconds", 300.0, float, profile_name=self.profile_name)
+            repeat = _setting_number("auto_approve_repeat_seconds", 1.0, float, profile_name=self.profile_name)
+            max_presses = _setting_number("auto_approve_max_presses", 10, int, profile_name=self.profile_name)
             key = "1" if _setting_string("auto_approve_key", "enter", profile_name=self.profile_name) == "1" else "\r"
             give_up_at = time.monotonic() + max_wait
+            presses = [0]
 
             def approve():
                 try:
@@ -4224,6 +4231,11 @@ class _Terminal:
                         threading.Timer(wait, approve).start()
                         return
                     self.send_string(key, record=False)
+                    presses[0] += 1
+                    if presses[0] < max_presses:
+                        threading.Timer(max(0.1, repeat), approve).start()
+                    else:
+                        print("[ai_terminal] auto approve: %d presses sent, prompt still waiting" % presses[0])
                 except Exception:
                     print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
 

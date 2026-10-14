@@ -63,6 +63,7 @@ class TspHost:
         self._told_gone = set()     # unknown surface ids we already answered with `gone`
         self.blobs = {}             # content hash -> base64 text of an image the program sent
         self.events_sent = []       # the last events sent to the program (clicks), newest last
+        self._replay_surfaces = {}  # surface ids named in replayed history (an ordered set)
 
     def strip(self, text):
         """Take TSP messages out of ``text`` WITHOUT handling them; return the text left.
@@ -71,7 +72,17 @@ class TspHost:
         messages in it are history (frames of a surface this host never opened), so applying or
         answering them would be wrong, and leaving them in would draw their JSON as text.
         """
-        return self._strip_reader.feed_text(text)[1]
+        messages, rest = self._strip_reader.feed_text(text)
+        for verb, body, _params in messages:
+            if verb in ("o", "f"):
+                try:
+                    value = json.loads(body)
+                    surface_id = value.get("id") if verb == "o" else value.get("sf")
+                except (ValueError, AttributeError):
+                    continue
+                if isinstance(surface_id, str):
+                    self._replay_surfaces[surface_id] = None
+        return rest
 
     def request_resync(self, delay=0.3):
         """Ask a program that has been running since before this host existed to send everything again.
@@ -84,6 +95,12 @@ class TspHost:
         cols = self._get_cols() if self._get_cols else None
         if not isinstance(cols, int) or cols < 2:
             return
+        # A program that is idle sends no frame after a resize, so nothing would ever reveal its old surface.
+        # The replay named it: say it is gone and the program opens a new one with the whole document.
+        stale = [i for i in self._replay_surfaces if i not in self.documents and i not in self._told_gone]
+        if stale:
+            self._told_gone.update(stale)
+            self._reply("e", {"ev": "gone", "ids": stale})
         self._reply("e", {"ev": "resize", "cols": cols - 1})
         timer = threading.Timer(delay, lambda: self._reply("e", {"ev": "resize", "cols": cols}))
         timer.daemon = True

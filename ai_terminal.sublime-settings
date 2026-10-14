@@ -178,6 +178,12 @@
     "auto_approve_quiet_seconds": 2.0,
     // Give up (leave the prompt for you) if you are still typing after this many seconds.
     "auto_approve_max_wait_seconds": 300,
+    // One answer is not always enough (the prompt may not be drawn yet, or the answer may be
+    // lost). While Claude Code still reports that it is waiting on a permission prompt, the
+    // answer is sent again every auto_approve_repeat_seconds, at most auto_approve_max_presses
+    // times in all. It stops as soon as the report says the prompt is gone.
+    "auto_approve_repeat_seconds": 1.0,
+    "auto_approve_max_presses": 10,
     "max_columns": null,
     // Floor and ceiling on the auto-sized terminal width in characters.
     // cols is computed from the viewport width; min_columns is the lower
@@ -813,6 +819,7 @@
             "spawn_env": {}
         },
         "omp": {
+            "scroll_manipulation_enabled": false,
             // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
             // -- a from-scratch coding-first fork/rewrite of Pi by Mario
             // Zechner, by Can Bolukbasi. Installed 2026-09-11 via
@@ -840,6 +847,11 @@
             // as plain text (terminal/tsp_host.py). Off until proven in a live tab.
             // Takes effect for tabs spawned after the change.
             "tsp_enabled": true,
+            // 0 = no animation timer for the native view (stopgap, confirmed live 2026-10-14: with
+            // the 250 ms default each tick takes the panels down and puts them back, the view is
+            // pulled to the bottom and scroll-ups snap back). Costs the animated spinner and clock.
+            // Takes effect for tabs spawned after the change.
+            "tsp_animation_ms": 0,
             // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
             // DA1 sentinel to any terminal (pi-tui terminal.ts). A terminal that
             // does not answer it gets omp's classic ANSI renderer, which is what

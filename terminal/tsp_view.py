@@ -95,6 +95,9 @@ class TspView:
         self._cols = 100
         self._clock = _Clock()
         self._animation_ms = animation_ms
+        self._hold_id = 0           # bumped to cancel pending "keep the scrolled-up position" restores
+        self._pin_id = 0            # bumped to cancel the pending tries of the last scroll to the bottom
+        self._pin_set = None        # where the last try put the view
         self._timer_armed = False
         self._local = {}            # view-only state (expanded sections, shown-row counts)
         self._overlay_open = False
@@ -146,14 +149,39 @@ class TspView:
         and 700 ms) because the layout settles within one of them (a transcript of over a hundred panels,
         as after a reattach, needs the later ones); there is no event for it.
         """
+        self._pin_id += 1
+        self._pin_set = None
+        pin_id = self._pin_id
         for delay in (0, 40, 120, 300, 700):
-            sublime.set_timeout(self._to_bottom_now, delay)
+            sublime.set_timeout(lambda: self._to_bottom_now(pin_id), delay)
 
-    def _to_bottom_now(self):
+    def _to_bottom_now(self, pin_id):
         view = self.view
-        if not view.is_valid():
+        if pin_id != self._pin_id or not view.is_valid():
             return
-        view.set_viewport_position((0, max(0, view.layout_extent()[1] - view.viewport_extent()[1])), False)
+        y = view.viewport_position()[1]
+        if self._pin_set is not None and abs(y - self._pin_set) > 3:
+            self._pin_id += 1       # the reader scrolled since our last move: stop fighting them
+            return
+        self._hold_id += 1          # an explicit scroll to the bottom beats any pending hold
+        self._pin_set = max(0, view.layout_extent()[1] - view.viewport_extent()[1])
+        view.set_viewport_position((0, self._pin_set), False)
+
+    def _hold_position(self, position):
+        """Put the view back at ``position`` once the layout has settled, unless a pin to the bottom came since."""
+        self._hold_id += 1
+        hold_id = self._hold_id
+
+        def restore():
+            view = self.view
+            if hold_id != self._hold_id or not view.is_valid():
+                return
+            y = view.viewport_position()[1]
+            pulled_down = y > position[1] and y + view.viewport_extent()[1] >= view.layout_extent()[1] - 2
+            if pulled_down:     # only a throw to the bottom is undone; the reader's own scrolling is left alone
+                view.set_viewport_position(position, False)
+        for delay in (0, 40, 120, 300):
+            sublime.set_timeout(restore, delay)
 
     def _prepare_view(self):
         """Set the tab up for panels: no line numbers and so on (once)."""
@@ -257,16 +285,23 @@ class TspView:
             sublime.Phantom(sublime.Region(start, start), tsp_html.page(html, palette), sublime.LAYOUT_BLOCK, self.navigate)
             for start, (_key, html) in zip(starts, parts)
         ]
-        # Phantoms that share one anchor are shown in the order they were created, and PhantomSet puts a
-        # re-drawn one at the end.  So when an entry above the last one changes (a section opened, a spinner
-        # moved), take down that entry and everything after it first, then add them again in order.
+        # Each panel hangs under its own caption line, so a re-drawn panel keeps its place without help.  The
+        # take-down below is kept only for a view at the bottom, where it was proven; for a reader scrolled up it
+        # shortens the layout, Sublime throws the view to the bottom and the drawing that follows pins it there.
         old = self._shown or []
         first_changed = 0
         while first_changed < min(len(old), len(parts)) and old[first_changed] == parts[first_changed]:
             first_changed += 1
-        if first_changed < len(old):
+        scrolled_to = None if at_bottom else view.viewport_position()
+        if at_bottom and first_changed < len(old):
             self._phantoms.update(phantoms[:first_changed])
         self._phantoms.update(phantoms)
+        if scrolled_to is not None:
+            # The reader is looking at older output.  While the later panels were down the layout was
+            # shorter and Sublime pulled the view toward the bottom, so the next drawing (a spinner tick)
+            # would find the view "at the bottom" and pin it there: scrolling back never held.  Put the
+            # view back where it was, after the layout has settled.
+            self._hold_position(scrolled_to)
         self._shown = parts
         self._outline = outline
         view.set_status(STATUS_KEY, "omp native view: live " + time.strftime("%H:%M:%S"))

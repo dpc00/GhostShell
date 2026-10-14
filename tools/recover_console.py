@@ -16,6 +16,7 @@ Usage:
     python recover_console.py --list           # just list candidate sessions
 """
 import argparse
+import codecs
 import ctypes
 import json
 import os
@@ -414,11 +415,80 @@ def _enable_raw_vt(h_in, h_out):
     return in_mode.value, out_mode.value
 
 
-def _pump_output(handle, h_con_out, stop_evt):
+_REPLAY_END_TEXT = "\x1b]777;GhostShellReplayEnd\x07"   # agent_broker._REPLAY_END: history ends, live output starts
+
+
+class _TspRelay:
+    """Show a program that speaks the Tern Surface Protocol (omp) in this plain terminal.
+
+    omp drew its screen through TSP when the Sublime tab started it, so the bytes it sends are protocol
+    messages that a terminal ignores: this window stayed blank.  Here the same TspHost the Sublime tab
+    uses answers the messages and the surface is repainted as text (terminal/tsp_text.py).  The replay
+    of old output is history: its messages are dropped unanswered, then the program is asked to send
+    its whole document again (TspHost.request_resync), as when a Sublime tab reattaches.
+    """
+
+    def __init__(self, host, size):
+        self._host = host
+        self._size = size           # function returning (cols, rows)
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._replaying = True
+        self._held = ""             # replay text kept back while the end marker may be split
+
+    def process(self, data):
+        """Bytes from the broker -> bytes for this console."""
+        text = self._decoder.decode(data)
+        out = ""
+        if self._replaying:
+            self._held += text
+            at = self._held.find(_REPLAY_END_TEXT)
+            if at == -1:
+                keep = len(_REPLAY_END_TEXT) - 1
+                cut = max(0, len(self._held) - keep)
+                out = self._host.strip(self._held[:cut])
+                self._held = self._held[cut:]
+                return out.encode("utf-8")
+            out = self._host.strip(self._held[:at])
+            text = self._held[at + len(_REPLAY_END_TEXT):]
+            self._held = ""
+            self._replaying = False
+            self._host.request_resync()
+        out += self._host.filter(text)
+        if self._host.active_surface() is not None:
+            cols, rows = self._size()
+            out += self._host.take_paint(cols, rows)
+        return out.encode("utf-8")
+
+
+def _make_tsp_relay(h_in, write_lock, h_con_out):
+    """A _TspRelay for this session, or None when the TSP modules cannot be loaded (then bytes pass through)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from terminal.tsp_host import TspHost
+    except Exception:
+        print("[attach] TSP support unavailable, relaying raw bytes:\n%s" % traceback.format_exc(), file=sys.stderr)
+        return None
+
+    def size():
+        return _console_size(h_con_out) or (100, 30)
+
+    def send(text):
+        raw = text.encode("utf-8")
+        written = DWORD(0)
+        with write_lock:
+            _k32.WriteFile(h_in, raw, len(raw), byref(written), None)
+
+    host = TspHost(send, windows_conpty=True, get_cols=lambda: size()[0])
+    return _TspRelay(host, size)
+
+
+def _pump_output(handle, h_con_out, stop_evt, relay=None):
     """Copy the broker's output pipe to this console until either side ends.
 
     WriteFile to the console handle is the direct path; if it fails (output
-    redirected, no console) the bytes go to sys.stdout instead.
+    redirected, no console) the bytes go to sys.stdout instead.  With a
+    ``relay`` the bytes first pass through it (TSP messages answered, the
+    program's surface drawn as text).
     """
     buf = (c_char * 4096)()  # 4 KB read buffer
     n = DWORD(0)
@@ -434,13 +504,21 @@ def _pump_output(handle, h_con_out, stop_evt):
             break
         written = DWORD(0)
         data = bytes(buf[: n.value])
+        if relay is not None:
+            try:
+                data = relay.process(data)
+            except Exception:
+                print("\n[attach] TSP relay failed, relaying raw bytes:\n%s" % traceback.format_exc(), file=sys.stderr)
+                relay = None
+            if not data:
+                continue
         if not _k32.WriteFile(h_con_out, data, len(data), byref(written), None):
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
     stop_evt.set()
 
 
-def _pump_input(h_con_in, h_in, stop_evt):
+def _pump_input(h_con_in, h_in, stop_evt, write_lock):
     """Copy raw keyboard bytes from this console to the broker's input pipe.
 
     In raw VT mode ReadFile returns keys as soon as they are typed, already
@@ -453,7 +531,9 @@ def _pump_input(h_con_in, h_in, stop_evt):
         if not ok or n.value == 0:
             break
         written = DWORD(0)
-        if not _k32.WriteFile(h_in, buf, n.value, byref(written), None):
+        with write_lock:
+            sent = _k32.WriteFile(h_in, buf, n.value, byref(written), None)
+        if not sent:
             break
     stop_evt.set()
 
@@ -528,11 +608,13 @@ def main():
         print("[attach] could not enter raw VT mode: %s" % exc, file=sys.stderr)
 
     stop_evt = threading.Event()
+    write_lock = threading.Lock()   # the keyboard pump and the TSP replies both write to the input pipe
+    relay = _make_tsp_relay(h_in, write_lock, h_con_out)
     threading.Thread(
-        target=_pump_output, args=(h_out, h_con_out, stop_evt), daemon=True
+        target=_pump_output, args=(h_out, h_con_out, stop_evt, relay), daemon=True
     ).start()
     threading.Thread(
-        target=_pump_input, args=(h_con_in, h_in, stop_evt), daemon=True
+        target=_pump_input, args=(h_con_in, h_in, stop_evt, write_lock), daemon=True
     ).start()
     if h_ctl is not None:
         threading.Thread(
