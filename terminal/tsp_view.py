@@ -140,10 +140,20 @@ class TspView:
         stays until a drawing has put the view at the bottom, so the echo of the keystroke cannot
         leave the box out of sight either.
         """
-        if not self._prepared:
-            return
+        if not self._prepared or self._dock_in_view():
+            return          # the reader can see the input box where it is: leave the view alone
         self._pin_bottom = True
         self._to_bottom_soon()
+
+    def _dock_in_view(self):
+        """True when the input box (the dock) is completely on screen: its anchor line is in view and nothing is below it."""
+        anchor = getattr(self, "_dock_anchor", None)
+        view = self.view
+        if anchor is None or not view.is_valid():
+            return False
+        top = view.viewport_position()[1]
+        return (view.text_to_layout(anchor)[1] >= top
+                and view.layout_extent()[1] <= top + view.viewport_extent()[1] + 2)
 
     def _to_bottom_soon(self):
         """Scroll to the bottom AFTER Sublime has laid the new panels out.
@@ -271,7 +281,11 @@ class TspView:
         if not self._prepared:
             self._prepare_view()
         line = view.line_height() or 20
-        at_bottom = view.viewport_position()[1] + view.viewport_extent()[1] >= view.layout_extent()[1] - 2 * line
+        reach = view.viewport_position()[1] + view.viewport_extent()[1]
+        end = view.layout_extent()[1]
+        # Following the end = at the end, not pushed past it: a reader who scrolled beyond the last line (to put the
+        # input box mid-screen) has chosen that place and keeps it.
+        at_bottom = end - 2 * line <= reach <= end + line
         # One text line per panel (spaces only: GhostShell's scheme has no way to hide text, and a panel's
         # own text is already shown by the panel), the panel hanging under its line; line 0 is empty (GhostShell's
         # toolbar hangs under it) and the last line is empty too (the hidden caret sits there, below everything:
@@ -281,6 +295,7 @@ class TspView:
         for caption in captions:
             starts.append(offset)
             offset += len(caption) + 1
+        self._dock_anchor = starts[-1] if parts and parts[-1][0] == "dock" else None
         text_changed = self._set_text("\n" + "".join(caption + "\n" for caption in captions))
         if text_changed:
             self._phantoms.update([])           # the old anchors are gone with the old text
