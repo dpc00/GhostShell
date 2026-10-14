@@ -17,6 +17,7 @@ Usage:
 """
 import argparse
 import codecs
+import re
 import ctypes
 import json
 import os
@@ -416,6 +417,8 @@ def _enable_raw_vt(h_in, h_out):
 
 
 _REPLAY_END_TEXT = "\x1b]777;GhostShellReplayEnd\x07"   # agent_broker._REPLAY_END: history ends, live output starts
+_LIVE_PANELS = 3                # newest panels kept redrawable; older ones are written once
+_ANSI_SEQ = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class _TspRelay:
@@ -434,6 +437,9 @@ class _TspRelay:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._replaying = True
         self._held = ""             # replay text kept back while the end marker may be split
+        self._surface_id = None     # the surface being followed
+        self._committed = 0         # main panels already written to the window's scrollback
+        self._live_rows = 0         # screen rows the live part occupies now
 
     def process(self, data):
         """Bytes from the broker -> bytes for this console."""
@@ -455,12 +461,72 @@ class _TspRelay:
             self._host.request_resync()
         out += self._host.filter(text)
         if self._host.active_surface() is not None:
-            cols, rows = self._size()
             try:
-                out += self._host.take_paint(cols, rows)
+                out += self._paint()
             except Exception as error:     # one undrawable panel must not turn the window into raw protocol bytes
-                out += "\x1b[H\x1b[2J[GhostShell: the surface could not be drawn as text: %r]" % (error,)
+                self._live_rows = 0
+                out += "\r\n[GhostShell: the surface could not be drawn as text: %r]\r\n" % (error,)
         return out.encode("utf-8")
+
+    def _paint(self):
+        """What to write so this window follows the program's surface like a terminal log.
+
+        Clearing and redrawing the whole screen on every frame (the old way) pushed each half-finished picture
+        into the window's scrollback, which came out garbled.  Now a panel is written once, when it is no longer
+        among the newest few, and only the live part (the newest panels, an open overlay, the input box) is
+        erased and drawn again at the bottom.
+        """
+        host = self._host
+        if not host._changed:
+            return ""
+        del host._changed[:]
+        surface_id = host.active_surface()
+        document = host.documents.get(surface_id)
+        if document is None:
+            return ""
+        cols, rows = self._size()
+        regions = {r.get("id"): r.get("c") or [] for r in document.snapshot().get("c") or []}
+        main = regions.get("main", [])
+        if surface_id != self._surface_id:
+            self._surface_id = surface_id        # a new surface (after a resync): its whole history is new here
+            self._committed = 0
+        if self._committed > len(main):
+            self._committed = 0
+        overlays = regions.get("layer", [])
+        stable = max(0, len(main) - _LIVE_PANELS)
+        out = ""
+        if self._live_rows:
+            out += "\r\x1b[%dA\x1b[J" % (self._live_rows - 1) if self._live_rows > 1 else "\r\x1b[J"
+            self._live_rows = 0
+        if not overlays:
+            for node in main[self._committed:stable]:
+                lines = self._lines(node, cols)
+                if lines:
+                    out += "\r\n".join(lines) + "\r\n"
+            self._committed = max(self._committed, stable)
+        live = []
+        if overlays:
+            live += self._lines(overlays[-1], cols)
+        else:
+            for node in main[self._committed:]:
+                live += self._lines(node, cols)
+        for node in regions.get("dock", []):
+            live += self._lines(node, cols)
+        fitted, used = [], 0
+        for line in reversed(live):              # keep the bottom of it when it is taller than the window
+            height = max(1, -(-len(_ANSI_SEQ.sub("", line)) // max(1, cols)))
+            if used + height > max(1, rows - 1):
+                break
+            fitted.append(line)
+            used += height
+        fitted.reverse()
+        out += "\r\n".join(fitted)
+        self._live_rows = max(1, used)
+        return out
+
+    @staticmethod
+    def _lines(node, cols):
+        return [line for line in tsp_text._draw(node, cols)]
 
 
 def _make_tsp_relay(h_in, write_lock, h_con_out):
@@ -468,6 +534,8 @@ def _make_tsp_relay(h_in, write_lock, h_con_out):
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from terminal.tsp_host import TspHost
+        global tsp_text
+        from terminal import tsp_text
     except Exception:
         print("[attach] TSP support unavailable, relaying raw bytes:\n%s" % traceback.format_exc(), file=sys.stderr)
         return None
