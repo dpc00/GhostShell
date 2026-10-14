@@ -1,6 +1,10 @@
 # Release notes
 
 
+## 0.2.5
+
+**Fixed:** in omp's native view, a view that the reader pushed below the last line while omp is working could still be thrown back to the ordinary bottom by a redraw. The view is now put back where the reader left it.
+
 ## 0.2.4
 
 **Fixed:** in omp's native view, a reader who scrolls below the last line to put the input box in the middle of the screen keeps that place; the view no longer snaps back to the bottom on the next redraw. Typing no longer moves the view while the input box is completely on screen. When the input box is off screen, typing still returns the view to it.
