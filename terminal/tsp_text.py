@@ -249,13 +249,13 @@ def _draw_tabs(node, width):
 
 def _draw_editor(node, width):
     props = node.get("p") or {}
-    text = props.get("text") or ""
+    text = plain(props.get("text"))
     if not text:
-        text = props.get("placeholder") or ""
+        text = plain(props.get("placeholder"))
     cursor = props.get("cursor")
     if props.get("text") and isinstance(cursor, int) and 0 <= cursor <= len(text):
         text = text[:cursor] + "▏" + text[cursor:]
-    lines = (text + (props.get("ghost") or "")).split("\n")
+    lines = (text + plain(props.get("ghost"))).split("\n")
     prompt = plain(props.get("prompt")) or "> "
     return [prompt + lines[0]] + lines[1:]
 

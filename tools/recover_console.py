@@ -456,7 +456,10 @@ class _TspRelay:
         out += self._host.filter(text)
         if self._host.active_surface() is not None:
             cols, rows = self._size()
-            out += self._host.take_paint(cols, rows)
+            try:
+                out += self._host.take_paint(cols, rows)
+            except Exception as error:     # one undrawable panel must not turn the window into raw protocol bytes
+                out += "\x1b[H\x1b[2J[GhostShell: the surface could not be drawn as text: %r]" % (error,)
         return out.encode("utf-8")
 
 
