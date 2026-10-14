@@ -191,10 +191,14 @@ class TspView:
             if hold_id != self._hold_id or not view.is_valid():
                 return
             y = view.viewport_position()[1]
+            bottom = view.layout_extent()[1] - view.viewport_extent()[1]
             pulled_down = y > position[1] and y + view.viewport_extent()[1] >= view.layout_extent()[1] - 2
-            if pulled_down:     # only a throw to the bottom is undone; the reader's own scrolling is left alone
+            # A reader who pushed the view past the last line (input box mid-screen) was thrown back to the
+            # ordinary bottom by a redraw: put them back where they were.
+            clamped = position[1] > bottom + 4 and abs(y - bottom) <= 4
+            if pulled_down or clamped:      # only a throw to the bottom is undone; the reader's own scrolling is left alone
                 view.set_viewport_position(position, False)
-        for delay in (0, 40, 120, 300):
+        for delay in (0, 40, 120):
             sublime.set_timeout(restore, delay)
 
     def _prepare_view(self):
