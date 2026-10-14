@@ -83,12 +83,16 @@ def describe_event(event):
     return str(kind)
 
 
+_phantom_sets = {}      # view id -> the PhantomSet drawn there; the convention sublime-mcp's get_view_phantoms reads
+
+
 class TspView:
     """Draws the newest TSP surface of a host into ``view``."""
 
     def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS):
         self.view = view
         self._phantoms = sublime.PhantomSet(view, PHANTOM_KEY)
+        _phantom_sets[view.id()] = self._phantoms     # editor tools that list a view's phantoms (sublime-mcp get_view_phantoms) look here
         self._shown = None          # list of (key, html) last put on screen
         self._prepared = False      # view text already reduced to one line
         self._host = None           # the TspHost clicks are sent to
@@ -342,6 +346,7 @@ class TspView:
         """Take every panel down (native view turned off, or a drawing fault)."""
         self.view.erase_phantoms(PHANTOM_KEY)
         self._phantoms = sublime.PhantomSet(self.view, PHANTOM_KEY)
+        _phantom_sets[self.view.id()] = self._phantoms
         self._shown = None
         self._prepared = False
         for kind in MARK_KINDS:

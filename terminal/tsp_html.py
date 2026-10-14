@@ -885,7 +885,7 @@ def _draw_editor(node, ctx):
     cursor = props.get("cursor")
     caret = '<span style="color: %s">%s</span>' % (theme.color("accent"), "&#9608;" if not text else "&#9615;")
     if not text:
-        body = caret + '<span style="color: %s">%s</span>' % (theme.color("dim"), esc(props.get("placeholder") or ""))
+        body = caret + '<span style="color: %s">%s</span>' % (theme.color("dim"), esc(plain_text(props.get("placeholder"))))
     else:
         if not (isinstance(cursor, int) and 0 <= cursor <= len(text)):
             cursor = None
@@ -918,7 +918,7 @@ def _draw_editor(node, ctx):
         body = "".join(pieces)
         if props.get("lang"):
             body = "<tt>%s</tt>" % body
-        body += '<span style="color: %s">%s</span>' % (theme.color("dim"), esc(props.get("ghost") or ""))
+        body += '<span style="color: %s">%s</span>' % (theme.color("dim"), esc(plain_text(props.get("ghost"))))
     label = ""
     if props.get("prompt"):
         label += '<span style="color: %s">%s</span> ' % (theme.color("accent"), text_html(props["prompt"], ctx))
