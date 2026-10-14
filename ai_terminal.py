@@ -2643,6 +2643,42 @@ def _set_viewport(view, pos, animate=False):
     view.set_viewport_position(pos, animate)
 
 
+def _clamp_after_shrink(view, term, vp, ve, lh, lay_before, shrunk_rows):
+    """Pull the view back to the real bottom when a render made the text shorter.
+
+    Not the follow machinery (scroll_manipulation_enabled stays respected for every
+    ordinary move). It runs only when one render removed at least 3 rows AND the view was
+    at the bottom before it. Sublime then leaves the view past the end of the shorter text
+    (found 2026-10-14 with the view trace: 580 rows became 337 in one frame, the view
+    stayed at y=10143 on a layout of 6111, so only blank space showed and the command line
+    sat above the top edge). The layout height is only correct a moment after the edit, so
+    the check repeats at 0, 40, 120 and 300 ms; it never moves a view that is not more than
+    one line past the end. Setting: clamp_past_end_after_shrink_enabled."""
+    try:
+        if shrunk_rows < 3:
+            return
+        if not _setting_bool("clamp_past_end_after_shrink_enabled", True, profile_name=_term_profile_name(term)):
+            return
+        if view.settings().get("ai_tsp_native"):
+            return
+        if vp[1] + ve[1] < lay_before - 2 * lh:
+            return      # the reader was scrolled up: leave the position alone
+
+        def fix():
+            if not view.is_valid():
+                return
+            max_y = max(0.0, view.layout_extent()[1] - view.viewport_extent()[1])
+            cur = view.viewport_position()
+            if cur[1] > max_y + lh:
+                _gs_trace("clamp_after_shrink", view, to=_gs_pos((cur[0], max_y)), shrunk=shrunk_rows)
+                view.set_viewport_position((cur[0], max_y), False)
+
+        for delay in (0, 40, 120, 300):
+            sublime.set_timeout(fix, delay)
+    except Exception:
+        print("[ai_terminal] clamp after shrink failed:\n%s" % traceback.format_exc())
+
+
 # --- view-jump tracing (2026-10-13) -------------------------------------------
 # Donald's reports: the tab jumps up to about 1/3 of the scrollback for no
 # visible reason, and typing sometimes leaves the command line above the top of
@@ -2803,7 +2839,22 @@ def _set_auto_follow(term, value):
     term._auto_follow = value
     screen = getattr(term, "screen", None)
     if screen is not None and hasattr(screen, "set_trim_paused"):
-        screen.set_trim_paused(not value)
+        paused = not value
+        if paused:
+            # Pausing is only safe when something can turn follow back on. With
+            # scroll_manipulation_enabled off (the Claude profile) nothing does, so one
+            # stray "not following" latched the pause until the next keypress, the tab
+            # grew to about 580 rows, and the keypress released the whole backlog in one
+            # redraw: the view was left past the end (found 2026-10-14 with the view
+            # trace). trim_pause_needs_follow_machinery (default true) keeps the cap
+            # (scrollback_history_size) in force in that case.
+            view = getattr(term, "view", None)
+            profile = getattr(term, "profile_name", None)
+            if (view is not None
+                    and _setting_bool("trim_pause_needs_follow_machinery", True, profile_name=profile)
+                    and not _scroll_manipulation_enabled(view)):
+                paused = False
+        screen.set_trim_paused(paused)
     _update_debug_status(term)
     return value
 
@@ -8965,6 +9016,8 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                       % traceback.format_exc())
             return
 
+        lay_before = view.layout_extent()[1]
+        rows_before = view.rowcol(view.size())[0]
         _gs_trace("render_write_begin", view, text_len=len(text or ""), fast=fast_caret)
         patched = False
         cur = ""
@@ -9035,6 +9088,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             _apply_color_regions(view, regions or [])
 
         _gs_trace("render_write_end", view, patched=patched, ndiff=len(diffs))
+        _clamp_after_shrink(view, term, vp, ve, lh, lay_before, rows_before - view.rowcol(view.size())[0])
         try:
             _record_render_history(view.id(), patched, diffs if patched else [], cur, text)
         except (TypeError, IndexError, RuntimeError, AttributeError):

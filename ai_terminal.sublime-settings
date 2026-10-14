@@ -1246,6 +1246,23 @@
     // True = the behaviour before 2026-09-22.
     // Live: read fresh on every redraw, no reload needed.
     "compensate_trim_while_following": false,
+    // When one redraw makes the tab's text at least 3 rows shorter (for example 580 rows
+    // trimmed to 337 by scrollback_history_size) while the view was at the bottom, Sublime
+    // leaves the view PAST the end of the shorter text: only blank space shows and the
+    // command line sits above the top edge. true = pull the view back to the real bottom
+    // (only in that case, and only if it is more than one line past the end; it works even
+    // with scroll_manipulation_enabled false because it never follows new output).
+    // Found 2026-10-14 with debug_view_trace. Live: read fresh on every redraw.
+    "clamp_past_end_after_shrink_enabled": true,
+    // While the tab is not following new output, old scrollback is normally kept (not
+    // trimmed) so a reader scrolled back does not lose their place. With
+    // scroll_manipulation_enabled false (the Claude profile) nothing ever turns follow
+    // back on, so one stray "not following" stopped ALL trimming until the next keypress,
+    // the tab grew from about 340 to about 580 rows, and the keypress released the whole
+    // backlog at once (found 2026-10-14 with debug_view_trace). true = pause trimming only
+    // when scroll_manipulation_enabled is true; false = the old behaviour.
+    // Live: read when follow changes.
+    "trim_pause_needs_follow_machinery": true,
     // Environment shared by every terminal profile. Keep installation paths
     // here once instead of copying them into each provider's hook config.
     "shared_spawn_env": {},
