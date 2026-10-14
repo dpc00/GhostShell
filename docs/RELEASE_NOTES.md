@@ -1,6 +1,10 @@
 # Release notes
 
 
+## 0.2.4
+
+**Fixed:** in omp's native view, a reader who scrolls below the last line to put the input box in the middle of the screen keeps that place; the view no longer snaps back to the bottom on the next redraw. Typing no longer moves the view while the input box is completely on screen. When the input box is off screen, typing still returns the view to it.
+
 ## 0.2.3
 
 **Changed:** the omp profile no longer sets `tsp_animation_ms` to 0, so omp's spinner and running-time counters animate again in the native view (four updates a second while omp is working). 0.2.2 shipped with the animation off; the scroll fixes in 0.2.2 were then tested with the animation on. Remaining rough edges: scrolling up while omp works can still jitter now and then, typing returns the view to the input box by design, and the view cannot be scrolled past the last line.
