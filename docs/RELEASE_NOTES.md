@@ -1,6 +1,10 @@
 # Release notes
 
 
+## 0.2.3
+
+**Changed:** the omp profile no longer sets `tsp_animation_ms` to 0, so omp's spinner and running-time counters animate again in the native view (four updates a second while omp is working). 0.2.2 shipped with the animation off; the scroll fixes in 0.2.2 were then tested with the animation on. Remaining rough edges: scrolling up while omp works can still jitter now and then, typing returns the view to the input box by design, and the view cannot be scrolled past the last line.
+
 ## 0.2.2
 
 **Fixed:** in omp's native view, scrolling back no longer snaps to the bottom on every spinner tick or while `/usage` is open. A reader who has scrolled up keeps their place, and the scroll to the bottom that follows an overlay opening stops as soon as the reader scrolls.
