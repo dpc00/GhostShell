@@ -1,6 +1,22 @@
 # Release notes
 
 
+## 0.2.2
+
+**Fixed:** in omp's native view, scrolling back no longer snaps to the bottom on every spinner tick or while `/usage` is open. A reader who has scrolled up keeps their place, and the scroll to the bottom that follows an overlay opening stops as soon as the reader scrolls.
+
+**Fixed:** after Sublime restarts, an omp tab that was idle no longer shows the replayed raw output until a key is pressed. The tab now asks omp to send the whole conversation again straight away.
+
+**Added:** moving an omp session to Windows Terminal now shows the conversation as text. Windows Terminal does not speak the Tern Surface Protocol, so the window used to stay blank or fill with escape codes. Each panel is written once to the window's scrollback, and only the newest panels, an open overlay and the input line are redrawn. Panels are plain text: no colours or images.
+
+**Fixed:** the omp input box showed its placeholder as raw list text, and a completion appeared one column to the right of the caret in the Windows Terminal view.
+
+**Added:** the omp tab registers its panels so editor tools that list a view's phantoms (sublime-mcp `get_view_phantoms`) can read the tab as text.
+
+**Added:** optional view-jump tracing (`debug_view_trace`, off by default, switches itself off after `debug_view_trace_hours`), status tones when a program reports a status change (`status_tones`), a settings toolbar that lists every on/off setting, and an auto-approve that waits for a pause before it answers a permission prompt.
+
+**Changed:** the omp profile sets `tsp_animation_ms` to 0, so omp's spinner and clock are not animated in the native view. Set it to 250 to bring the animation back.
+
 ## 0.2.1
 
 **Added:** a Muse profile (Muse Code CLI) with entries in the Ai Terminal menu and the side bar menu. It is untuned: no mouse or page-key behaviour is claimed for it.
