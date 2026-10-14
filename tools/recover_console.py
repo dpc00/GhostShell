@@ -511,8 +511,10 @@ def _pump_output(handle, h_con_out, stop_evt, relay=None):
             try:
                 data = relay.process(data)
             except Exception:
-                print("\n[attach] TSP relay failed, relaying raw bytes:\n%s" % traceback.format_exc(), file=sys.stderr)
-                relay = None
+                # Never fall back to the raw bytes: omp's protocol messages are what turned the window into noise.
+                # Show the fault where it can be read, then go on with the next chunk.
+                text = traceback.format_exc().replace("\n", "\r\n")
+                data = ("\r\n[attach] TSP relay error (this chunk was dropped):\r\n%s\r\n" % text).encode("utf-8", "replace")
             if not data:
                 continue
         if not _k32.WriteFile(h_con_out, data, len(data), byref(written), None):
@@ -613,6 +615,7 @@ def main():
     stop_evt = threading.Event()
     write_lock = threading.Lock()   # the keyboard pump and the TSP replies both write to the input pipe
     relay = _make_tsp_relay(h_in, write_lock, h_con_out)
+    print("[attach] TSP text view: %s" % ("ON" if relay is not None else "OFF (raw bytes)"), file=sys.stderr)
     threading.Thread(
         target=_pump_output, args=(h_out, h_con_out, stop_evt, relay), daemon=True
     ).start()
