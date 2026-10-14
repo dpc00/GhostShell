@@ -847,11 +847,6 @@
             // as plain text (terminal/tsp_host.py). Off until proven in a live tab.
             // Takes effect for tabs spawned after the change.
             "tsp_enabled": true,
-            // 0 = no animation timer for the native view (stopgap, confirmed live 2026-10-14: with
-            // the 250 ms default each tick takes the panels down and puts them back, the view is
-            // pulled to the bottom and scroll-ups snap back). Costs the animated spinner and clock.
-            // Takes effect for tabs spawned after the change.
-            "tsp_animation_ms": 0,
             // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
             // DA1 sentinel to any terminal (pi-tui terminal.ts). A terminal that
             // does not answer it gets omp's classic ANSI renderer, which is what
