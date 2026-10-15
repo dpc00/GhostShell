@@ -1,6 +1,19 @@
 # Release notes
 
 
+## Unreleased
+
+**Added:** the setting `tsp_tab_status` (off by default, on in the omp profile) and its companion `tsp_tab_prefix` (omp: `π`). omp leaves its run state and session name out of the window title when it draws through the Tern Surface Protocol, so its tab showed only the profile name. With `tsp_tab_status` the tab is named the way omp names its own title in a plain terminal: the prefix, the run state, then the session name.
+
+- The run state comes from omp's Program Status Protocol (OSC 7501) reports: a spinner frame while omp is working, `!` while it waits on you, a check mark when a turn is done, a cross on an error, `>` when idle. omp's own title shows done and error as `>`; the tab does not. The cross has not been seen in testing.
+- The session name is shown exactly as omp sends it, with the icon if it has one. It comes from omp's card-form title in the console title (`<icon> CODE: title`) or from the `<name>: Complete` notice omp sends at the end of each turn, which also carries a hand-typed `/rename`. The profile name shows until omp has sent one.
+- The titles that omp's child processes write to the same console (`npm exec …`, `cmd.exe`) are not used as the session name.
+- A hand-typed rename shows at the end of the next turn, not at once.
+- Takes effect for tabs started after the change. Tested on Windows with omp 18.11.0 only.
+
+`terminal/tsp_view.py` gained an optional `on_state` callback that the native view calls after each draw. Restart Sublime Text after updating, because a plugin reload loads `ai_terminal.py` but not `terminal/tsp_view.py`, and the omp tab then falls back to plain text.
+
+
 ## 0.2.6
 
 **Fixed:** the switches, steppers, drop-downs and Reset buttons on omp's `/settings` page did nothing when clicked. Every one of them now sends its change to omp. Reset puts a setting back to its default.

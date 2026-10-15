@@ -190,6 +190,28 @@ default; set them in your User settings:
   it on for that profile, so check the profile before you rely on the global
   default.
 
+### The omp tab label
+
+omp, when it draws through the Tern Surface Protocol, leaves its run state and
+session name out of the window title, so its tab would show only the profile
+name. The profile setting `tsp_tab_status` (on in the shipped `omp` profile, off
+elsewhere) names the tab the way omp names its own title in a plain terminal:
+`tsp_tab_prefix` (omp: `π`), then the run state, then the session name, for
+example `π ⠙ PING: Run ping delay command`.
+
+- **Run state**, from omp's OSC 7501 reports: a spinner frame while working, `!`
+  while it waits on you (a question or a permission prompt), a check mark when a
+  turn is done, a cross on an error, `>` when idle. (omp's own title shows done
+  and error as `>`.)
+- **Session name**, exactly as omp sends it: its card-form title (`<icon> CODE:
+  title`) or the name it announces when a turn finishes, which also carries a
+  hand-typed `/rename` (shown at the end of the next turn). Until omp has sent
+  one the tab shows the profile name. The titles that omp's helper processes
+  (`npm`, MCP servers, `cmd.exe`) write to the same console are not used.
+
+Takes effect for tabs started after the change. Tested on Windows with omp
+18.11.0; the error cross has not been seen in testing.
+
 ## Development and testing
 
 There is no automated test suite. The owner tests in the live Sublime Text with a debugger and sublime-mcp (see
