@@ -19,6 +19,8 @@ Ops are lists:  ["add", id, parent, before_id_or_None, node]
                 ["suspend"]   ["resume"]
 """
 
+from . import tsp_style
+
 # Every component kind in the v1 vocabulary (omp packages/wire/src/tsp.ts TSP_KINDS).
 TSP_KINDS = (
     "col", "row", "card", "section", "rule", "spacer", "text", "md", "code",
@@ -62,6 +64,25 @@ class TspDocument:
         self.settled = set()    # ids that got a "settle" hint and no later change
         self.focus = None       # id of the focused node
         self.suspended = False
+        self.sheets = {}        # stylesheet name -> css text, in the order first sent
+
+    def set_sheet(self, name, css):
+        """Install, replace or (empty css) remove a stylesheet; return an error text or None.
+
+        Nothing changes on an error: a bad name, css that is not a string, or more than 256 KiB
+        of css over all the surface's sheets."""
+        if not isinstance(name, str) or not tsp_style.NAME_RE.match(name):
+            return "bad stylesheet name"
+        if css is not None and not isinstance(css, str):
+            return "css is not a string"
+        total = sum(len(text.encode("utf-8")) for key, text in self.sheets.items() if key != name)
+        if css and total + len(css.encode("utf-8")) > tsp_style.MAX_SHEETS_BYTES:
+            return "stylesheets over 256 KiB"
+        if css:
+            self.sheets[name] = css         # a replaced sheet keeps its place
+        else:
+            self.sheets.pop(name, None)
+        return None
 
     def has(self, node_id):
         return node_id in self._index
@@ -92,7 +113,10 @@ class TspDocument:
 
     def snapshot(self):
         """The whole document as wire-shaped dicts."""
-        return self._export(self._root)
+        snapshot = self._export(self._root)
+        if self.sheets:
+            snapshot["sheets"] = list(self.sheets.values())
+        return snapshot
 
     def get(self, node_id):
         """Snapshot of one subtree, or None for an unknown id."""

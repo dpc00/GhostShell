@@ -14,12 +14,15 @@ Each ``_draw_<kind>(node, ctx)`` returns an HTML string.
 """
 
 import base64
+import functools
 import html
 import json
 import re
 import struct
 import urllib.parse
 import zlib
+
+from . import tsp_style
 
 # Symbols for omp's icon names (plain Unicode that ordinary fonts have).
 ICONS = {
@@ -102,6 +105,8 @@ class Context:
         self.surface_id = surface_id    # goes into the events that clicks send back
         self.clock = clock or StaticClock()
         self.animated = False           # set by drawers whose output changes with time
+        self.rules = ()                 # parsed program stylesheets (tsp_style), applied to el nodes
+        self.ancestors = []             # the el nodes around the one being drawn, outermost first
 
 
 # omp uses symbols from icon fonts (private-use characters); without that font they show as empty
@@ -1426,10 +1431,35 @@ def _draw_effort(node, ctx):
 _EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark")
 
 
+@functools.lru_cache(maxsize=16)
+def _parsed_rules(sheets):
+    rules = []
+    for css in sheets:
+        rules.extend(tsp_style.parse(css))      # later sheets come later in the cascade
+    return tuple((parts, weight, index, declarations)
+                 for index, (parts, weight, _order, declarations) in enumerate(rules))
+
+
 def _draw_el(node, ctx):
+    ctx.ancestors.append(node)
+    try:
+        return _draw_el_inner(node, ctx)
+    finally:
+        ctx.ancestors.pop()
+
+
+def _styled(html_text, node, ctx):
+    """``html_text`` (one <span> or <div> from _draw_el_inner) with the program's rules as a style attribute."""
+    style = tsp_style.style_for(ctx.rules, node, ctx.ancestors[:-1], ctx.theme)
+    if not style:
+        return html_text
+    return html_text.replace(">", ' style="%s">' % style, 1) if html_text.startswith(("<span", "<div")) else html_text
+
+
+def _draw_el_inner(node, ctx):
     """An HTML element node (the Tern SDK's `el`), drawn with the few tags minihtml handles:
     inline tags as spans, controls as glyphs and chips, every other tag as a block.  The
-    program's stylesheet (the `s` message) is not applied."""
+    program's stylesheet (the `s` message) is applied only as far as tsp_style supports."""
     props = node.get("p") or {}
     tag = str(props.get("tag") or "div").lower()
     own = text_html(props["spans"] if props.get("spans") else props.get("text"), ctx)
@@ -1454,8 +1484,8 @@ def _draw_el(node, ctx):
         return _draw_rule(node, ctx)
     inner = own + _children(node, ctx)
     if tag in _EL_INLINE_TAGS:
-        return "<span>%s</span>%s" % (inner, "&nbsp;&nbsp;" if tag == "label" else "")
-    return "<div>%s</div>" % inner
+        return _styled("<span>%s</span>%s" % (inner, "&nbsp;&nbsp;" if tag == "label" else ""), node, ctx)
+    return _styled("<div>%s</div>" % inner, node, ctx)
 
 
 def _draw_media(node, ctx):
@@ -1529,6 +1559,7 @@ def render_regions(document_snapshot, palette_message, cols=100, clock=None, blo
     ``entry_outline`` of each, in the same order.
     """
     ctx = Context(Theme(palette_message), cols, document_snapshot.get("id"), clock, blobs, local)
+    ctx.rules = _parsed_rules(tuple(document_snapshot.get("sheets") or ()))
     regions = {"main": [], "main_outline": [], "layer": [], "under": 0, "dock": "", "animated": False}
     for region in document_snapshot.get("c") or []:
         if region.get("id") == "main":

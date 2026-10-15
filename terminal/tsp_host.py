@@ -141,6 +141,8 @@ class TspHost:
         elif verb == "t":
             if "sf" in value:
                 self.palettes[value["sf"]] = value
+        elif verb == "s":
+            self._handle_sheet(value)
         # Any other verb is unknown: ignored, as the protocol requires.
 
     def _handle_query(self, value):
@@ -158,7 +160,7 @@ class TspHost:
             self.kinds_offered = tuple(kinds)
             self._reply("r", hello_reply(
                 kinds,
-                features=("blobs", "settle", "adopt", "dock"),
+                features=("blobs", "settle", "adopt", "dock", "styles"),
                 cols=cols,
             ))
         elif kind == "blobs":
@@ -183,6 +185,22 @@ class TspHost:
                 self._surface_order.remove(surface_id)
             self._surface_order.append(surface_id)
             self._closed.discard(surface_id)
+
+    def _handle_sheet(self, value):
+        """A stylesheet (`s`): kept with the surface (the live one when `sf` is absent)."""
+        surface_id = value.get("sf") or self.active_surface()
+        document = self.documents.get(surface_id)
+        if document is None:
+            return
+        error = document.set_sheet(value.get("name"), value.get("css"))
+        if error:
+            if surface_id not in self._deaf:
+                self._reply("e", {"ev": "error", "sf": surface_id, "sheet": str(value.get("name")), "msg": error})
+            return
+        if surface_id not in self._changed:
+            self._changed.append(surface_id)
+        if self._on_change:
+            self._on_change(surface_id)
 
     def _handle_close(self, value):
         surface_id = value.get("id")
