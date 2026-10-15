@@ -1428,7 +1428,7 @@ def _draw_effort(node, ctx):
     return '<span style="color: %s">%s%s</span>' % (ctx.theme.color("accent"), "●" * rungs, "○" * (6 - rungs))
 
 
-_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark")
+_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark", "td", "th")
 
 
 @functools.lru_cache(maxsize=16)
@@ -1484,7 +1484,7 @@ def _draw_el_inner(node, ctx):
         return _draw_rule(node, ctx)
     inner = own + _children(node, ctx)
     if tag in _EL_INLINE_TAGS:
-        return _styled("<span>%s</span>%s" % (inner, "&nbsp;&nbsp;" if tag == "label" else ""), node, ctx)
+        return _styled("<span>%s</span>%s" % (inner, "&nbsp;&nbsp;" if tag in ("label", "td", "th") else ""), node, ctx)
     return _styled("<div>%s</div>" % inner, node, ctx)
 
 

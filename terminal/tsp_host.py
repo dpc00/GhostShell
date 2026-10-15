@@ -62,7 +62,9 @@ class TspHost:
         self._changed = []          # surface ids whose frames changed since the last paint
         self._surface_order = []    # surface ids in the order the program opened them
         self._closed = set()        # surface ids the program has closed
-        self._deaf = set()          # surfaces opened with listen:false: nothing is sent back for them
+        self._modes = {}            # surface id -> the mode its `o` named (inline, screen, flow)
+        self._kept_text = []        # rendered text of closed flow surfaces, added to the next filter result
+        self._deaf = set()        # surfaces opened with listen:false: nothing is sent back for them
         self._told_gone = set()     # unknown surface ids we already answered with `gone`
         self.blobs = {}             # content hash -> base64 text of an image the program sent
         self.events_sent = []       # the last events sent to the program (clicks), newest last
@@ -114,6 +116,10 @@ class TspHost:
         messages, passthrough = self._reader.feed_text(text)
         for verb, body, params in messages:
             self._handle(verb, body, params)
+        if self._kept_text:
+            # A flow surface closed with keep: its document becomes ordinary output in the scrollback.
+            passthrough += "".join(self._kept_text)
+            del self._kept_text[:]
         return passthrough
 
     def _reply(self, verb, value):
@@ -160,7 +166,7 @@ class TspHost:
             self.kinds_offered = tuple(kinds)
             self._reply("r", hello_reply(
                 kinds,
-                features=("blobs", "settle", "adopt", "dock", "styles"),
+                features=("blobs", "settle", "adopt", "dock", "styles", "flow"),
                 cols=cols,
             ))
         elif kind == "blobs":
@@ -180,6 +186,7 @@ class TspHost:
         elif "listen" in value or not value.get("adopt"):
             self._deaf.discard(surface_id)
         if not value.get("adopt"):
+            self._modes[surface_id] = value.get("mode")
             self.documents[surface_id] = TspDocument(surface_id)
             if surface_id in self._surface_order:
                 self._surface_order.remove(surface_id)
@@ -207,8 +214,18 @@ class TspHost:
         document = self.documents.get(surface_id)
         if document is None:
             return
+        was_open = surface_id not in self._closed
         self._closed.add(surface_id)
-        if value.get("keep"):
+        is_flow = self._modes.get(surface_id) == "flow"
+        keep = value.get("keep", is_flow)       # the spec's default is keep, kept as before for the other modes
+        if keep and was_open and is_flow:
+            cols = self._get_cols() if self._get_cols else None
+            lines = render_lines(document, cols if isinstance(cols, int) and cols > 0 else 100)
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if lines:
+                self._kept_text.append("\r\n".join(lines) + "\r\n")
+        if keep:
             document.close()
         else:
             del self.documents[surface_id]

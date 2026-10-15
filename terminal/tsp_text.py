@@ -14,6 +14,7 @@ tsp_document.py) and the width in cells, and returns a list of strings.
 Nothing here touches Sublime.
 """
 
+import re
 import textwrap
 
 INDENT = "  "
@@ -355,7 +356,23 @@ def _draw_effort(node, width):
     return ["effort: %s" % (node.get("p") or {}).get("level", "")]
 
 
-_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark")
+_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark", "td", "th")
+
+
+def _table_cells(node, width):
+    """The cells of an el table as rows of text: one list per tr, found at any depth under the table."""
+    rows = []
+    for child in node.get("c") or []:
+        child_props = child.get("p") or {}
+        tag = str(child_props.get("tag") or "").lower()
+        if child.get("k") == "el" and tag == "tr":
+            row = []
+            for cell in child.get("c") or []:
+                row.append(" ".join(line.strip() for line in _draw_el(cell, width) if line.strip()))
+            rows.append(row)
+        elif child.get("k") == "el":
+            rows.extend(_table_cells(child, width))
+    return rows
 
 
 def _draw_el(node, width):
@@ -375,7 +392,23 @@ def _draw_el(node, width):
         return ["[ %s ]" % (text or " ".join(line.strip() for line in _children(node, width)))]
     if tag in ("br", "hr"):
         return [""] if tag == "br" else ["-" * min(width, 40)]
+    if tag == "table":
+        grid = _table_cells(node, width)
+        if grid:
+            columns = max(len(row) for row in grid)
+            widths = [max((len(row[i]) for row in grid if i < len(row)), default=0) for i in range(columns)]
+            numeric = re.compile(r"^[-\d.,]+[KMGT]?$")
+            lines = []
+            for row in grid:
+                cells = [(cell.rjust(widths[i]) if numeric.match(cell) and cell != "-" else cell.ljust(widths[i]))
+                         for i, cell in enumerate(row)]
+                lines.append("  ".join(cells).rstrip())
+            return lines
     child_lines = _children(node, width)
+    if tag == "tr":                   # a table row: its cells side by side
+        cells = [text] if text else []
+        cells.extend(line.strip() for line in child_lines if line.strip())
+        return ["  ".join(cells)] if cells else []
     if tag in _EL_INLINE_TAGS:
         pieces = [text] if text else []
         pieces.extend(line.strip() for line in child_lines if line.strip())
