@@ -10830,6 +10830,11 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
         # which only cares about broker-confirmed orphans.
         for pipe_name, term in terms_by_pipe.items():
             if pipe_name not in seen_pipes:
+                # When broker discovery worked, a term with no broker record AND no tab left is only the
+                # garbage-collected leftover of a session that has ended: listing it showed phantom "orphaned"
+                # sessions (seen 2026-10-15: four of them, all long ended). Recover Session already skips these.
+                if error is None and _open_view(term) is None:
+                    continue
                 sessions.append((pipe_name, term, None))
                 seen_pipes.add(pipe_name)
 
