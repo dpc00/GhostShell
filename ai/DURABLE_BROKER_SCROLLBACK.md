@@ -178,7 +178,9 @@ source the client reads.
 <broker_registry_dir>/<pipe_name>.scrollback
 ```
 
-Default dir is `%LOCALAPPDATA%\GhostShell\broker_sessions`. Pass the
+Default dir is `<Sublime Text data folder>\Local\GhostShell\broker_sessions` (each Sublime instance has
+its own; sessions started before 2026-10-15 are in `%LOCALAPPDATA%\GhostShell\broker_sessions`, which the
+installed Sublime still reads). Pass the
 path from `main()` next to `--registry-file`. Do not put it under the
 package, the Sublime session, or `~/data/logs` (those are diagnostics
 / casts).

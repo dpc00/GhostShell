@@ -565,16 +565,51 @@ _BROKER_REPLAY_IDLE_S = 0.15
 
 
 def _broker_registry_dir():
-    """Durable discovery data owned by brokers, not Sublime's save cycle."""
+    """Where THIS Sublime Text keeps the records of its sessions: inside its own data folder
+    (<data>/Local/GhostShell/broker_sessions), so the installed Sublime and each portable have
+    registries of their own and never list or take over each other's sessions. Durable discovery
+    data owned by brokers, not Sublime's save cycle."""
     override = _settings_obj().get("broker_registry_dir")
     if override:
         return os.path.abspath(os.path.expandvars(os.path.expanduser(override)))
+    data_dir = os.path.dirname(os.path.abspath(sublime.packages_path()))
+    return os.path.join(data_dir, "Local", "GhostShell", "broker_sessions")
+
+
+def _legacy_broker_registry_dir():
+    """The old machine-wide registry (%LOCALAPPDATA%\\GhostShell\\broker_sessions). Sessions started
+    before the registry moved still have their record there; only the installed Sublime Text (the one
+    that always used it) still reads it, and no new record is written to it."""
+    data_dir = os.path.normcase(os.path.realpath(os.path.dirname(sublime.packages_path())))
+    installed = os.path.normcase(os.path.realpath(
+        os.path.join(os.environ.get("APPDATA", ""), "Sublime Text")))
+    if data_dir != installed:
+        return None
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     return os.path.join(base, "GhostShell", "broker_sessions")
 
 
+def _broker_registry_dirs():
+    """Every folder this Sublime reads session records from: its own, then the legacy one if it applies."""
+    dirs = [_broker_registry_dir()]
+    legacy = _legacy_broker_registry_dir()
+    if legacy and os.path.normcase(legacy) != os.path.normcase(dirs[0]):
+        dirs.append(legacy)
+    return dirs
+
+
 def _broker_registry_file(pipe_name):
+    """Where a NEW session's record is written (and where its .launch files go)."""
     return os.path.join(_broker_registry_dir(), pipe_name + ".json")
+
+
+def _existing_broker_registry_file(pipe_name):
+    """The record file of a session this Sublime knows about, wherever it lives."""
+    for folder in _broker_registry_dirs():
+        path = os.path.join(folder, pipe_name + ".json")
+        if os.path.exists(path):
+            return path
+    return _broker_registry_file(pipe_name)
 
 
 def _read_broker_registry_record(pipe_name):
@@ -582,7 +617,7 @@ def _read_broker_registry_record(pipe_name):
     created_at, ...), or None if it's missing/unreadable -- e.g. the broker
     already exited and removed its own record."""
     try:
-        with open(_broker_registry_file(pipe_name), "r", encoding="utf-8") as f:
+        with open(_existing_broker_registry_file(pipe_name), "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         print("[ai_terminal] read broker registry record failed:\n%s" % traceback.format_exc())
@@ -764,16 +799,18 @@ def _remove_dead_broker_files(registry_path):
 
 
 def _registered_brokers(profile_name=None, cwd=None):
-    """Return newest-first broker records matching a restored terminal."""
-    folder = _broker_registry_dir()
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        print("[ai_terminal] registered brokers: listdir failed:\n%s" % traceback.format_exc())
-        return []
+    """Return newest-first broker records matching a restored terminal (this Sublime's own sessions)."""
     wanted_cwd = os.path.normcase(os.path.realpath(cwd)) if cwd else None
     found = []
-    for name in names:
+    candidates = []
+    for folder in _broker_registry_dirs():
+        try:
+            candidates.extend((folder, name) for name in os.listdir(folder))
+        except FileNotFoundError:
+            continue        # no session has been started from this folder yet
+        except OSError:
+            print("[ai_terminal] registered brokers: listdir failed:\n%s" % traceback.format_exc())
+    for folder, name in candidates:
         if not name.startswith("ghostshell_") or not name.endswith(".json"):
             continue
         path = os.path.join(folder, name)

@@ -1,6 +1,15 @@
 # Release notes
 
 
+## Unreleased
+
+**Changed:** each Sublime Text keeps the records of its own sessions in its own data folder, `<data folder>\Local\GhostShell\broker_sessions`, instead of one machine-wide folder (`%LOCALAPPDATA%\GhostShell\broker_sessions`) shared by the installed Sublime and every portable copy. With the shared folder, Recover Session and List Sessions in a portable Sublime listed the installed Sublime's sessions, and Reattach All From Windows Terminal could take over a session that belonged to another Sublime (it asks a busy session to disconnect, which would have detached the other Sublime's tab). Now a Sublime lists and reattaches only its own sessions.
+
+- Sessions already running when you update keep their record in the old folder, and the installed Sublime still reads that folder until they end; no new record is written there. A portable Sublime does not read it.
+- The `broker_registry_dir` setting still overrides the folder.
+- `tools/recover_console.py` takes `--registry-dir` for its own session lookup; Move to Windows Terminal always names the session, so it is not affected.
+- Tested with the installed Sublime (build 4215) and a portable build 4200 side by side: each saw only its own session, and Reattach All inside the portable left the other Sublime's tab attached.
+
 ## 0.2.8
 
 **Fixed:** with 0.2.7, typing did nothing in a tab on Sublime Text builds that run plugins on a real Python 3.8 (build 4200 and earlier): the keystrokes never reached the session, and the console showed "got Future attached to a different loop". The write queue was created before the plugin's event loop existed, which Python 3.8 binds to the wrong loop. It is now created on the loop. Found by running 0.2.7 in a portable build 4200, which I should have done before releasing it.

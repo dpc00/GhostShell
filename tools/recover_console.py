@@ -1,8 +1,9 @@
 """recover_console.py -- attach a Windows console to a running agent_broker
 session as a raw VT client (same I/O model as GhostShell's Sublime tab).
 
-Brokers are discovered from the GhostShell registry
-(%LOCALAPPDATA%\\GhostShell\\broker_sessions), not from process command
+Brokers are discovered from the GhostShell registry (each Sublime Text keeps its own in
+<its data folder>\\Local\\GhostShell\\broker_sessions; --registry-dir names it, and the old
+machine-wide %LOCALAPPDATA%\\GhostShell\\broker_sessions is the default), not from process command
 lines: production brokers start with --launch-file and never expose
 --pipe-name on the command line.
 
@@ -235,7 +236,14 @@ def _broker_process_matches(pid, created_at):
         _k32.CloseHandle(handle)
 
 
+_registry_dir_override = None
+
+
 def _registry_dir():
+    """The folder with the session records: the one given with --registry-dir (Sublime Text keeps each
+    instance's sessions in its own data folder), else the old machine-wide one."""
+    if _registry_dir_override:
+        return _registry_dir_override
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     return os.path.join(base, "GhostShell", "broker_sessions")
 
@@ -658,9 +666,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--pipe-name", default=None, help="skip auto-detection")
     p.add_argument("--list", action="store_true", help="list sessions and exit")
+    p.add_argument("--registry-dir", default=None,
+                   help="folder with the session records (default: the old machine-wide one)")
     p.add_argument("--size", default=None, metavar="COLS,ROWS",
                    help="size to give the session at first (the Sublime tab's), instead of this window's")
     args = p.parse_args()
+    global _registry_dir_override
+    _registry_dir_override = args.registry_dir
     initial_size = None
     if args.size:
         try:
