@@ -11,6 +11,8 @@ and its child keep running. Connect a new client to the same pipe name and
 you're back in the same live process -- not a fresh one.
 """
 import argparse
+import asyncio
+import collections
 import ctypes
 import json
 import os
@@ -39,6 +41,9 @@ except ImportError:
 
 if os.name != "nt":
     sys.exit("agent_broker.py is Windows-only (ConPTY + named pipes).")
+
+import _winapi  # noqa: E402  (Windows only)
+from asyncio import windows_utils  # noqa: E402
 
 HRESULT = ctypes.c_long
 
@@ -240,25 +245,50 @@ def _current_process_is_in_job():
     return bool(result.value) if ok else "unknown(error=%d)" % ctypes.get_last_error()
 
 
+class _PtyOutput(asyncio.Protocol):
+    """Receives the pseudoconsole's output from the event loop (see _Pty.attach)."""
+
+    def __init__(self, pty):
+        self._pty = pty
+
+    def connection_made(self, transport):
+        self._pty._read_transport = transport
+
+    def data_received(self, data):
+        self._pty._on_output(data)
+
+    def eof_received(self):
+        return False
+
+    def connection_lost(self, exc):
+        self._pty._on_eof()
+
+
+# How long, after the child has exited, the broker keeps waiting for the pseudoconsole to deliver the child's last
+# output (the end of the stream) before it stops waiting.
+_FINAL_OUTPUT_WAIT_S = 2.0
+
+
 class _Pty:
-    """A child process attached to a Windows pseudoconsole."""
+    """A child process attached to a Windows pseudoconsole.
+
+    All I/O runs on the broker's one event loop, with no threads: the two pipe ends on this side are overlapped
+    (asyncio.windows_utils.pipe) while the ends the pseudoconsole uses are ordinary ones. Output arrives through a
+    read transport, input goes out through the loop's overlapped WriteFile, and the child's exit is a wait on its
+    process handle registered with the loop."""
 
     def __init__(self, argv, cwd, cols, rows, env):
         self.argv = list(argv)
         self.pid = 0
         self._hPC = None
-        self._hInWrite = None
-        self._hOutRead = None
+        self._out_pipe = None      # our read end of the pseudoconsole's output (PipeHandle, overlapped)
+        self._in_pipe = None       # our write end of the pseudoconsole's input (PipeHandle, overlapped)
         self._hProcess = None
         self._hThread = None
         self._attr_list = None
         self._heap_buf = None
         self._alive = True
         self._exit_code = None
-        self._pc_lock = threading.Lock()
-        self._exit_watcher = None
-        self._exit_callbacks = []
-        self._exit_callbacks_lock = threading.Lock()
         self._cmdline = subprocess.list2cmdline(self.argv)
         self._cwd = cwd or None
         self._env = env
@@ -272,54 +302,54 @@ class _Pty:
             self._conpty_folder = self._env.pop(conpty_api.CONPTY_FOLDER_ENV_VAR) or ""
         self._cols = cols
         self._rows = rows
+        # Event-loop state, created by attach().
+        self._read_transport = None
+        self._on_data = None
+        self._eof = None           # set when the output pipe has reached its end
+        self.exited = None         # set when the child is gone
+        self.finished = None       # set when it is gone AND its last output has been delivered (or the wait ran out)
+        self._write_lock = None
+        self._watch_task = None
 
     def start(self):
         """Create the ConPTY (two pipe pairs + CreatePseudoConsole) and hand
         the pty-side ends to _start_child to spawn the real process. Every
         raise path here closes whatever HANDLEs it already opened, since a
         rejected spawn otherwise leaks them for the life of the broker."""
-        hPipePtyIn = HANDLE()
-        hInWrite = HANDLE()
-        hOutRead = HANDLE()
-        hPipePtyOut = HANDLE()
-        if not _k32.CreatePipe(byref(hPipePtyIn), byref(hInWrite), None, 0):
-            raise OSError("CreatePipe(input) failed")
-        if not _k32.CreatePipe(byref(hOutRead), byref(hPipePtyOut), None, 0):
-            _k32.CloseHandle(hPipePtyIn)
-            _k32.CloseHandle(hInWrite)
-            raise OSError("CreatePipe(output) failed")
+        # Our ends overlapped (the event loop waits on them), the pseudoconsole's ends plain.
+        out_r, out_w = windows_utils.pipe(overlapped=(True, False), bufsize=65536)
+        in_r, in_w = windows_utils.pipe(overlapped=(False, True), bufsize=65536)
+        self._out_pipe = windows_utils.PipeHandle(out_r)
+        self._in_pipe = windows_utils.PipeHandle(in_w)
 
         hPC = HANDLE()
         try:
             self._conpty = conpty_api.select_api(_k32, self._conpty_folder)
             print("[agent_broker] ConPTY: %s" % self._conpty.source)
             hr = self._conpty.create(_COORD(self._cols, self._rows),
-                                     hPipePtyIn, hPipePtyOut, 0, byref(hPC))
+                                     HANDLE(in_r), HANDLE(out_w), 0, byref(hPC))
         except OSError:
-            _k32.CloseHandle(hPipePtyIn)
-            _k32.CloseHandle(hPipePtyOut)
-            _k32.CloseHandle(hInWrite)
-            _k32.CloseHandle(hOutRead)
+            _winapi.CloseHandle(in_r)
+            _winapi.CloseHandle(out_w)
+            self._close_pipes()
             raise
-        _k32.CloseHandle(hPipePtyIn)
-        _k32.CloseHandle(hPipePtyOut)
+        _winapi.CloseHandle(in_r)       # the pseudoconsole holds its own copies now
+        _winapi.CloseHandle(out_w)
         if hr & 0x80000000:
-            _k32.CloseHandle(hInWrite)
-            _k32.CloseHandle(hOutRead)
+            self._close_pipes()
             raise OSError(f"CreatePseudoConsole failed: HRESULT 0x{hr & 0xffffffff:08X}")
         self._hPC = hPC.value
 
         try:
-            self._start_child(hInWrite, hOutRead)
+            self._start_child()
         except BaseException:
             self._close_pc()
-            _k32.CloseHandle(hInWrite)
-            _k32.CloseHandle(hOutRead)
+            self._close_pipes()
             self._release_attr_list()
             self._alive = False
             raise
 
-    def _start_child(self, hInWrite, hOutRead):
+    def _start_child(self):
         """Spawn the real child process (argv/cwd/env) attached to the
         pseudoconsole self._hPC via a proc-thread attribute list (the
         InitializeProcThreadAttributeList/HeapAlloc pair below is the
@@ -367,57 +397,64 @@ class _Pty:
         self._hProcess = pi.hProcess
         self._hThread = pi.hThread
         self.pid = pi.dwProcessId
-        self._hInWrite = hInWrite
-        self._hOutRead = hOutRead
-        self._exit_watcher = threading.Thread(target=self._watch_process_exit, daemon=True)
-        self._exit_watcher.start()
 
-    def on_exit(self, callback):
-        """Register a callback fired once, from the exit-watcher thread,
-        the moment the child process is confirmed dead. Used to unstick a
-        server thread parked in a blocking Windows call (e.g.
-        ConnectNamedPipe waiting for the *next* client) that would
-        otherwise never re-check is_alive() and never notice the child
-        died -- see _OutputServer._cancel_pending_accept.
+    async def attach(self, on_data):
+        """Start delivering the pseudoconsole's output to on_data(bytes) and watching for the child's exit. Must run
+        on the event loop that will serve the pipes."""
+        loop = asyncio.get_running_loop()
+        self._on_data = on_data
+        self._eof = asyncio.Event()
+        self.exited = asyncio.Event()
+        self.finished = asyncio.Event()
+        self._write_lock = asyncio.Lock()
+        await loop.connect_read_pipe(lambda: _PtyOutput(self), self._out_pipe)
+        self._watch_task = loop.create_task(self._watch_process_exit())
 
-        Fires immediately (still via the caller's thread, not the exit
-        watcher) if the child has already exited by the time this is
-        called -- e.g. a child that crashes on startup, before the
-        constructor registering this callback even runs -- so a slow
-        registration can't miss the one-shot exit event and leak the same
-        way the un-cancellable ConnectNamedPipe wait used to."""
-        with self._exit_callbacks_lock:
-            if not self.is_alive():
-                already_fired = True
-            else:
-                self._exit_callbacks.append(callback)
-                already_fired = False
-        if already_fired:
-            callback()
+    def _on_output(self, data):
+        if self._on_data is not None:
+            self._on_data(data)
 
-    def _fire_exit_callbacks(self):
-        with self._exit_callbacks_lock:
-            callbacks, self._exit_callbacks = self._exit_callbacks, []
-        for callback in callbacks:
-            try:
-                callback()
-            except OSError:
-                print("[agent_broker] exit callback failed:\n%s" % traceback.format_exc())
+    def _on_eof(self):
+        """The output pipe reached its end (conhost closes it once the pseudoconsole is closed)."""
+        self._alive = False
+        self._eof.set()
+        self._check_finished()
 
-    def _watch_process_exit(self):
-        """Block on WaitForSingleObject until the child exits on its own
-        (ReadFile on hOutRead does not return EOF just because every process
+    def _check_finished(self):
+        if self.exited.is_set() and self._eof.is_set():
+            self.finished.set()
+
+    def _mark_exited(self):
+        if self.exited is None or self.exited.is_set():
+            return
+        self.exited.set()
+        # The last output normally arrives within moments of the exit; do not wait forever for it.
+        asyncio.get_running_loop().call_later(_FINAL_OUTPUT_WAIT_S, self.finished.set)
+        self._check_finished()
+
+    def pause_reading(self):
+        """Stop reading the pseudoconsole's output (a slow client is behind); the child then blocks on its own writes."""
+        transport = self._read_transport
+        if transport is not None and not transport.is_closing():
+            transport.pause_reading()
+
+    def resume_reading(self):
+        transport = self._read_transport
+        if transport is not None and not transport.is_closing():
+            transport.resume_reading()
+
+    async def _watch_process_exit(self):
+        """Wait (on the loop, no thread) for the child to exit on its own
+        (ReadFile on the output pipe does not return EOF just because every process
         attached to the console exited -- conhost only flushes the final
         frame and closes the pipe once ClosePseudoConsole is called), then
-        record its exit code via GetExitCodeProcess, fire on_exit callbacks
-        (see _OutputServer._cancel_pending_accept, which registers one so a
-        pending ConnectNamedPipe wakes up once the child is gone), and close
-        the pseudoconsole."""
+        record its exit code via GetExitCodeProcess, close the pseudoconsole
+        (which ends the output pipe) and wake everything waiting on `exited`."""
         h = self._hProcess
         if h is None:
             return
         try:
-            _k32.WaitForSingleObject(h, _INFINITE)
+            await asyncio.get_running_loop()._proactor.wait_for_handle(h)
             code = DWORD(0)
             if _k32.GetExitCodeProcess(h, byref(code)):
                 self._exit_code = code.value
@@ -443,8 +480,8 @@ class _Pty:
         except OSError:
             print("[agent_broker] exit watcher failed:\n%s" % traceback.format_exc())
         self._alive = False
-        self._fire_exit_callbacks()
         self._close_pc()
+        self._mark_exited()
 
     def exit_code(self):
         """Return the child's cached/current Windows process exit code, if known."""
@@ -461,56 +498,26 @@ class _Pty:
         return self._exit_code
 
     def _close_pc(self):
-        """Close the pseudoconsole HANDLE (idempotent, lock-guarded so the
-        exit watcher thread and an explicit kill() can't double-close)."""
-        with self._pc_lock:
-            if self._hPC is not None:
-                self._conpty.close(self._hPC)
-                self._hPC = None
+        """Close the pseudoconsole HANDLE (idempotent)."""
+        if self._hPC is not None:
+            self._conpty.close(self._hPC)
+            self._hPC = None
 
-    def read(self, on_data):
-        """Blocking reader loop; calls on_data(bytes) until EOF. Run on a
-        daemon thread -- see main()'s _Pty.read thread. Unlike
-        ai_terminal.py's _BrokerPty.read (the client side), there is no
-        replay-marker bookkeeping here: this is the raw output the broker
-        feeds straight to _OutputServer.feed. _REPLAY_END itself is written
-        separately, by _OutputServer.run_forever right after a client
-        connects (snapshot, then the marker, then live feed() data)."""
-        buf = (c_char * 8192)()
-        n = DWORD(0)
-        while self._alive:
-            ok = _k32.ReadFile(self._hOutRead, buf, 8192, byref(n), None)
-            if not ok:
-                err = ctypes.get_last_error()
-                self._alive = False
-                if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE):
-                    return
-                raise OSError(
-                    "ReadFile on the pseudoconsole output failed (GetLastError %d)" % err
-                )
-            if n.value == 0:
-                break
-            on_data(bytes(buf[: n.value]))
-        self._alive = False
-
-    def write(self, data):
-        """Blocking WriteFile to the pseudoconsole's input pipe, looping
-        until every byte of data is accepted (a single WriteFile call is not
-        guaranteed to consume the whole buffer)."""
-        if not self._alive or self._hInWrite is None:
+    async def write(self, data):
+        """Write data to the pseudoconsole's input pipe on the loop, looping
+        until every byte is accepted (a single write is not guaranteed to
+        consume the whole buffer); writers are serialized so input keeps its order."""
+        if not self._alive or self._in_pipe is None:
             return
-        written = DWORD(0)
-        while data:
-            if not _k32.WriteFile(self._hInWrite, data, len(data), byref(written), None):
-                raise OSError(
-                    "WriteFile to the pseudoconsole input failed (GetLastError %d)"
-                    % ctypes.get_last_error()
-                )
-            if not written.value:
-                raise OSError(
-                    "WriteFile accepted 0 of %d bytes of terminal input" % len(data)
-                )
-            data = data[written.value:]
+        proactor = asyncio.get_running_loop()._proactor
+        async with self._write_lock:
+            while data:
+                written = await proactor.send(self._in_pipe, data)
+                if not written:
+                    raise OSError(
+                        "WriteFile accepted 0 of %d bytes of terminal input" % len(data)
+                    )
+                data = data[written:]
 
     def resize(self, cols, rows):
         """Actually resize the ConPTY (unlike _ControlServer's RESIZE line
@@ -536,7 +543,7 @@ class _Pty:
     def is_alive(self):
         """GetExitCodeProcess-backed liveness check, not just the cached
         self._alive flag -- catches a child that exited on its own before
-        _watch_process_exit's WaitForSingleObject got scheduled."""
+        the exit wait completed."""
         if not self._alive or self._hProcess is None:
             return False
         code = DWORD(0)
@@ -555,18 +562,30 @@ class _Pty:
         if not self._alive:
             return
         self._alive = False
+        if self._watch_task is not None:
+            self._watch_task.cancel()
         self._close_pc()
         if self._hProcess is not None:
             _k32.TerminateProcess(self._hProcess, 0)
         self._close_handles()
+        self._mark_exited()
+
+    def _close_pipes(self):
+        """Close our two pipe ends (idempotent); the read end belongs to the read transport once attached."""
+        for pipe in (self._out_pipe, self._in_pipe):
+            if pipe is not None:
+                pipe.close()
 
     def _close_handles(self):
-        """CloseHandle every pipe/process/thread HANDLE this instance owns
+        """Close every pipe/process/thread HANDLE this instance owns
         (the pseudoconsole itself is closed separately via _close_pc)."""
-        for h in (self._hInWrite, self._hOutRead, self._hThread, self._hProcess):
+        if self._read_transport is not None:
+            self._read_transport.close()
+        self._close_pipes()
+        for h in (self._hThread, self._hProcess):
             if h is not None:
                 _k32.CloseHandle(h)
-        self._hInWrite = self._hOutRead = self._hThread = self._hProcess = None
+        self._hThread = self._hProcess = None
         self._release_attr_list()
 
     def _release_attr_list(self):
@@ -734,212 +753,240 @@ def _pipe_path(name):
     return "\\\\.\\pipe\\" + name
 
 
+# Output backlog (bytes queued for the attached client) at which the pseudoconsole is no longer read, and the level at
+# which reading resumes. A client that stops reading therefore stalls the child instead of growing the broker's memory.
+_OUT_HIGH_WATER = 1024 * 1024
+_OUT_LOW_WATER = 256 * 1024
+_FLAG_OVERLAPPED = 0x40000000
+
+
+def _create_pipe_instance(name, access, instances, out_buffer, in_buffer):
+    """One overlapped instance of the named pipe `name`, as an asyncio PipeHandle (closing it closes the handle).
+    The broker's end is overlapped so the event loop can wait on it; a client may open its own end either way."""
+    handle = _winapi.CreateNamedPipe(
+        _pipe_path(name),
+        access | _FLAG_OVERLAPPED,
+        _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT | _PIPE_REJECT_REMOTE_CLIENTS,
+        instances, out_buffer, in_buffer, 0, _winapi.NULL,
+    )
+    return windows_utils.PipeHandle(handle)
+
+
+async def _accept_or_stop(pipe, stop):
+    """Wait for a client to connect to `pipe`. Returns True when one did, False when the `stop` event was set first
+    (the child is gone); the pending accept is then cancelled."""
+    loop = asyncio.get_running_loop()
+    accept = loop._proactor.accept_pipe(pipe)
+    stopper = loop.create_task(stop.wait())
+    try:
+        await asyncio.wait({accept, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        if accept.done() and not accept.cancelled():
+            accept.result()
+            return True
+        return False
+    finally:
+        stopper.cancel()
+        if not accept.done():
+            accept.cancel()
+
+
+def _disconnect_and_close(pipe):
+    """DisconnectNamedPipe + close: the instance is then discarded (the next client gets a fresh instance)."""
+    try:
+        _k32.DisconnectNamedPipe(pipe.fileno())
+    except (OSError, ValueError):
+        pass
+    pipe.close()
+
+
+class _Client:
+    """One attached output client: its pipe, its queue of unsent chunks, and the task that sends them in order."""
+
+    def __init__(self, pipe):
+        self.pipe = pipe
+        self.chunks = collections.deque()
+        self.pending = 0
+        self.wake = asyncio.Event()
+        self.gone = asyncio.Event()     # a write failed, or the matching input client left
+        self.closing = False            # send what is queued, then stop
+        self.sender = None
+
+    def push(self, data):
+        if data:
+            self.chunks.append(data)
+            self.pending += len(data)
+            self.wake.set()
+
+
 class _OutputServer:
     """Broker -> client output, one client at a time, on its OWN pipe
-    (<name>). Deliberately write-only from the broker's side (never issues
-    ReadFile on this handle) -- an earlier duplex version had the broker's
-    reader thread WriteFile()ing here while a second thread ReadFile()'d the
-    SAME handle for client keystrokes, and that concurrent read+write on one
-    synchronous named-pipe handle was empirically unreliable: confirmed live
-    that a WriteFile can simply never complete (no error, just never
-    returns) when a ReadFile is pending on the same handle from another
-    thread, silently killing the session after just the first few bytes.
-    Client keystrokes now go over the separate _InputServer pipe instead."""
+    (<name>). Deliberately write-only from the broker's side (never reads this
+    handle): client keystrokes go over the separate _InputServer pipe. (An earlier
+    duplex, thread-per-direction version had a WriteFile that could simply never
+    complete while a ReadFile was pending on the same handle from another thread.)
+
+    Everything runs on the broker's event loop. feed() is called with each chunk the pseudoconsole produces; it
+    always records the chunk in the scrollback and, when a client is attached, queues it for that client's sender
+    task. Attaching publishes the scrollback snapshot, the replay marker and the live feed with no await in
+    between, so no output can fall between the snapshot and the live data."""
 
     def __init__(self, name, pty, scrollback):
         self._name = name
         self._pty = pty
         self._scrollback = scrollback
-        self._client_handle = None
+        self._client = None
         self._ever_connected = False
-        self._client_lock = threading.Lock()
-        # The listen handle currently blocked in ConnectNamedPipe, waiting
-        # for the *next* client -- distinct from _client_handle above,
-        # which is only set once a client has actually connected. Without
-        # this, a child that dies while nobody is attached leaves
-        # run_forever's ConnectNamedPipe call parked with no timeout: it
-        # never re-checks pty.is_alive(), so run_forever() never returns,
-        # main()'s `finally: _remove_registry()` never runs, and the
-        # broker leaks forever as an unkillable phantom entry in "list
-        # sessions" (confirmed live 2026-09-15: dead child, live broker
-        # process, orphaned registry file on disk for days). pty.on_exit
-        # below cancels this pending accept the moment the child dies, so
-        # the loop falls through to its own is_alive() check and exits
-        # cleanly.
-        self._pending_lock = threading.Lock()
-        self._pending_handle = None
-        pty.on_exit(self._cancel_pending_accept)
-
-    def _cancel_pending_accept(self):
-        """pty.on_exit callback: CancelIoEx the ConnectNamedPipe call
-        run_forever is currently blocked in, so a dead child unblocks the
-        accept loop immediately instead of leaving it parked forever (see
-        the class docstring's pty.on_exit paragraph)."""
-        with self._pending_lock:
-            handle = self._pending_handle
-        if handle is not None:
-            _k32.CancelIoEx(handle, None)
 
     def feed(self, data):
-        with self._client_lock:
+        try:
             self._scrollback.append(data)
-            h = self._client_handle
-            if h is None:
-                return
-            try:
-                self._write(h, data)
-            except OSError:
-                if self._client_handle is h:
-                    self._client_handle = None
-
-    def _write(self, handle, data):
-        """Blocking WriteFile loop to a connected client HANDLE, looping
-        until every byte of data is accepted."""
-        written = DWORD(0)
-        while data:
-            if not _k32.WriteFile(handle, data, len(data), byref(written), None):
-                raise OSError("WriteFile to pipe client failed (GetLastError %d)"
-                              % ctypes.get_last_error())
-            if not written.value:
-                raise OSError("WriteFile accepted 0 bytes to pipe client")
-            data = data[written.value:]
+        except OSError:
+            print("[agent_broker] scrollback write failed:\n%s" % traceback.format_exc())
+        client = self._client
+        if client is None or client.gone.is_set():
+            return
+        client.push(data)
+        if client.pending > _OUT_HIGH_WATER:
+            self._pty.pause_reading()
 
     def disconnect_client(self):
         """Release the output side when the matching input client leaves.
 
         An outbound-only named pipe cannot notice a quiet client disappearing
-        until the next WriteFile.  The input server *can* notice immediately,
+        until the next write. The input server *can* notice immediately,
         so it uses this hook to prevent a silent session from remaining pinned
         forever to a dead client.
         """
-        with self._client_lock:
-            self._client_handle = None
+        client = self._client
+        if client is not None:
+            client.gone.set()
 
     @property
     def ever_connected(self):
         return self._ever_connected
 
-    def run_forever(self):
-        """Accept-loop, one client at a time, until the child exits: create
-        one named-pipe instance (CreateNamedPipeW), block in ConnectNamedPipe
-        for a client, send the scrollback snapshot + _REPLAY_END marker so a
-        reattaching client can tell replay from live output apart, then wait
-        (polling _client_handle, not blocking on any I/O -- this pipe is
-        write-only, see the class docstring) until feed() notices the client
-        is gone, and recycle the pipe instance for the next connection."""
-        while self._pty.is_alive():
-            handle = _k32.CreateNamedPipeW(
-                _pipe_path(self._name),
-                _PIPE_ACCESS_OUTBOUND,
-                _PIPE_TYPE_BYTE | _PIPE_WAIT | _PIPE_REJECT_REMOTE_CLIENTS,
-                1,
-                65536, 0, 0, None,
-            )
-            if handle == _INVALID_HANDLE_VALUE:
-                print("[agent_broker] CreateNamedPipeW(out) failed (GetLastError %d)"
-                      % ctypes.get_last_error())
-                time.sleep(1)
-                continue
+    async def _send_loop(self, client):
+        proactor = asyncio.get_running_loop()._proactor
+        try:
+            while True:
+                while not client.chunks:
+                    if client.closing:
+                        return
+                    client.wake.clear()
+                    await client.wake.wait()
+                data = client.chunks.popleft()
+                client.pending -= len(data)
+                while data:
+                    written = await proactor.send(client.pipe, data)
+                    if not written:
+                        raise OSError("write accepted 0 bytes to pipe client")
+                    data = data[written:]
+                if client.pending < _OUT_LOW_WATER:
+                    self._pty.resume_reading()
+        except OSError:
+            client.gone.set()
+            self._pty.resume_reading()
 
-            with self._pending_lock:
-                self._pending_handle = handle
-            ok = _k32.ConnectNamedPipe(handle, None)
-            with self._pending_lock:
-                self._pending_handle = None
-            if not ok:
-                err = ctypes.get_last_error()
-                if err == _ERROR_OPERATION_ABORTED:
-                    # Cancelled by _cancel_pending_accept because the child
-                    # died while nobody was connected -- not an error, just
-                    # the signal to fall through to the loop's own
-                    # is_alive() check and exit run_forever().
-                    _k32.CloseHandle(handle)
-                    continue
-                if err != _ERROR_PIPE_CONNECTED:
-                    print("[agent_broker] ConnectNamedPipe(out) failed (GetLastError %d)"
-                          % err)
-                    _k32.CloseHandle(handle)
-                    continue
+    async def run_forever(self):
+        """Accept-loop, one client at a time, until the child is gone: create
+        one overlapped named-pipe instance, wait for a client (a dead child cancels that
+        wait), queue the scrollback snapshot + _REPLAY_END marker so a reattaching client can
+        tell replay from live output apart, then wait until the client is gone or the child
+        has finished, let the queue drain, and recycle the pipe instance for the next client."""
+        loop = asyncio.get_running_loop()
+        while self._pty.is_alive():
+            try:
+                pipe = _create_pipe_instance(self._name, _PIPE_ACCESS_OUTBOUND, 1, 65536, 0)
+            except OSError as e:
+                print("[agent_broker] CreateNamedPipe(out) failed: %s" % e)
+                await asyncio.sleep(1)
+                continue
+            try:
+                connected = await _accept_or_stop(pipe, self._pty.exited)
+            except OSError as e:
+                print("[agent_broker] ConnectNamedPipe(out) failed: %s" % e)
+                pipe.close()
+                continue
+            if not connected:
+                # The child died while nobody was attached -- not an error, the loop's own is_alive() check ends it.
+                pipe.close()
+                continue
 
             print("[agent_broker] client attached to pipe %r" % self._name)
-            try:
-                # Serialize snapshot + marker + live publication against
-                # feed(). This closes the old gap where output appended after
-                # snapshot() but before _client_handle was published was sent
-                # neither in the snapshot nor as live data.
-                with self._client_lock:
-                    self._write(handle, self._scrollback.snapshot())
-                    self._write(handle, _REPLAY_END)
-                    self._client_handle = handle
-                    self._ever_connected = True
-            except OSError:
-                _k32.CloseHandle(handle)
-                continue
-            # No read side to block on here -- just wait until feed() (on the
-            # reader thread) notices a write failure and clears the handle,
-            # i.e. the client disconnected. Bounded poll, not a busy spin.
-            while self._pty.is_alive():
-                with self._client_lock:
-                    if self._client_handle is not handle:
-                        break
-                time.sleep(0.2)
+            client = _Client(pipe)
+            client.push(self._scrollback.snapshot())
+            client.push(_REPLAY_END)
+            self._client = client
+            self._ever_connected = True
+            client.sender = loop.create_task(self._send_loop(client))
 
-            _k32.FlushFileBuffers(handle)
-            _k32.DisconnectNamedPipe(handle)
-            _k32.CloseHandle(handle)
+            waits = {loop.create_task(client.gone.wait()), loop.create_task(self._pty.finished.wait())}
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            for w in waits:
+                w.cancel()
+
+            if self._client is client:
+                self._client = None
+            if client.gone.is_set():
+                client.sender.cancel()
+            else:
+                # The child has finished: let the client receive what is still queued (its last output).
+                client.closing = True
+                client.wake.set()
+                try:
+                    await asyncio.wait_for(client.sender, 2.0)
+                except (asyncio.TimeoutError, OSError):
+                    client.sender.cancel()
+            _disconnect_and_close(pipe)
+            self._pty.resume_reading()
             print("[agent_broker] client detached from pipe %r" % self._name)
 
 
 class _InputServer:
     """Client -> broker input, one client at a time, on its own pipe
     (<name>-in). Read-only from the broker's side -- nothing else ever
-    writes to this handle, so no concurrent-read/write risk here either."""
+    writes to this handle."""
 
     def __init__(self, name, pty, on_disconnect=None):
         self._name = name + "-in"
         self._pty = pty
         self._on_disconnect = on_disconnect
-        # Tracks the currently-connected client's handle so force_disconnect()
-        # (called from the control server's thread) can kick it off. Guarded
-        # by a lock since it's written from run_forever's thread and read
-        # from whichever thread calls force_disconnect().
-        self._handle_lock = threading.Lock()
-        self._current_handle = None
+        self._serving = None        # the task serving the currently connected client, for force_disconnect()
+        self._kicked = False        # set by force_disconnect, so its cancellation is told apart from the broker's own
 
-    def run_forever(self):
-        """Accept-loop, one client at a time, until the child exits: create
-        one named-pipe instance, block in ConnectNamedPipe, then hand the
-        connected client to _serve_client until it disconnects (naturally,
-        or via force_disconnect's CancelIoEx), disconnect/close and recycle
-        the pipe instance for the next connection -- same shape as
-        _OutputServer.run_forever, but inbound and with a real read loop
-        instead of a poll."""
+    async def run_forever(self):
+        """Accept-loop, one client at a time, until the child is gone: create
+        one overlapped named-pipe instance, wait for a client, then serve it until it
+        disconnects (naturally, or via force_disconnect), disconnect/close and recycle
+        the pipe instance for the next connection -- same shape as _OutputServer.run_forever."""
+        loop = asyncio.get_running_loop()
         while self._pty.is_alive():
-            handle = _k32.CreateNamedPipeW(
-                _pipe_path(self._name),
-                _PIPE_ACCESS_INBOUND,
-                _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT | _PIPE_REJECT_REMOTE_CLIENTS,
-                1,
-                0, 65536, 0, None,
-            )
-            if handle == _INVALID_HANDLE_VALUE:
-                print("[agent_broker] CreateNamedPipeW(in) failed (GetLastError %d)"
-                      % ctypes.get_last_error())
-                time.sleep(1)
-                continue
-            ok = _k32.ConnectNamedPipe(handle, None)
-            if not ok and ctypes.get_last_error() != _ERROR_PIPE_CONNECTED:
-                _k32.CloseHandle(handle)
-                continue
-            with self._handle_lock:
-                self._current_handle = handle
             try:
-                self._serve_client(handle)
+                pipe = _create_pipe_instance(self._name, _PIPE_ACCESS_INBOUND, 1, 0, 65536)
+            except OSError as e:
+                print("[agent_broker] CreateNamedPipe(in) failed: %s" % e)
+                await asyncio.sleep(1)
+                continue
+            try:
+                connected = await _accept_or_stop(pipe, self._pty.exited)
+            except OSError:
+                pipe.close()
+                continue
+            if not connected:
+                pipe.close()
+                continue
+            self._serving = loop.create_task(self._serve_client(pipe))
+            try:
+                await self._serving
+            except asyncio.CancelledError:
+                # force_disconnect() cancelled the serving task: carry on with the next client. Any other
+                # cancellation (the broker is stopping) is passed on.
+                if not self._kicked:
+                    raise
             finally:
-                with self._handle_lock:
-                    self._current_handle = None
-                _k32.DisconnectNamedPipe(handle)
-                _k32.CloseHandle(handle)
+                self._kicked = False
+                self._serving = None
+                _disconnect_and_close(pipe)
                 if self._on_disconnect is not None:
                     self._on_disconnect()
 
@@ -949,44 +996,36 @@ class _InputServer:
         relay to Sublime without the user having to close that window first
         -- see _ControlServer's DISCONNECT command.
 
-        CancelIoEx on another thread unblocks _serve_client's blocking
-        ReadFile (same technique ai_terminal.py's _BrokerPty.kill() uses on
-        its own reader thread); run_forever's own finally block then does
-        the real DisconnectNamedPipe/CloseHandle and fires on_disconnect,
-        which releases the output side too -- no separate call needed there.
+        Cancelling the serving task cancels its pending overlapped read; run_forever's own finally block then does
+        the real DisconnectNamedPipe/close and fires on_disconnect, which releases the output side too -- no
+        separate call needed there.
         """
-        with self._handle_lock:
-            handle = self._current_handle
-        if handle is not None:
-            _k32.CancelIoEx(handle, None)
+        task = self._serving
+        if task is not None:
+            self._kicked = True
+            task.cancel()
 
-    def _serve_client(self, handle):
-        """Blocking ReadFile loop on one connected client's input pipe;
-        every chunk read is written straight to the PTY (self._pty.write --
-        the real keystroke path from client to child)."""
-        buf = (c_char * 4096)()
-        n = DWORD(0)
+    async def _serve_client(self, pipe):
+        """Read loop on one connected client's input pipe; every chunk read
+        is written straight to the PTY (self._pty.write -- the real
+        keystroke path from client to child)."""
+        proactor = asyncio.get_running_loop()._proactor
         while self._pty.is_alive():
-            ok = _k32.ReadFile(handle, buf, 4096, byref(n), None)
-            if not ok:
-                err = ctypes.get_last_error()
-                if err in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
-                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_HANDLE_EOF,
-                           _ERROR_OPERATION_ABORTED):
-                    return
-                print("[agent_broker] ReadFile on input pipe failed (GetLastError %d)" % err)
-                return
-            if n.value == 0:
+            try:
+                data = await proactor.recv(pipe, 4096)
+            except OSError:
+                return              # the client left (broken pipe) or the read was aborted
+            if not data:
                 return
             try:
-                self._pty.write(bytes(buf[: n.value]))
+                await self._pty.write(data)
             except OSError as e:
                 print("[agent_broker] write to PTY failed: %s" % e)
                 return
 
 
 class _ControlServer:
-    """Serves out-of-band control commands (currently just RESIZE) on a
+    """Serves out-of-band control commands (RESIZE, KILL, DISCONNECT) on a
     second pipe, <name>-ctl. Kept separate from the data pipe so a control
     command can never collide with literal bytes typed into the child
     (arrow keys, escape sequences, pasted text, etc)."""
@@ -996,61 +1035,57 @@ class _ControlServer:
         self._pty = pty
         self._input_server = input_server
 
-    def run_forever(self):
-        # nMaxInstances used to be 1, served synchronously in this same loop
-        # iteration -- fine while the only ctl client was a long-lived
-        # resize-watcher (ai_terminal.py's _BrokerPty, or recover_console.py's
-        # _watch_resize thread) holding the pipe open for the session's whole
-        # lifetime. DISCONNECT changed that: a second, short-lived ctl
-        # connection now needs to get in *while* that long-lived one is still
-        # connected (to kick it off in the first place) -- impossible with a
-        # single instance served one-at-a-time. PIPE_UNLIMITED_INSTANCES plus
-        # dispatching each connection to its own thread lets this loop go
-        # straight back to accepting the next connection instead of blocking
-        # in _serve_client for as long as the current client stays attached.
-        while self._pty.is_alive():
-            handle = _k32.CreateNamedPipeW(
-                _pipe_path(self._name),
-                _PIPE_ACCESS_DUPLEX,
-                _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT | _PIPE_REJECT_REMOTE_CLIENTS,
-                _PIPE_UNLIMITED_INSTANCES,
-                4096, 4096, 0, None,
-            )
-            if handle == _INVALID_HANDLE_VALUE:
-                time.sleep(1)
-                continue
-            ok = _k32.ConnectNamedPipe(handle, None)
-            if not ok and ctypes.get_last_error() != _ERROR_PIPE_CONNECTED:
-                _k32.CloseHandle(handle)
-                continue
-            threading.Thread(
-                target=self._run_client, args=(handle,), daemon=True
-            ).start()
-
-    def _run_client(self, handle):
-        """Per-connection thread body: serve this one control client until
-        it disconnects, then always DisconnectNamedPipe/CloseHandle -- run in
-        its own thread (see run_forever's comment) so a long-lived ctl
-        client does not block the accept loop from seeing the next one."""
+    async def run_forever(self):
+        # Any number of ctl connections at once: a long-lived resize watcher can stay attached while a short-lived
+        # DISCONNECT or KILL connection gets in. Each connection is served by its own task.
+        loop = asyncio.get_running_loop()
+        clients = set()
         try:
-            self._serve_client(handle)
+            while self._pty.is_alive():
+                try:
+                    pipe = _create_pipe_instance(self._name, _PIPE_ACCESS_DUPLEX,
+                                                 _PIPE_UNLIMITED_INSTANCES, 4096, 4096)
+                except OSError:
+                    await asyncio.sleep(1)
+                    continue
+                try:
+                    connected = await _accept_or_stop(pipe, self._pty.exited)
+                except OSError:
+                    pipe.close()
+                    continue
+                if not connected:
+                    pipe.close()
+                    continue
+                task = loop.create_task(self._run_client(pipe))
+                clients.add(task)
+                task.add_done_callback(clients.discard)
         finally:
-            _k32.DisconnectNamedPipe(handle)
-            _k32.CloseHandle(handle)
+            for task in list(clients):
+                task.cancel()
 
-    def _serve_client(self, handle):
-        """Blocking ReadFile loop, splitting the byte stream on b"\\n" into
-        whole lines and dispatching each to _handle_line (RESIZE/KILL/
-        DISCONNECT) -- a line can arrive split across ReadFile calls, so
-        partial data is held in `pending` until a full line is seen."""
-        buf = (c_char * 256)()
-        n = DWORD(0)
+    async def _run_client(self, pipe):
+        """Serve this one control client until it disconnects, then always
+        DisconnectNamedPipe/close."""
+        try:
+            await self._serve_client(pipe)
+        finally:
+            _disconnect_and_close(pipe)
+
+    async def _serve_client(self, pipe):
+        """Read loop, splitting the byte stream on b"\\n" into whole lines and
+        dispatching each to _handle_line (RESIZE/KILL/DISCONNECT) -- a line can
+        arrive split across reads, so partial data is held in `pending` until
+        a full line is seen."""
+        proactor = asyncio.get_running_loop()._proactor
         pending = b""
         while self._pty.is_alive():
-            ok = _k32.ReadFile(handle, buf, 256, byref(n), None)
-            if not ok or n.value == 0:
+            try:
+                data = await proactor.recv(pipe, 256)
+            except OSError:
                 return
-            pending += bytes(buf[: n.value])
+            if not data:
+                return
+            pending += data
             while b"\n" in pending:
                 line, pending = pending.split(b"\n", 1)
                 self._handle_line(line.strip())
@@ -1069,9 +1104,9 @@ class _ControlServer:
             self._pty.resize(cols, rows)
         elif parts[0] == "KILL":
             # Explicit end-of-session request (as opposed to a client just
-            # disconnecting, which must NOT kill anything). run_forever()'s
-            # `while self._pty.is_alive()` loops both stop on their own once
-            # this returns; main()'s `finally: pty.kill()` is then a no-op.
+            # disconnecting, which must NOT kill anything). The serving loops
+            # all stop on their own once the child is gone; main()'s
+            # `finally: pty.kill()` is then a no-op.
             self._pty.kill()
         elif parts[0] == "DISCONNECT":
             # Hand the session back from whatever currently holds it (e.g. a
@@ -1163,6 +1198,85 @@ def _remove_registry(path):
             pass
 
 
+async def _run(args, child_argv, launch_env):
+    """Everything the broker does after startup, on one event loop and one thread: start the child, serve the
+    output, input and control pipes, and tear down once the child is gone and its last output has been delivered."""
+    env = launch_env if launch_env is not None else os.environ.copy()
+    for pair in args.env or []:
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            env[key] = value
+    cwd = os.path.realpath(args.cwd) if args.cwd else os.getcwd()
+
+    pty = _Pty(child_argv, cwd, args.cols, args.rows, env)
+    pty.start()
+    print("[agent_broker] spawned pid=%d cwd=%s argv=%s" % (pty.pid, cwd, child_argv))
+
+    scrollback = _Scrollback(
+        args.scrollback_bytes,
+        path=_scrollback_path_for_registry(args.registry_file),
+    )
+    out_server = _OutputServer(args.pipe_name, pty, scrollback)
+    in_server = _InputServer(
+        args.pipe_name, pty, on_disconnect=out_server.disconnect_client
+    )
+    ctl = _ControlServer(args.pipe_name, pty, input_server=in_server)
+
+    loop = asyncio.get_running_loop()
+    side_tasks = []
+    child_exit_code = None
+    exited_before_client = False
+    early_exit_output = b""
+    try:
+        await pty.attach(out_server.feed)
+        side_tasks = [loop.create_task(in_server.run_forever()), loop.create_task(ctl.run_forever())]
+        out_task = loop.create_task(out_server.run_forever())
+
+        _publish_registry(
+            args.registry_file, args.pipe_name, args.profile_name, cwd, child_argv,
+            child_pid=pty.pid,
+        )
+
+        print("[agent_broker] serving \\\\.\\pipe\\%s (+ -in, -ctl) -- Ctrl+C to stop and kill the child"
+              % args.pipe_name)
+        await out_task
+    finally:
+        child_exit_code = pty.exit_code()
+        exited_before_client = (
+            not out_server.ever_connected and child_exit_code is not None
+        )
+        if exited_before_client:
+            early_exit_output = scrollback.snapshot()
+        print("[%s] broker stopping normally; child_alive=%r child_exit_code=%r" % (
+            time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(), pty.exit_code(),
+        ))
+        pty.kill()
+        scrollback.close()
+        _remove_registry(args.registry_file)
+        for task in side_tasks:
+            task.cancel()
+    if exited_before_client:
+        child_output = early_exit_output[-8192:].decode("utf-8", errors="replace")
+        child_output = re.sub(
+            r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))",
+            "",
+            child_output,
+        )
+        child_output = "".join(
+            char for char in child_output
+            if char in "\n\t" or char.isprintable()
+        ).strip()
+        output_detail = (
+            "\nCaptured child output (last 8192 bytes):\n" + child_output
+            if child_output else "\nThe child produced no capturable terminal output."
+        )
+        raise RuntimeError(
+            "child process exited before the broker pipe accepted a client "
+            "(exit code %s)" % child_exit_code + output_detail
+        )
+    print("[agent_broker] child exited, broker stopping")
+
+
 def _main():
     own_argv, child_argv, launch_env = _load_launch_file(sys.argv[1:])
 
@@ -1194,81 +1308,10 @@ def _main():
     if not child_argv:
         p.error("no child command given -- pass it after `--`, e.g. ... -- cmd.exe")
 
-    env = launch_env if launch_env is not None else os.environ.copy()
-    for pair in args.env or []:
-        if "=" in pair:
-            key, value = pair.split("=", 1)
-            env[key] = value
-    cwd = os.path.realpath(args.cwd) if args.cwd else os.getcwd()
-
-    pty = _Pty(child_argv, cwd, args.cols, args.rows, env)
-    pty.start()
-    print("[agent_broker] spawned pid=%d cwd=%s argv=%s" % (pty.pid, cwd, child_argv))
-
-    scrollback = _Scrollback(
-        args.scrollback_bytes,
-        path=_scrollback_path_for_registry(args.registry_file),
-    )
-    out_server = _OutputServer(args.pipe_name, pty, scrollback)
-    in_server = _InputServer(
-        args.pipe_name, pty, on_disconnect=out_server.disconnect_client
-    )
-
-    reader = threading.Thread(target=pty.read, args=(out_server.feed,), daemon=True)
-    reader.start()
-
-    threading.Thread(target=in_server.run_forever, daemon=True).start()
-
-    ctl = _ControlServer(args.pipe_name, pty, input_server=in_server)
-    threading.Thread(target=ctl.run_forever, daemon=True).start()
-
-    _publish_registry(
-        args.registry_file, args.pipe_name, args.profile_name, cwd, child_argv,
-        child_pid=pty.pid,
-    )
-
-    print("[agent_broker] serving \\\\.\\pipe\\%s (+ -in, -ctl) -- Ctrl+C to stop and kill the child"
-          % args.pipe_name)
-    child_exit_code = None
-    exited_before_client = False
-    early_exit_output = b""
     try:
-        out_server.run_forever()
+        asyncio.run(_run(args, child_argv, launch_env))
     except KeyboardInterrupt:
         pass
-    finally:
-        child_exit_code = pty.exit_code()
-        exited_before_client = (
-            not out_server.ever_connected and child_exit_code is not None
-        )
-        if exited_before_client:
-            early_exit_output = scrollback.snapshot()
-        print("[%s] broker stopping normally; child_alive=%r child_exit_code=%r" % (
-            time.strftime("%Y-%m-%d %H:%M:%S"), pty.is_alive(), pty.exit_code(),
-        ))
-        pty.kill()
-        scrollback.close()
-        _remove_registry(args.registry_file)
-    if exited_before_client:
-        child_output = early_exit_output[-8192:].decode("utf-8", errors="replace")
-        child_output = re.sub(
-            r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))",
-            "",
-            child_output,
-        )
-        child_output = "".join(
-            char for char in child_output
-            if char in "\n\t" or char.isprintable()
-        ).strip()
-        output_detail = (
-            "\nCaptured child output (last 8192 bytes):\n" + child_output
-            if child_output else "\nThe child produced no capturable terminal output."
-        )
-        raise RuntimeError(
-            "child process exited before the broker pipe accepted a client "
-            "(exit code %s)" % child_exit_code + output_detail
-        )
-    print("[agent_broker] child exited, broker stopping")
 
 
 def main():
