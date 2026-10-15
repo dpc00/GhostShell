@@ -611,16 +611,23 @@ def _pump_input(h_con_in, h_in, stop_evt, write_lock):
     stop_evt.set()
 
 
-def _watch_resize(h_con_out, h_ctl, stop_evt):
+def _watch_resize(h_con_out, h_ctl, stop_evt, initial=None):
     """Send the console size once, then again whenever it changes.
 
     A 250 ms poll. Windows reports console size changes only as
     WINDOW_BUFFER_SIZE_EVENT records through ReadConsoleInput; the raw
     ReadFile loop in _pump_input never sees them, so there is no event here
     to wait on instead (rule 10).
+
+    initial (cols, rows): the size of the Sublime tab this session was moved from. It is sent instead
+    of this window's own size, so the program keeps drawing at the tab's width (a different width would
+    leave output in the session's replay that the tab cannot lay out when it comes back); the window's
+    size is only followed once it changes later.
     """
     last = _console_size(h_con_out)
-    if last is not None:
+    if initial is not None:
+        _send_resize(h_ctl, initial[0], initial[1])
+    elif last is not None:
         _send_resize(h_ctl, last[0], last[1])
     while not stop_evt.wait(0.25):
         size = _console_size(h_con_out)
@@ -651,7 +658,16 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--pipe-name", default=None, help="skip auto-detection")
     p.add_argument("--list", action="store_true", help="list sessions and exit")
+    p.add_argument("--size", default=None, metavar="COLS,ROWS",
+                   help="size to give the session at first (the Sublime tab's), instead of this window's")
     args = p.parse_args()
+    initial_size = None
+    if args.size:
+        try:
+            cols_text, rows_text = args.size.split(",")
+            initial_size = (int(cols_text), int(rows_text))
+        except ValueError:
+            p.error("--size must be COLS,ROWS")
 
     if args.list:
         for pipe_name, cwd, child in find_sessions():
@@ -680,6 +696,8 @@ def main():
     except OSError as exc:
         print("[attach] could not enter raw VT mode: %s" % exc, file=sys.stderr)
 
+    print("[attach] this window is %s (cols, rows); the session is kept at %s"
+          % (_console_size(h_con_out), initial_size or "this window's size"), file=sys.stderr)
     stop_evt = threading.Event()
     write_lock = threading.Lock()   # the keyboard pump and the TSP replies both write to the input pipe
     relay = _make_tsp_relay(h_in, write_lock, h_con_out)
@@ -692,7 +710,7 @@ def main():
     ).start()
     if h_ctl is not None:
         threading.Thread(
-            target=_watch_resize, args=(h_con_out, h_ctl, stop_evt), daemon=True
+            target=_watch_resize, args=(h_con_out, h_ctl, stop_evt, initial_size), daemon=True
         ).start()
 
     try:

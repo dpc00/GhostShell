@@ -9981,10 +9981,14 @@ def _handoff_term_to_windows_terminal(term, wt_exe, python_exe):
     """
     pty = term.pty
     pipe_name = pty.pipe_name
+    # Same size as this tab: the window opens at the tab's columns x rows and the relay tells the session
+    # that size first. A different width leaves output in the replay that the tab cannot lay out on return.
+    cols, rows = int(term.screen.cols), int(term.screen.rows)
     try:
         subprocess.Popen(
-            [wt_exe, python_exe, _recover_console_script_path(),
-             "--pipe-name", pipe_name],
+            [wt_exe, "--size", "%d,%d" % (cols, rows),
+             python_exe, _recover_console_script_path(),
+             "--pipe-name", pipe_name, "--size", "%d,%d" % (cols, rows)],
         )
     except OSError as exc:
         print("[ai_terminal] Windows Terminal handoff launch failed:\n%s"
