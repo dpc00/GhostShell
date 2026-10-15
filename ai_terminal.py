@@ -5489,6 +5489,29 @@ def _update_debug_status(term):
         print("[ai_terminal] update debug status failed:\n%s" % traceback.format_exc())
 
 
+_TAB_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _tsp_tab_status_hook(term):
+    """The on_state callback for the native view when the profile sets "tsp_tab_status": true.
+
+    A program that draws natively (omp) sends its working state inside TSP frames, not as an OSC title, so
+    osc_title_updates_tab never shows it.  While the view has something animating (the program is working) a spinner
+    frame goes in front of the tab's label; when the work stops the plain label comes back.  The label is the program's
+    OSC title when osc_title_updates_tab is on and one was sent, else the profile name.
+    """
+    def on_state(animated, now):
+        view = term.view
+        if not view or not view.is_valid():
+            return
+        title = term._applied_osc_title if _osc_title_enabled(term) else None
+        label = title or term.profile_name
+        name = "%s %s" % (_TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)], label) if animated else label
+        if view.name() != name:
+            view.set_name(name)
+    return on_state
+
+
 def _tsp_render_native(term):
     """Draw the program's TSP document as rich panels. False on any fault, which
     turns the native view off for this tab so the text repaint takes over."""
@@ -5503,7 +5526,9 @@ def _tsp_render_native(term):
             from .terminal.tsp_view import TspView
             term._tsp_view = TspView(
                 term.view, _setting_number("tsp_animation_ms", 250, profile_name=term.profile_name),
-                aside=_profile_bool(term.profile_name, "tsp_aside_column", False))
+                aside=_profile_bool(term.profile_name, "tsp_aside_column", False),
+                on_state=(_tsp_tab_status_hook(term)
+                          if _profile_bool(term.profile_name, "tsp_tab_status", False) else None))
         drawn = term._tsp_view.render(term._tsp, term.screen.cols)
         term._tsp_native_failures = 0
         return drawn

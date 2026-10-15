@@ -210,8 +210,9 @@ _phantom_sets = {}      # view id -> the PhantomSet drawn there; the convention 
 class TspView:
     """Draws the newest TSP surface of a host into ``view``."""
 
-    def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS, aside=False):
+    def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS, aside=False, on_state=None):
         self.view = view
+        self._on_state = on_state   # called as on_state(animated, now) after each draw; None = nobody listens
         self._phantoms = sublime.PhantomSet(view, PHANTOM_KEY)
         _phantom_sets[view.id()] = self._phantoms     # editor tools that list a view's phantoms (sublime-mcp get_view_phantoms) look here
         self._shown = None          # list of (key, html) last put on screen
@@ -562,6 +563,8 @@ class TspView:
             return False
         if animated:
             self._arm_timer()
+        if self._on_state is not None:
+            self._on_state(bool(animated), self._clock.now)
         view = self.view
         settings = view.settings()
         reset = False

@@ -852,6 +852,12 @@
             // the tab and the window's groups and layout are never touched. Takes effect for tabs spawned
             // after the change.
             "tsp_aside_column": false,
+            // true = while omp is working (its native view has something animating) the tab label gets a
+            // spinner frame in front of it, as omp's own title does in a plain terminal. omp sends its working
+            // state inside TSP frames, not as an OSC title, so osc_title_updates_tab cannot show it. The label
+            // is omp's OSC title when osc_title_updates_tab is on, else the profile name. Takes effect for tabs
+            // spawned after the change.
+            "tsp_tab_status": true,
             // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
             // DA1 sentinel to any terminal (pi-tui terminal.ts). A terminal that
             // does not answer it gets omp's classic ANSI renderer, which is what

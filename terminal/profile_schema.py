@@ -25,6 +25,7 @@ BOOLEAN_KEYS = frozenset({
     "record_asciicast",
     "tsp_enabled",
     "tsp_native_view",
+    "tsp_tab_status",
     "user_owns_caret_enabled",
     "wheel_to_pty",
 })
