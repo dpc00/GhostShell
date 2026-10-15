@@ -833,7 +833,7 @@ def _pipe_instance_free(pipe_name, timeout_ms=150):
     already hold the one connection slot. WaitNamedPipeW succeeds
     immediately when an instance is free to accept; ERROR_FILE_NOT_FOUND
     means the pipe doesn't exist yet (broker mid-restart), a transient
-    state treated as "try anyway" like _try_connect above does. Any other
+    state treated as "try anyway" like _BrokerPty._aconnect does. Any other
     outcome means busy. Caller must not run this on the main thread --
     it can block up to timeout_ms.
     """
@@ -961,7 +961,7 @@ def _broker_python_exe():
     return None
 
 
-class _BrokerPty:
+class _BrokerPtyBase:
     """Client of a tools/agent_broker.py session over a named pipe.
 
     start() first tries to connect to an already-running broker on
@@ -985,42 +985,9 @@ class _BrokerPty:
         self._allow_spawn = allow_spawn
         self._scrollback_bytes = scrollback_bytes
         self._profile_name = profile_name
-        self._h_out = None
-        self._h_in = None
-        self._h_ctl = None
         self._alive = False
-        self._io_lock = threading.Lock()
         self._last_pipe_error = None
         self._broker_error_file = _broker_registry_file(pipe_name) + ".launch.broker-error"
-
-    def _try_connect(self, path, access, timeout_s):
-        """Retry CreateFileW against a named pipe until it opens or
-        timeout_s elapses, distinguishing "pipe exists but busy" (wait on
-        it via WaitNamedPipeW) from "pipe doesn't exist yet" (poll instead --
-        WaitNamedPipeW does not wait for first creation, per MSDN)."""
-        self._last_pipe_error = None
-        deadline = time.time() + timeout_s
-        while True:
-            h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, 0, None)
-            if h != _INVALID_HANDLE_VALUE:
-                self._last_pipe_error = None
-                return h
-            err = ctypes.get_last_error()
-            if time.time() > deadline:
-                self._last_pipe_error = (path, err)
-                return None
-            if err == _ERROR_PIPE_BUSY:
-                # An instance exists but is taken -- WaitNamedPipeW actually
-                # blocks until one frees up (or this timeout).
-                _k32.WaitNamedPipeW(path, 500)
-            elif err == _ERROR_FILE_NOT_FOUND:
-                # The pipe doesn't exist yet (broker still starting up).
-                # WaitNamedPipeW returns immediately in this case per MSDN --
-                # it does not wait for first creation -- so poll instead.
-                time.sleep(0.1)
-            else:
-                self._last_pipe_error = (path, err)
-                return None
 
     def _connection_failure_detail(self):
         detail = ""
@@ -1050,75 +1017,6 @@ class _BrokerPty:
             f"be starting; if it exited, check {self._broker_error_file}"
             )
         return detail
-
-    def start(self):
-        # Two separate unidirectional pipes (<name> broker-writes/we-read,
-        # <name>-in we-write/broker-reads) -- NOT one duplex pipe. A duplex
-        # version had this client's reader thread blocked in ReadFile while
-        # the broker's writer thread did WriteFile on the SAME handle;
-        # confirmed live that the WriteFile can simply never complete (no
-        # error, just never returns) under a fast burst, silently killing
-        # the session after just its first few bytes. Splitting the
-        # directions removes the shared handle entirely.
-        out_path = _broker_pipe_path(self.pipe_name)
-        in_path = _broker_pipe_path(self.pipe_name + "-in")
-
-        # allow_spawn=False (reattach) has no fallback if this first attempt
-        # gives up too soon, so it gets the full 10s instead of the fresh-open
-        # path's fast 0.3s fail-through-to-spawn.
-        initial_timeout = 0.3 if self._allow_spawn else 10.0
-        h_out = self._try_connect(out_path, _GENERIC_READ, initial_timeout)
-        if h_out is None:
-            if not self._allow_spawn:
-                raise OSError(
-                    f"no broker answering on pipe {self.pipe_name!r} -- "
-                    f"the detachable session is gone, not reattaching"
-                )
-            self._spawn_broker()
-            h_out = self._try_connect(out_path, _GENERIC_READ, 10.0)
-            if h_out is None:
-                raise OSError(
-                    f"could not connect to agent_broker.py on pipe {self.pipe_name!r} "
-                    f"after spawning it{self._connection_failure_detail()}"
-                )
-            print(f"[ai_terminal] spawned new detachable session on pipe {self.pipe_name!r}")
-        else:
-            print(f"[ai_terminal] reattached to existing detachable session on pipe {self.pipe_name!r}")
-        self._h_out = h_out
-
-        h_in = self._try_connect(in_path, _GENERIC_WRITE, 5.0)
-        if h_in is None:
-            _k32.CloseHandle(h_out)
-            self._h_out = None
-            raise OSError(
-                f"could not connect to input pipe for {self.pipe_name!r}"
-                f"{self._connection_failure_detail()}"
-            )
-        self._h_in = h_in
-        self._alive = True
-
-        # Control pipe connect is best-effort -- a session that survived a
-        # restart is already sized however it last was; a failed connect here
-        # just means resize() silently no-ops until the next reattach.
-        ctl = self._try_connect(_broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 2.0)
-        self._h_ctl = ctl
-        if ctl is not None:
-            self.resize(self._cols, self._rows)
-
-    def _spawn_broker(self):
-        powershell, launcher, payload, launch_file = self._broker_launch_plan()
-        helper = subprocess.Popen(
-            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-File", launcher],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", creationflags=0x08000000,
-        )
-        try:
-            output, error = helper.communicate(payload, timeout=15.0)
-        except (subprocess.SubprocessError, OSError):
-            self._remove_launch_file(launch_file)
-            raise
-        self._check_broker_launch(helper.returncode, output, error, launch_file)
 
     async def _aspawn_broker(self):
         """_spawn_broker for the plugin's loop: the launcher is an awaited subprocess."""
@@ -1230,112 +1128,6 @@ class _BrokerPty:
         })
         return powershell, launcher, payload, launch_file
 
-    def read(self, on_data, on_replay_complete=None):
-        """Blocking ReadFile loop on the broker's output pipe (run on a
-        daemon thread, like _Pty.read). The bulk of this method's own logic
-        is not ctypes: it is scanning the byte stream for _BROKER_REPLAY_END
-        so a reattach's buffered replay bytes can be told apart from live
-        output and on_replay_complete fired exactly once at the boundary."""
-        buf = (c_char * 8192)()
-        n = DWORD(0)
-        if on_replay_complete is None:
-            on_replay_complete = lambda: None
-        marker_tail = bytearray()
-        replay_done = False
-        stream_lock = threading.RLock()
-        idle_generation = [0]
-
-        def finish_replay(flush_tail=True):
-            nonlocal replay_done
-            with stream_lock:
-                if replay_done:
-                    return
-                if flush_tail and marker_tail:
-                    on_data(bytes(marker_tail))
-                    marker_tail.clear()
-                replay_done = True
-                idle_generation[0] += 1     # any armed idle boundary is now stale
-                on_replay_complete()
-
-        def arm_legacy_idle_boundary():
-            # Called from this reader thread, so the thread-safe sublime.set_timeout is used;
-            # each arming makes the earlier ones stale (only the newest may finish the replay).
-            if replay_done:
-                return
-            with stream_lock:
-                idle_generation[0] += 1
-                generation = idle_generation[0]
-
-            def idle_boundary():
-                if idle_generation[0] == generation:
-                    finish_replay()
-
-            sublime.set_timeout(idle_boundary, int(_BROKER_REPLAY_IDLE_S * 1000))
-
-        while self._alive:
-            ok = _k32.ReadFile(self._h_out, buf, 8192, byref(n), None)
-            if not ok:
-                err = ctypes.get_last_error()
-                self._alive = False
-                if err in (0, _ERROR_HANDLE_EOF, _ERROR_BROKEN_PIPE, _ERROR_NO_DATA,
-                           _ERROR_PIPE_NOT_CONNECTED, _ERROR_OPERATION_ABORTED):
-                    break
-                raise OSError("ReadFile on broker output pipe failed (GetLastError %d)" % err)
-            if n.value == 0:
-                break
-            data = bytes(buf[: n.value])
-            if replay_done:
-                on_data(data)
-                continue
-            with stream_lock:
-                marker_tail.extend(data)
-                marker_at = marker_tail.find(_BROKER_REPLAY_END)
-                if marker_at >= 0:
-                    before = bytes(marker_tail[:marker_at])
-                    after = bytes(marker_tail[marker_at + len(_BROKER_REPLAY_END):])
-                    marker_tail.clear()
-                    if before:
-                        on_data(before)
-                    finish_replay(flush_tail=False)
-                    if after:
-                        on_data(after)
-                    continue
-                safe = len(marker_tail) - len(_BROKER_REPLAY_END) + 1
-                if safe > 0:
-                    on_data(bytes(marker_tail[:safe]))
-                    del marker_tail[:safe]
-            arm_legacy_idle_boundary()
-        finish_replay()
-        self._alive = False
-
-    def write(self, data):
-        """Blocking WriteFile to the broker's input pipe, looping until every
-        byte of data is accepted -- same pattern as _Pty.write."""
-        if not self._alive or self._h_in is None:
-            return
-        written = DWORD(0)
-        while data:
-            if not _k32.WriteFile(self._h_in, data, len(data), byref(written), None):
-                raise OSError("WriteFile to broker input pipe failed (GetLastError %d)"
-                              % ctypes.get_last_error())
-            if not written.value:
-                raise OSError("WriteFile accepted 0 of %d bytes" % len(data))
-            data = data[written.value:]
-
-    def resize(self, cols, rows):
-        """Send a text "RESIZE cols rows\\n" line over the separate control
-        pipe (self._h_ctl) rather than a ConPTY call -- the broker, not this
-        client, owns the real ConPTY; a client with no control-pipe
-        connection (start()'s best-effort connect failed) silently no-ops."""
-        self._cols, self._rows = cols, rows
-        if self._h_ctl is None:
-            return False
-        line = ("RESIZE %d %d\n" % (cols, rows)).encode("utf-8")
-        written = DWORD(0)
-        with self._io_lock:
-            ok = _k32.WriteFile(self._h_ctl, line, len(line), byref(written), None)
-        return bool(ok)
-
     def is_alive(self):
         """No ctypes here -- unlike _Pty.is_alive, this client has no HANDLE
         to a process to query (the broker owns the child); _alive only
@@ -1343,62 +1135,6 @@ class _BrokerPty:
         on EOF/error or by kill()."""
         return self._alive
 
-    def kill(self):
-        """Disconnect this client only. The broker and its agent process keep
-        running -- that's the point of a detachable session. See
-        explicit_kill() to actually end the session."""
-        # Do not return early when _alive is already false.  A natural child
-        # exit makes read() clear that flag before the view's on_close path
-        # calls kill(); the pipe handles still belong to this client and must
-        # be closed.  Leaving them open kept the broker side connected after
-        # Claude's /exit and made the clean EOF look like a pipe failure.
-        self._alive = False
-        handles = (self._h_out, self._h_in, self._h_ctl)
-        self._h_out = self._h_in = self._h_ctl = None
-        for h in handles:
-            if h is not None:
-                # CancelIoEx unblocks the reader thread's pending ReadFile on
-                # this handle from here (a different thread). Without this,
-                # CloseHandle can hang the calling thread indefinitely if a
-                # blocking ReadFile on the same handle is still pending on
-                # another thread -- reproduced live: froze Sublime's main
-                # thread solid when called there directly.
-                _k32.CancelIoEx(h, None)
-                _k32.CloseHandle(h)
-
-    def explicit_kill(self):
-        """End the underlying agent/shell for real (not just disconnect)."""
-        line = b"KILL\n"
-        with self._io_lock:
-            h = self._h_ctl
-            sent = False
-            if h is not None:
-                written = DWORD(0)
-                sent = bool(
-                    _k32.WriteFile(h, line, len(line), byref(written), None)
-                    and written.value == len(line)
-                )
-                if not sent:
-                    # A broker can replace its control-pipe instance after a
-                    # disconnect.  Do not silently turn a requested session
-                    # end into a detach merely because our cached handle went
-                    # stale; reconnect once and deliver KILL to the live pipe.
-                    _k32.CloseHandle(h)
-                    self._h_ctl = None
-            if not sent:
-                h = self._try_connect(
-                    _broker_pipe_path(self.pipe_name + "-ctl"),
-                    _GENERIC_WRITE,
-                    1.0,
-                )
-                if h is not None:
-                    written = DWORD(0)
-                    sent = bool(
-                        _k32.WriteFile(h, line, len(line), byref(written), None)
-                        and written.value == len(line)
-                    )
-                    _k32.CloseHandle(h)
-        self.kill()
 
 
 class _AioQueue:
@@ -1416,7 +1152,7 @@ class _AioQueue:
 
 
 class _BrokerOutput(asyncio.Protocol):
-    """Read side of a _BrokerPtyAio: hands the broker's output to the client, and tells it when the pipe ends."""
+    """Read side of a _BrokerPty: hands the broker's output to the client, and tells it when the pipe ends."""
 
     def __init__(self, pty):
         self._pty = pty
@@ -1432,11 +1168,11 @@ class _BrokerOutput(asyncio.Protocol):
         self._pty._on_eof(exc)
 
 
-class _BrokerPtyAio(_BrokerPty):
+class _BrokerPty(_BrokerPtyBase):
     """_BrokerPty with no thread: its three named pipes are overlapped handles driven by the plugin's one asyncio
     loop (terminal/aio_loop.py), which runs on Sublime's main thread. Output arrives as protocol callbacks (so the
     tab's parser runs on the main thread), input goes out through the loop's overlapped WriteFile, and connecting,
-    spawning the broker and ending a session are coroutines. Selected per profile by the `async_io` setting."""
+    spawning the broker and ending a session are coroutines."""
 
     aio = True
 
@@ -1459,11 +1195,8 @@ class _BrokerPtyAio(_BrokerPty):
         self._finished = False
         self._detached = False
 
-    def start(self):
-        raise RuntimeError("_BrokerPtyAio is started with 'await astart()'")
-
     async def _aconnect(self, path, access, timeout_s):
-        """_try_connect as a coroutine: an overlapped CreateFileW retried until it opens or timeout_s passes."""
+        """An overlapped CreateFileW on a named pipe, retried until it opens or timeout_s passes."""
         self._last_pipe_error = None
         deadline = time.monotonic() + timeout_s
         while True:
@@ -1626,7 +1359,7 @@ class _BrokerPtyAio(_BrokerPty):
                 data = data[written:]
 
     def write(self, data):
-        raise RuntimeError("_BrokerPtyAio is written with 'await awrite(data)'")
+        raise RuntimeError("_BrokerPty is written with 'await awrite(data)'")
 
     async def _asend_ctl(self, line):
         pipe = self._ctl_pipe
@@ -1690,16 +1423,6 @@ class _BrokerPtyAio(_BrokerPty):
                 finally:
                     pipe.close()
         self.kill()
-
-
-_ASYNC_IO_FORCE = None   # a test can set True/False to override the `async_io` profile setting
-
-
-def _broker_pty_class(profile_name):
-    """_BrokerPtyAio for a profile with `async_io` on (or forced), else the thread-based _BrokerPty."""
-    enabled = _ASYNC_IO_FORCE if _ASYNC_IO_FORCE is not None else _setting_bool(
-        "async_io", False, profile_name=profile_name)
-    return _BrokerPtyAio if enabled else _BrokerPty
 
 
 def _is_broker_pty(pty):
@@ -4362,10 +4085,7 @@ class _Terminal:
     def _read_loop(self):
         error = None
         try:
-            if _is_broker_pty(self.pty) and self._reattach_bootstrap:
-                self.pty.read(self._on_data, self._on_broker_replay_complete)
-            else:
-                self.pty.read(self._on_data)
+            self.pty.read(self._on_data)    # only for _Pty/_PosixPty: a broker client is read on the loop
         except Exception as e:
             error = e
             print(f"[ai_terminal] reader error: {e}\n{traceback.format_exc()}")
@@ -7939,7 +7659,7 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
         # processes competing for one named pipe). Settings are written only
         # after pty.start() + registry insertion succeed, below.
         pipe_name = "ghostshell_" + uuid.uuid4().hex[:20]
-        pty = _broker_pty_class(profile_name)(
+        pty = _BrokerPty(
             pipe_name, argv, path, cols, rows, env,
             scrollback_bytes=_broker_scrollback_bytes(profile_name),
             profile_name=profile_name,
@@ -8175,7 +7895,7 @@ def _reattach_broker_view(view, pipe_name):
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
 
-    pty = _broker_pty_class(profile_name)(
+    pty = _BrokerPty(
         pipe_name, argv, path, cols, rows, env, allow_spawn=False,
         profile_name=profile_name,
     )
@@ -8230,33 +7950,17 @@ def _reattach_broker_view(view, pipe_name):
         print("[ai_terminal] reattach: broker connect failed:\n%s" % trace)
         sublime.status_message(f"Ai terminal: could not reattach ({message})")
 
-    def _connect_worker():
+    # The connection is awaited on the plugin's loop: a stale or busy restored session never holds up
+    # Sublime's UI (it used to freeze the whole editor on startup and on every tab activation).
+    async def _connect_task():
         try:
-            pty.start()
+            await pty.astart()
         except Exception as e:
-            trace = traceback.format_exc()
-            sublime.set_timeout(
-                lambda message=str(e), detail=trace: _finish_failed(message, detail), 0
-            )
+            _finish_failed(str(e), traceback.format_exc())
             return
-        sublime.set_timeout(_finish_connected, 0)
+        _finish_connected()
 
-    if getattr(pty, "aio", False):
-        async def _connect_task():
-            try:
-                await pty.astart()
-            except Exception as e:
-                _finish_failed(str(e), traceback.format_exc())
-                return
-            _finish_connected()
-
-        _aio_loop.run(_connect_task())
-        return
-
-    # Named-pipe connection is blocking by design. Never perform it on
-    # Sublime's main thread: stale/busy restored sessions previously froze the
-    # entire editor on startup and on every tab activation.
-    threading.Thread(target=_connect_worker, daemon=True).start()
+    _aio_loop.run(_connect_task())
 
 
 class AiTerminalOpenHereCommand(sublime_plugin.WindowCommand):
@@ -10090,33 +9794,14 @@ class AiTerminalKillSessionCommand(sublime_plugin.WindowCommand):
         # redundantly try to kill an already-dying/dead broker again.
         term._expected_termination_reason = "killed"
 
-        def _do_kill():
+        async def _akill():
             try:
-                pty.explicit_kill()
+                await pty._aexplicit_kill()
             except Exception as e:
                 print(f"[ai_terminal] explicit_kill (Kill Session) failed: {e}")
-            sublime.set_timeout(
-                lambda: sublime.status_message(
-                    "Ai terminal: session killed, tab kept open"
-                ),
-                0,
-            )
+            sublime.status_message("Ai terminal: session killed, tab kept open")
 
-        if getattr(pty, "aio", False):
-            async def _akill():
-                try:
-                    await pty._aexplicit_kill()
-                except Exception as e:
-                    print(f"[ai_terminal] explicit_kill (Kill Session) failed: {e}")
-                sublime.status_message("Ai terminal: session killed, tab kept open")
-
-            _aio_loop.run(_akill())
-            return
-
-        # explicit_kill() reconnects over a named pipe with up to ~1s of
-        # WaitNamedPipeW/connect retries -- run off the main thread so a
-        # slow/stale broker can't freeze Sublime's UI for that long.
-        threading.Thread(target=_do_kill, daemon=True).start()
+        _aio_loop.run(_akill())
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)
@@ -10191,31 +9876,15 @@ class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
         # try to kill an already-dead broker again.
         term._expected_termination_reason = "killed"
 
-        def _do_end():
+        async def _aend():
             try:
-                pty.explicit_kill()
+                await pty._aexplicit_kill()
             except Exception as e:
                 print(f"[ai_terminal] explicit_kill (End Session) failed: {e}")
-            sublime.set_timeout(
-                lambda: view.close() if view.is_valid() else None, 0
-            )
+            if view.is_valid():
+                view.close()
 
-        if getattr(pty, "aio", False):
-            async def _aend():
-                try:
-                    await pty._aexplicit_kill()
-                except Exception as e:
-                    print(f"[ai_terminal] explicit_kill (End Session) failed: {e}")
-                if view.is_valid():
-                    view.close()
-
-            _aio_loop.run(_aend())
-            return
-
-        # explicit_kill() reconnects over a named pipe with up to ~1s of
-        # WaitNamedPipeW/connect retries -- run off the main thread so a
-        # slow/stale broker can't freeze Sublime's UI for that long.
-        threading.Thread(target=_do_end, daemon=True).start()
+        _aio_loop.run(_aend())
 
     def is_enabled(self, group=-1, index=-1):
         term = _tab_menu_term(self.window, group, index)

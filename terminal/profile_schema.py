@@ -7,7 +7,6 @@ different terminal behaviour several call sites later.
 
 
 BOOLEAN_KEYS = frozenset({
-    "async_io",
     "auto_approve_permissions",
     "caret_footer_pinning_enabled",
     "click_to_cursor_fallback_enabled",

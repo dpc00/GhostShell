@@ -184,12 +184,6 @@
     // times in all. It stops as soon as the report says the prompt is gone.
     "auto_approve_repeat_seconds": 1.0,
     "auto_approve_max_presses": 10,
-    // One-thread I/O for detachable sessions (profile or global): the tab's three broker pipes are
-    // driven by the plugin's single asyncio loop on Sublime's main thread instead of a reader and a
-    // writer thread, and connecting, ending and recovering are coroutines. Terminal output is then
-    // parsed on the main thread. Takes effect for tabs opened or reattached after the change. Off by
-    // default while it is being proved.
-    "async_io": false,
     "max_columns": null,
     // Floor and ceiling on the auto-sized terminal width in characters.
     // cols is computed from the viewport width; min_columns is the lower
