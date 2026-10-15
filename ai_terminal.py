@@ -551,6 +551,7 @@ class _Pty:
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
 _OPEN_EXISTING = 3
+_FILE_FLAG_OVERLAPPED = 0x40000000
 _ERROR_PIPE_BUSY = 231
 _ERROR_NO_DATA = 232
 _ERROR_PIPE_NOT_CONNECTED = 233
@@ -1105,6 +1106,67 @@ class _BrokerPty:
             self.resize(self._cols, self._rows)
 
     def _spawn_broker(self):
+        powershell, launcher, payload, launch_file = self._broker_launch_plan()
+        helper = subprocess.Popen(
+            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-File", launcher],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", creationflags=0x08000000,
+        )
+        try:
+            output, error = helper.communicate(payload, timeout=15.0)
+        except (subprocess.SubprocessError, OSError):
+            self._remove_launch_file(launch_file)
+            raise
+        self._check_broker_launch(helper.returncode, output, error, launch_file)
+
+    async def _aspawn_broker(self):
+        """_spawn_broker for the plugin's loop: the launcher is an awaited subprocess."""
+        powershell, launcher, payload, launch_file = self._broker_launch_plan()
+        helper = await asyncio.create_subprocess_exec(
+            powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            creationflags=0x08000000,
+        )
+        try:
+            raw_out, raw_err = await asyncio.wait_for(
+                helper.communicate(payload.encode("utf-8")), timeout=15.0)
+        except (asyncio.TimeoutError, OSError):
+            try:
+                helper.kill()
+            except OSError:
+                pass
+            self._remove_launch_file(launch_file)
+            raise
+        self._check_broker_launch(
+            helper.returncode, raw_out.decode("utf-8", errors="replace"),
+            raw_err.decode("utf-8", errors="replace"), launch_file)
+
+    @staticmethod
+    def _remove_launch_file(launch_file):
+        try:
+            os.unlink(launch_file)
+        except OSError:
+            print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
+                  % (launch_file, traceback.format_exc()))
+
+    def _check_broker_launch(self, returncode, output, error, launch_file):
+        if returncode != 0:
+            self._remove_launch_file(launch_file)
+            raise OSError(
+                "could not launch detachable broker through Task Scheduler: %s"
+                % ((error or output or "unknown WMI launcher error").strip(),)
+            )
+        try:
+            result = json.loads(output)
+            if int(result.get("return_value", -1)) != 0:
+                raise ValueError("WMI return value %r" % result.get("return_value"))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            self._remove_launch_file(launch_file)
+            raise OSError("invalid scheduled broker-launch response: %r (%s)" % (output, exc))
+
+    def _broker_launch_plan(self):
+        """Write the one-use launch file and return (powershell, launcher script, JSON payload for it, launch file)."""
         from .terminal.log_paths import log_root
         python_exe = _broker_python_exe()
         if not python_exe:
@@ -1166,42 +1228,7 @@ class _BrokerPty:
             "task_name": "GhostShell Broker " + self.pipe_name,
             "launch_file": launch_file,
         })
-        helper = subprocess.Popen(
-            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-File", launcher],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", creationflags=0x08000000,
-        )
-        try:
-            output, error = helper.communicate(payload, timeout=15.0)
-        except (subprocess.SubprocessError, OSError):
-            try:
-                os.unlink(launch_file)
-            except OSError:
-                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
-                      % (launch_file, traceback.format_exc()))
-            raise
-        if helper.returncode != 0:
-            try:
-                os.unlink(launch_file)
-            except OSError:
-                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
-                      % (launch_file, traceback.format_exc()))
-            raise OSError(
-                "could not launch detachable broker through Task Scheduler: %s"
-                % ((error or output or "unknown WMI launcher error").strip(),)
-            )
-        try:
-            result = json.loads(output)
-            if int(result.get("return_value", -1)) != 0:
-                raise ValueError("WMI return value %r" % result.get("return_value"))
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            try:
-                os.unlink(launch_file)
-            except OSError:
-                print("[ai_terminal] broker launch: could not remove launch file %s:\n%s"
-                      % (launch_file, traceback.format_exc()))
-            raise OSError("invalid scheduled broker-launch response: %r (%s)" % (output, exc))
+        return powershell, launcher, payload, launch_file
 
     def read(self, on_data, on_replay_complete=None):
         """Blocking ReadFile loop on the broker's output pipe (run on a
@@ -1372,6 +1399,302 @@ class _BrokerPty:
                     )
                     _k32.CloseHandle(h)
         self.kill()
+
+
+class _AioQueue:
+    """The tab's write queue when its client has no threads: put() may be called from any thread (a key command,
+    a timer, a status reply), get() is awaited by the writer task on the plugin's loop."""
+
+    def __init__(self):
+        self._queue = asyncio.Queue()
+
+    def put(self, item):
+        _aio_loop.call_soon(self._queue.put_nowait, item)
+
+    async def get(self):
+        return await self._queue.get()
+
+
+class _BrokerOutput(asyncio.Protocol):
+    """Read side of a _BrokerPtyAio: hands the broker's output to the client, and tells it when the pipe ends."""
+
+    def __init__(self, pty):
+        self._pty = pty
+
+    def data_received(self, data):
+        self._pty._on_output(data)
+
+    def eof_received(self):
+        self._pty._on_eof(None)
+        return False
+
+    def connection_lost(self, exc):
+        self._pty._on_eof(exc)
+
+
+class _BrokerPtyAio(_BrokerPty):
+    """_BrokerPty with no thread: its three named pipes are overlapped handles driven by the plugin's one asyncio
+    loop (terminal/aio_loop.py), which runs on Sublime's main thread. Output arrives as protocol callbacks (so the
+    tab's parser runs on the main thread), input goes out through the loop's overlapped WriteFile, and connecting,
+    spawning the broker and ending a session are coroutines. Selected per profile by the `async_io` setting."""
+
+    aio = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._read_transport = None
+        self._in_pipe = None
+        self._ctl_pipe = None
+        self._write_lock = None
+        self._ctl_lock = None
+        self._pending_output = []
+        self._on_data = None
+        self._on_replay_complete = None
+        self._on_finished = None
+        self._marker_tail = bytearray()
+        self._replay_done = False
+        self._idle_generation = 0
+        self._eof_seen = False
+        self._eof_error = None
+        self._finished = False
+
+    def start(self):
+        raise RuntimeError("_BrokerPtyAio is started with 'await astart()'")
+
+    async def _aconnect(self, path, access, timeout_s):
+        """_try_connect as a coroutine: an overlapped CreateFileW retried until it opens or timeout_s passes."""
+        self._last_pipe_error = None
+        deadline = time.monotonic() + timeout_s
+        while True:
+            h = _k32.CreateFileW(path, access, 0, None, _OPEN_EXISTING, _FILE_FLAG_OVERLAPPED, None)
+            if h != _INVALID_HANDLE_VALUE:
+                self._last_pipe_error = None
+                return h
+            err = ctypes.get_last_error()
+            if time.monotonic() > deadline:
+                self._last_pipe_error = (path, err)
+                return None
+            if err == _ERROR_PIPE_BUSY:
+                await asyncio.sleep(0.05)
+            elif err == _ERROR_FILE_NOT_FOUND:
+                await asyncio.sleep(0.1)    # the broker is still starting up
+            else:
+                self._last_pipe_error = (path, err)
+                return None
+
+    async def astart(self):
+        from asyncio import windows_utils
+        loop = asyncio.get_running_loop()
+        self._write_lock = asyncio.Lock()
+        self._ctl_lock = asyncio.Lock()
+        out_path = _broker_pipe_path(self.pipe_name)
+        in_path = _broker_pipe_path(self.pipe_name + "-in")
+        initial_timeout = 0.3 if self._allow_spawn else 10.0
+        h_out = await self._aconnect(out_path, _GENERIC_READ, initial_timeout)
+        if h_out is None:
+            if not self._allow_spawn:
+                raise OSError(
+                    f"no broker answering on pipe {self.pipe_name!r} -- "
+                    f"the detachable session is gone, not reattaching"
+                )
+            await self._aspawn_broker()
+            h_out = await self._aconnect(out_path, _GENERIC_READ, 10.0)
+            if h_out is None:
+                raise OSError(
+                    f"could not connect to agent_broker.py on pipe {self.pipe_name!r} "
+                    f"after spawning it{self._connection_failure_detail()}"
+                )
+            print(f"[ai_terminal] spawned new detachable session on pipe {self.pipe_name!r}")
+        else:
+            print(f"[ai_terminal] reattached to existing detachable session on pipe {self.pipe_name!r}")
+        h_in = await self._aconnect(in_path, _GENERIC_WRITE, 5.0)
+        if h_in is None:
+            _k32.CloseHandle(h_out)
+            raise OSError(
+                f"could not connect to input pipe for {self.pipe_name!r}"
+                f"{self._connection_failure_detail()}"
+            )
+        self._in_pipe = windows_utils.PipeHandle(h_in)
+        self._alive = True
+        self._read_transport, _protocol = await loop.connect_read_pipe(
+            lambda: _BrokerOutput(self), windows_utils.PipeHandle(h_out))
+        # Control pipe connect is best-effort, as in the thread version.
+        ctl = await self._aconnect(_broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 2.0)
+        if ctl is not None:
+            self._ctl_pipe = windows_utils.PipeHandle(ctl)
+            self.resize(self._cols, self._rows)
+
+    # ----- output -------------------------------------------------------------------
+
+    def attach_reader(self, on_data, on_replay_complete=None, on_finished=None):
+        """Start delivering output (first whatever arrived since astart) to on_data; on_replay_complete fires once
+        at the end of the broker's replay; on_finished(error) once when the pipe ends."""
+        self._on_data = on_data
+        self._on_replay_complete = on_replay_complete or (lambda: None)
+        self._on_finished = on_finished or (lambda error: None)
+        pending, self._pending_output = self._pending_output, []
+        for data in pending:
+            self._dispatch(data)
+        if self._eof_seen:
+            self._finish(self._eof_error)
+
+    def _on_output(self, data):
+        if self._on_data is None:
+            self._pending_output.append(data)
+        else:
+            self._dispatch(data)
+
+    def _on_eof(self, exc):
+        self._eof_seen = True
+        # A pipe that was closed or broken is the normal end of a session (the thread version treated those
+        # the same way); only something that is not an OS pipe error counts as a failed read.
+        self._eof_error = None if exc is None or isinstance(exc, OSError) else exc
+        self._alive = False
+        if self._on_finished is not None:
+            self._finish(self._eof_error)
+
+    def _finish(self, error):
+        if self._finished:
+            return
+        self._finished = True
+        self._alive = False
+        self._finish_replay()
+        self._on_finished(error)
+
+    def _finish_replay(self, flush_tail=True):
+        if self._replay_done:
+            return
+        if flush_tail and self._marker_tail:
+            self._on_data(bytes(self._marker_tail))
+            self._marker_tail.clear()
+        self._replay_done = True
+        self._idle_generation += 1      # an armed idle boundary is now stale
+        self._on_replay_complete()
+
+    def _arm_idle_boundary(self):
+        if self._replay_done:
+            return
+        self._idle_generation += 1
+        generation = self._idle_generation
+
+        def idle_boundary():
+            if self._idle_generation == generation:
+                self._finish_replay()
+
+        _aio_loop.call_later(_BROKER_REPLAY_IDLE_S, idle_boundary)
+
+    def _dispatch(self, data):
+        """The body of _BrokerPty.read's loop: tell the broker's buffered replay apart from live output."""
+        if self._replay_done:
+            self._on_data(data)
+            return
+        tail = self._marker_tail
+        tail.extend(data)
+        marker_at = tail.find(_BROKER_REPLAY_END)
+        if marker_at >= 0:
+            before = bytes(tail[:marker_at])
+            after = bytes(tail[marker_at + len(_BROKER_REPLAY_END):])
+            tail.clear()
+            if before:
+                self._on_data(before)
+            self._finish_replay(flush_tail=False)
+            if after:
+                self._on_data(after)
+            return
+        safe = len(tail) - len(_BROKER_REPLAY_END) + 1
+        if safe > 0:
+            self._on_data(bytes(tail[:safe]))
+            del tail[:safe]
+        self._arm_idle_boundary()
+
+    # ----- input and control ----------------------------------------------------------
+
+    async def awrite(self, data):
+        """Write all of data to the broker's input pipe (writers are serialized so input keeps its order)."""
+        if not self._alive or self._in_pipe is None:
+            return
+        proactor = asyncio.get_running_loop()._proactor
+        async with self._write_lock:
+            while data:
+                written = await proactor.send(self._in_pipe, data)
+                if not written:
+                    raise OSError("WriteFile accepted 0 of %d bytes" % len(data))
+                data = data[written:]
+
+    def write(self, data):
+        raise RuntimeError("_BrokerPtyAio is written with 'await awrite(data)'")
+
+    async def _asend_ctl(self, line):
+        pipe = self._ctl_pipe
+        if pipe is None:
+            return False
+        proactor = asyncio.get_running_loop()._proactor
+        try:
+            async with self._ctl_lock:
+                await proactor.send(pipe, line)
+        except OSError:
+            return False
+        return True
+
+    def resize(self, cols, rows):
+        """Queue "RESIZE cols rows" on the control pipe. Returns True when a control connection exists (the line
+        is sent a moment later, in order); a client with no control pipe silently no-ops, as before."""
+        self._cols, self._rows = cols, rows
+        if self._ctl_pipe is None:
+            return False
+        _aio_loop.run(self._asend_ctl(("RESIZE %d %d\n" % (cols, rows)).encode("utf-8")))
+        return True
+
+    def kill(self):
+        """Disconnect this client only (the broker and its child keep running). From another thread the work is
+        handed to the main thread, where the loop lives."""
+        if not _aio_loop.on_main_thread():
+            self._alive = False
+            sublime.set_timeout(self.kill, 0)
+            return
+        self._alive = False
+        transport, self._read_transport = self._read_transport, None
+        pipes = (self._in_pipe, self._ctl_pipe)
+        self._in_pipe = self._ctl_pipe = None
+        if transport is not None:
+            transport.close()
+        for pipe in pipes:
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+
+    def explicit_kill(self):
+        """End the session for real: send KILL, then disconnect. Returns at once; the KILL goes out a moment later."""
+        _aio_loop.run(self._aexplicit_kill())
+
+    async def _aexplicit_kill(self):
+        from asyncio import windows_utils
+        line = b"KILL\n"
+        sent = await self._asend_ctl(line)
+        if not sent:
+            # A broker can replace its control-pipe instance after a disconnect: reconnect once and send there.
+            h = await self._aconnect(_broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 1.0)
+            if h is not None:
+                pipe = windows_utils.PipeHandle(h)
+                try:
+                    await asyncio.get_running_loop()._proactor.send(pipe, line)
+                except OSError:
+                    pass
+                finally:
+                    pipe.close()
+        self.kill()
+
+
+_ASYNC_IO_FORCE = None   # a test can set True/False to override the `async_io` profile setting
+
+
+def _broker_pty_class(profile_name):
+    """_BrokerPtyAio for a profile with `async_io` on (or forced), else the thread-based _BrokerPty."""
+    enabled = _ASYNC_IO_FORCE if _ASYNC_IO_FORCE is not None else _setting_bool(
+        "async_io", False, profile_name=profile_name)
+    return _BrokerPtyAio if enabled else _BrokerPty
 
 
 def _is_broker_pty(pty):
@@ -3881,6 +4204,14 @@ class _Terminal:
 
     def start_reader(self):
         """Begin reading PTY output. Call immediately after pty.start()."""
+        if getattr(self.pty, "aio", False):
+            # No thread: the client's pipe callbacks deliver output on the main thread.
+            self.pty.attach_reader(
+                self._on_data,
+                self._on_broker_replay_complete if self._reattach_bootstrap else None,
+                self._reader_finished,
+            )
+            return
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -3928,6 +4259,12 @@ class _Terminal:
 
     def _ensure_writer(self):
         """Create the ordered PTY writer, including for hot-reloaded terminals."""
+        if getattr(self.pty, "aio", False):
+            # A task on the plugin's loop, not a thread; _AioQueue.put is safe from any thread.
+            if getattr(self, "_aio_writer_task", None) is None:
+                self._write_queue = _AioQueue()
+                self._aio_writer_task = _aio_loop.run(self._aio_write_loop())
+            return
         writer = getattr(self, "_writer", None)
         if writer is not None and writer.is_alive():
             return
@@ -3954,6 +4291,28 @@ class _Terminal:
                 self._cast("i", text)
             except Exception as e:
                 print(f"[ai_terminal] input cast error: {e}")
+
+    async def _aio_write_loop(self):
+        """_write_loop as a task: input is delivered in order, then recorded."""
+        while True:
+            item = await self._write_queue.get()
+            if item is None:
+                return
+            text, record = item
+            try:
+                await self.pty.awrite(text.encode("utf-8", errors="replace"))
+            except Exception as e:
+                print(f"[ai_terminal] writer error: {e}\n{traceback.format_exc()}")
+                if not self.pty.is_alive():
+                    self._notify("input dropped, the terminal process is gone")
+                    return
+                self._notify("could not deliver input to the terminal: %s" % e)
+                continue
+            if record:
+                try:
+                    self._cast("i", text)
+                except Exception as e:
+                    print(f"[ai_terminal] input cast error: {e}")
 
     def _write_loop(self):
         while True:
@@ -4006,35 +4365,39 @@ class _Terminal:
             error = e
             print(f"[ai_terminal] reader error: {e}\n{traceback.format_exc()}")
         finally:
-            self._close_text_log()
-            # A reader that died must not be reported as an ordinary exit, and
-            # the tab must stay open so the reason remains readable. A
-            # deliberate termination (self._expected_termination_reason) makes
-            # read() return exactly the same way a real child death does --
-            # CancelIoEx on our own handles -- so it needs its own message and
-            # must not be treated as either case below.
-            reason = self._expected_termination_reason
-            if reason == "handoff":
-                notice = "\n[detached -- session handed off, still running]\n"
-            elif reason == "killed":
-                notice = "\n[session killed -- transcript kept, tab not closed]\n"
-            elif reason == "closed":
-                # Rarely actually seen -- the view is usually already gone
-                # by the time this async finally block runs -- kept for
-                # the unusual ordering where it isn't yet.
-                notice = "\n[closed -- session kept alive, still running]\n"
-            elif error is None:
-                notice = "\n[process exited]\n"
-            else:
-                notice = "\n[terminal read failed: %s]\n" % error
-            sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
-            if error is None and reason is None:
-                # _close_tab_on_exit() reads Settings (via _all_profiles), which
-                # is main-thread-only in the Sublime API -- this finally block
-                # still runs on the PTY reader thread, so the check itself must
-                # be deferred through set_timeout, not just the close that
-                # follows it.
-                sublime.set_timeout(self._maybe_close_dead_view, 0)
+            self._reader_finished(error)
+
+    def _reader_finished(self, error):
+        """The output stream has ended (thread reader returned, or the async client's pipe closed)."""
+        self._close_text_log()
+        # A reader that died must not be reported as an ordinary exit, and
+        # the tab must stay open so the reason remains readable. A
+        # deliberate termination (self._expected_termination_reason) makes
+        # read() return exactly the same way a real child death does --
+        # CancelIoEx on our own handles -- so it needs its own message and
+        # must not be treated as either case below.
+        reason = self._expected_termination_reason
+        if reason == "handoff":
+            notice = "\n[detached -- session handed off, still running]\n"
+        elif reason == "killed":
+            notice = "\n[session killed -- transcript kept, tab not closed]\n"
+        elif reason == "closed":
+            # Rarely actually seen -- the view is usually already gone
+            # by the time this async finally block runs -- kept for
+            # the unusual ordering where it isn't yet.
+            notice = "\n[closed -- session kept alive, still running]\n"
+        elif error is None:
+            notice = "\n[process exited]\n"
+        else:
+            notice = "\n[terminal read failed: %s]\n" % error
+        sublime.set_timeout(lambda: _vwrite(self.view, notice), 0)
+        if error is None and reason is None:
+            # _close_tab_on_exit() reads Settings (via _all_profiles), which
+            # is main-thread-only in the Sublime API -- the thread reader
+            # calls this from the PTY reader thread, so the check itself must
+            # be deferred through set_timeout, not just the close that
+            # follows it.
+            sublime.set_timeout(self._maybe_close_dead_view, 0)
 
     def _maybe_close_dead_view(self):
         if _close_tab_on_exit(self.profile_name):
@@ -7568,7 +7931,7 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
         # processes competing for one named pipe). Settings are written only
         # after pty.start() + registry insertion succeed, below.
         pipe_name = "ghostshell_" + uuid.uuid4().hex[:20]
-        pty = _BrokerPty(
+        pty = _broker_pty_class(profile_name)(
             pipe_name, argv, path, cols, rows, env,
             scrollback_bytes=_broker_scrollback_bytes(profile_name),
             profile_name=profile_name,
@@ -7587,9 +7950,8 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
         profile_name=profile_name,
     )
     term.prepare()
-    try:
-        pty.start()
-    except Exception as e:
+
+    def start_failed(e):
         print("[ai_terminal] PTY start failed:\n%s" % traceback.format_exc())
         try:
             term.kill()
@@ -7598,17 +7960,36 @@ def _spawn_into_view(view, path, profile_name, argv, extra_env):
                   % traceback.format_exc())
         sublime.error_message(f"ai_terminal: failed to start PTY:\n{e}")
         view.close()
+
+    def started():
+        if detachable and _is_broker_pty(pty):
+            view.settings().set(_BROKER_PIPE_SETTING, pty.pipe_name)
+            view.settings().set(_BROKER_PROFILE_SETTING, profile_name)
+            view.settings().set(_BROKER_CWD_SETTING, path)
+            view.settings().set(_SESSION_ID_SETTING, pty.pipe_name)
+            _stamp_broker_pid_when_known(view, pty.pipe_name)
+        with _term_lock():
+            _term_registry()[view.id()] = term
+        _add_close_toolbar(term)
+        term.start_reader()
+
+    if getattr(pty, "aio", False):
+        async def start_async():
+            try:
+                await pty.astart()
+            except Exception as e:
+                start_failed(e)
+                return
+            started()
+
+        _aio_loop.run(start_async())
         return
-    if detachable and _is_broker_pty(pty):
-        view.settings().set(_BROKER_PIPE_SETTING, pty.pipe_name)
-        view.settings().set(_BROKER_PROFILE_SETTING, profile_name)
-        view.settings().set(_BROKER_CWD_SETTING, path)
-        view.settings().set(_SESSION_ID_SETTING, pty.pipe_name)
-        _stamp_broker_pid_when_known(view, pty.pipe_name)
-    with _term_lock():
-        _term_registry()[view.id()] = term
-    _add_close_toolbar(term)
-    term.start_reader()
+    try:
+        pty.start()
+    except Exception as e:
+        start_failed(e)
+        return
+    started()
 
 
 def _stamp_broker_pid_when_known(view, pipe_name, tries=20):
@@ -7786,7 +8167,7 @@ def _reattach_broker_view(view, pipe_name):
         print("[ai_terminal] reattach: VT engine init failed:\n%s" % traceback.format_exc())
         return
 
-    pty = _BrokerPty(
+    pty = _broker_pty_class(profile_name)(
         pipe_name, argv, path, cols, rows, env, allow_spawn=False,
         profile_name=profile_name,
     )
@@ -7851,6 +8232,18 @@ def _reattach_broker_view(view, pipe_name):
             )
             return
         sublime.set_timeout(_finish_connected, 0)
+
+    if getattr(pty, "aio", False):
+        async def _connect_task():
+            try:
+                await pty.astart()
+            except Exception as e:
+                _finish_failed(str(e), traceback.format_exc())
+                return
+            _finish_connected()
+
+        _aio_loop.run(_connect_task())
+        return
 
     # Named-pipe connection is blocking by design. Never perform it on
     # Sublime's main thread: stale/busy restored sessions previously froze the
@@ -11345,6 +11738,22 @@ def plugin_unloaded():
                   % traceback.format_exc())
         _hover_poll_token = None
     _stop_layout_watcher()
+    # A tab whose client runs on the plugin's loop cannot outlive that loop: detach it (the broker and its
+    # child keep running) and forget it, so the reloaded plugin reattaches the view like after a restart.
+    try:
+        with _term_lock():
+            registry = _term_registry()
+            async_terms = [(vid, term) for vid, term in registry.items()
+                           if getattr(getattr(term, "pty", None), "aio", False)]
+            for vid, _term in async_terms:
+                registry.pop(vid, None)
+        for _vid, term in async_terms:
+            term._expected_termination_reason = "closed"
+            term.pty.kill()
+            term._write_queue.put(None)
+    except Exception:
+        print("[ai_terminal] plugin_unloaded: detaching async tabs failed:\n%s"
+              % traceback.format_exc())
     try:
         _aio_loop.shutdown()
     except Exception:

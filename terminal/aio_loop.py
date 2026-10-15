@@ -37,15 +37,27 @@ class _SteppedLoop(asyncio.ProactorEventLoop):
         self._stepping = True
         self._step()
 
-    def _step(self):
-        if not self._stepping:
+    def _schedule(self, delay_ms):
+        # One live step chain: scheduling bumps the token, so a step already waiting in set_timeout with an
+        # older token does nothing when it fires.
+        self._token = getattr(self, "_token", 0) + 1
+        token = self._token
+        sublime.set_timeout(lambda: self._step(token), delay_ms)
+
+    def _step(self, token=None):
+        if not self._stepping or (token is not None and token != self._token):
             return
         try:
             self._run_once()
         except BaseException:
             print("[ai_terminal] aio loop step failed:\n%s" % traceback.format_exc())
         if self._stepping:
-            sublime.set_timeout(self._step, 0 if self._ready else IDLE_DELAY_MS)
+            self._schedule(0 if self._ready else IDLE_DELAY_MS)
+
+    def kick(self):
+        """Run the next step now instead of after the idle delay (work was just queued; main thread only)."""
+        if self._stepping:
+            self._schedule(0)
 
     def halt(self):
         """Cancel every task, let the cancellations run, then stop stepping and close the loop."""
@@ -101,6 +113,21 @@ def _report_failure(task):
     if error is not None:
         print("[ai_terminal] background task failed:\n%s"
               % "".join(traceback.format_exception(type(error), error, error.__traceback__)))
+
+
+def on_main_thread():
+    return threading.get_ident() == _MAIN_THREAD
+
+
+def call_soon(callback, *args):
+    """Run callback(*args) on the loop as soon as possible, from any thread (off the main thread it is handed
+    over with sublime.set_timeout first)."""
+    if threading.get_ident() != _MAIN_THREAD:
+        sublime.set_timeout(lambda: call_soon(callback, *args), 0)
+        return
+    loop = ensure_started()
+    loop.call_soon(callback, *args)
+    loop.kick()
 
 
 def call_later(delay_s, callback, *args):
