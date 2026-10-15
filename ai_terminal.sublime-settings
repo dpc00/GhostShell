@@ -843,9 +843,9 @@
             "pin_viewport": false,
             "osc_title_updates_tab": true,
             "close_tab_on_exit": true,
-            // true = answer omp's Tern Surface Protocol probe and show its native UI
-            // as plain text (terminal/tsp_host.py). Off until proven in a live tab.
-            // Takes effect for tabs spawned after the change.
+            // true = answer omp's Tern Surface Protocol probe and draw its native view in the
+            // tab (terminal/tsp_host.py, terminal/tsp_view.py). false = omp gets no answer and
+            // draws its classic text screen. Takes effect for tabs spawned after the change.
             "tsp_enabled": true,
             // true = a Settings sheet that a TSP program (omp /settings) draws in its layer opens in a column
             // of its own beside the tab, which adds a group to the window. false = it is an overlay inside
