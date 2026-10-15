@@ -8,13 +8,12 @@ duplicates.
 """
 import json
 import os
+import queue
 import threading
 import time
 import traceback
 
 from .log_paths import log_root, makedirs_private, open_private, redact_secrets
-
-_FLUSH_DELAY_S = 0.05   # events queued within this window are written together
 
 
 def _cast_dir():
@@ -34,8 +33,8 @@ class CastRecorder:
         self._t0 = 0.0
         self._last = 0.0
         self._notify = notify
-        self._pending = []
-        self._flush_armed = False
+        self._queue = None
+        self._writer = None
         self._accepting = False
 
     def open(self, cols, rows, argv, filename_stamp=None):
@@ -92,44 +91,63 @@ class CastRecorder:
                 print("[ai_terminal] cast open cleanup: remove failed:\n%s"
                       % traceback.format_exc())
             raise
+        work_queue = queue.Queue()
+        writer = threading.Thread(
+            target=self._write_loop,
+            args=(handle, work_queue),
+            name="ai-terminal-cast-writer",
+            daemon=True,
+        )
         self.file = handle
-        self._pending = []
-        self._flush_armed = False
+        self._queue = work_queue
+        self._writer = writer
         self._accepting = True
+        writer.start()
 
-    def _flush_pending(self):
-        """The loop's flush (main thread): write every queued event in order, in one flush."""
-        with self._lock:
-            self._flush_armed = False
-            self._drain_locked()
-
-    def _drain_locked(self):
-        """Caller holds self._lock. Event order is queue order; a burst becomes one flush."""
-        handle = self.file
-        items, self._pending = self._pending, []
-        if handle is None or not items:
-            return
+    def _write_loop(self, handle, work_queue):
+        """Serialize and flush queued events without blocking the PTY reader."""
+        failed = None
+        stop = False
         try:
-            for delta, code, data in items:
-                handle.write(json.dumps([delta, code, data]) + "\n")
-            handle.flush()
-        except Exception as failed:
-            print(f"[ai_terminal] cast write failed, recording stopped: {failed}")
-            try:
-                handle.close()
-            except OSError:
-                print("[ai_terminal] cast write cleanup: close failed:\n%s"
-                      % traceback.format_exc())
-            self.file = None
-            self._accepting = False
-            if self._notify:
-                self._notify("recording stopped after a write failure: %s" % failed)
+            while not stop:
+                item = work_queue.get()
+                batch = [item]
+                # Coalesce a burst into one flush. Queue order is event order,
+                # and the close sentinel is ordered behind the final x event.
+                while True:
+                    try:
+                        batch.append(work_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                for item in batch:
+                    if item is None:
+                        stop = True
+                        break
+                    delta, code, data = item
+                    handle.write(json.dumps([delta, code, data]) + "\n")
+                handle.flush()
+        except Exception as error:
+            failed = error
+        finally:
+            if failed is not None:
+                print(f"[ai_terminal] cast write failed, recording stopped: {failed}")
+                try:
+                    handle.close()
+                except OSError:
+                    print("[ai_terminal] cast write-loop cleanup: close failed:\n%s"
+                          % traceback.format_exc())
+                with self._lock:
+                    if self.file is handle:
+                        self.file = None
+                        self._accepting = False
+                if self._notify:
+                    self._notify("recording stopped after a write failure: %s" % failed)
 
     def write(self, code, data):
         """Asciicast v3 event: [delta, code, data]. delta is seconds since
         the previous event (relative timing -- v3 change from v2's absolute
-        timestamps). The caller only timestamps and queues; the plugin's loop
-        writes the queue out a short moment later in one flush. No-op when
+        timestamps). The PTY thread only timestamps and enqueues; a dedicated
+        writer serializes events and coalesces burst flushes. No-op when
         recording is off."""
         with self._lock:
             if self.file is None or not self._accepting:
@@ -139,25 +157,25 @@ class CastRecorder:
             self._last = now
             # Round to ms (v3 recommends error-diffusion for drift; simple
             # rounding is fine for sessions of realistic length).
-            self._pending.append((round(delta, 3), code, data))
-            if not self._flush_armed:
-                self._flush_armed = True
-                import sublime      # imported here so this module loads outside Sublime too
-                # set_timeout is thread-safe and survives a plugin reload (the plugin's own loop does not).
-                sublime.set_timeout(self._flush_pending, int(_FLUSH_DELAY_S * 1000))
+            self._queue.put((round(delta, 3), code, data))
 
     def close(self):
         with self._lock:
             if self.file is None or not self._accepting:
                 return
             handle = self.file
+            writer = self._writer
+            work_queue = self._queue
             self._accepting = False
             now = time.time()
             delta = now - self._last
             self._last = now
-            self._pending.append((round(delta, 3), "x", "0"))
-            # Closing a session is the durability boundary: write every event now.
-            self._drain_locked()
+            work_queue.put((round(delta, 3), "x", "0"))
+            work_queue.put(None)
+        # Closing a session is the durability boundary: drain every event
+        # before returning, but never make ordinary PTY reads wait on disk.
+        writer.join()
+        with self._lock:
             try:
                 if self.file is handle:
                     handle.close()
@@ -166,3 +184,5 @@ class CastRecorder:
                       % traceback.format_exc())
             if self.file is handle:
                 self.file = None
+            self._writer = None
+            self._queue = None

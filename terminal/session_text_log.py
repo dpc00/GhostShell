@@ -109,10 +109,10 @@ class SessionTextLog:
             self._trailing_newline = bool(trailing_newline)
             self._dirty = True
             if self._write_timer is None:
-                import sublime      # imported here so this module loads outside Sublime too
-                self._write_timer = True    # armed; a write made earlier (flush_now) leaves the callback a no-op
-                # set_timeout is thread-safe and survives a plugin reload (the plugin's own loop does not).
-                sublime.set_timeout(self._flush_pending, int(_WRITE_DEBOUNCE_S * 1000))
+                timer = threading.Timer(_WRITE_DEBOUNCE_S, self._flush_pending)
+                timer.daemon = True
+                self._write_timer = timer
+                timer.start()
 
     def _flush_pending(self):
         with self._lock:
@@ -126,8 +126,13 @@ class SessionTextLog:
 
     def flush_now(self):
         """Write kept-plus-tab immediately."""
+        timer = None
         with self._lock:
-            self._write_timer = None    # a callback still pending finds nothing dirty and does nothing
+            timer = self._write_timer
+            self._write_timer = None
+        if timer is not None:
+            timer.cancel()
+        with self._lock:
             if self.file is None or not self._dirty:
                 return
             self._write_tab_locked()
@@ -184,8 +189,13 @@ class SessionTextLog:
         return
 
     def close(self):
+        timer = None
         with self._lock:
-            self._write_timer = None    # a callback still pending finds the file closed and does nothing
+            timer = self._write_timer
+            self._write_timer = None
+        if timer is not None:
+            timer.cancel()
+        with self._lock:
             if self.file is None:
                 return
             try:
