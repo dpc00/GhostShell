@@ -7,6 +7,7 @@ different terminal behaviour several call sites later.
 
 
 BOOLEAN_KEYS = frozenset({
+    "auto_approve_permissions",
     "caret_footer_pinning_enabled",
     "click_to_cursor_fallback_enabled",
     "close_tab_on_exit",
@@ -18,11 +19,14 @@ BOOLEAN_KEYS = frozenset({
     "home_end_native",
     "host_cursor_paint_enabled",
     "log_tab_text",
+    "modern_conpty",
     "mouse_handling",
     "osc_title_updates_tab",
     "page_keys_to_pty",
     "pin_viewport",
     "record_asciicast",
+    "scroll_manipulation_enabled",
+    "tsp_aside_column",
     "tsp_enabled",
     "tsp_native_view",
     "tsp_tab_status",

@@ -1168,7 +1168,7 @@ class _BrokerPty:
         marker_tail = bytearray()
         replay_done = False
         stream_lock = threading.RLock()
-        idle_timer = [None]
+        idle_generation = [0]
 
         def finish_replay(flush_tail=True):
             nonlocal replay_done
@@ -1179,23 +1179,23 @@ class _BrokerPty:
                     on_data(bytes(marker_tail))
                     marker_tail.clear()
                 replay_done = True
-                timer = idle_timer[0]
-                idle_timer[0] = None
-                if timer is not None and timer is not threading.current_thread():
-                    timer.cancel()
+                idle_generation[0] += 1     # any armed idle boundary is now stale
                 on_replay_complete()
 
         def arm_legacy_idle_boundary():
+            # Called from this reader thread, so the thread-safe sublime.set_timeout is used;
+            # each arming makes the earlier ones stale (only the newest may finish the replay).
             if replay_done:
                 return
-            timer = threading.Timer(_BROKER_REPLAY_IDLE_S, finish_replay)
-            timer.daemon = True
             with stream_lock:
-                old = idle_timer[0]
-                idle_timer[0] = timer
-            if old is not None:
-                old.cancel()
-            timer.start()
+                idle_generation[0] += 1
+                generation = idle_generation[0]
+
+            def idle_boundary():
+                if idle_generation[0] == generation:
+                    finish_replay()
+
+            sublime.set_timeout(idle_boundary, int(_BROKER_REPLAY_IDLE_S * 1000))
 
         while self._alive:
             ok = _k32.ReadFile(self._h_out, buf, 8192, byref(n), None)
@@ -1829,6 +1829,7 @@ try:
     from .terminal.raw_debug_log import debug_log as _debug_log
     from .terminal.cast_recorder import CastRecorder
     from .terminal.session_text_log import SessionTextLog
+    from .terminal import aio_loop as _aio_loop
 except ImportError as _term_imp_err:
     # Unit tests / scripts outside Packages/User use top-level `ai.*`.
     # Do NOT hide a real missing-name error behind "No module named 'ai'".
@@ -1911,6 +1912,7 @@ except ImportError as _term_imp_err:
         from terminal.raw_debug_log import debug_log as _debug_log
         from terminal.cast_recorder import CastRecorder
         from terminal.session_text_log import SessionTextLog
+        from terminal import aio_loop as _aio_loop
     except ImportError:
         raise _term_imp_err
 
@@ -3664,6 +3666,7 @@ class _Terminal:
                     on_change=lambda _surface: _schedule_render(self),
                     get_reduce_motion=lambda: _setting_number("tsp_animation_ms", 250, profile_name=profile_name) <= 0,
                     aside=_profile_bool(profile_name, "tsp_aside_column", False),
+                    call_later=_aio_loop.call_later,
                 )
             except Exception:
                 print("[ai_terminal] TSP support could not start: %s"
@@ -4300,18 +4303,18 @@ class _Terminal:
                         if time.monotonic() + wait > give_up_at:
                             print("[ai_terminal] auto approve gave up: still typing after %s s" % max_wait)
                             return
-                        threading.Timer(wait, approve).start()
+                        _aio_loop.call_later(wait, approve)
                         return
                     self.send_string(key, record=False)
                     presses[0] += 1
                     if presses[0] < max_presses:
-                        threading.Timer(max(0.1, repeat), approve).start()
+                        _aio_loop.call_later(max(0.1, repeat), approve)
                     else:
                         print("[ai_terminal] auto approve: %d presses sent, prompt still waiting" % presses[0])
                 except Exception:
                     print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
 
-            threading.Timer(0.5, approve).start()
+            _aio_loop.call_later(0.5, approve)
         except Exception:
             print("[ai_terminal] auto approve failed:\n%s" % traceback.format_exc())
 
@@ -7317,32 +7320,53 @@ _STATUS_TONES = {
     "done": [(784, 80), (1046, 130)],
     "error": [(392, 350)],
 }
-_status_tone_lock = threading.Lock()
+_STATUS_TONE_RATE = 22050
+_status_tone_files = {}
+_status_tone_until = 0.0
+
+
+def _status_tone_file(state, notes):
+    """The WAV file for a state's notes, written on first use (winsound cannot play from memory asynchronously)."""
+    path = _status_tone_files.get(state)
+    if path and os.path.exists(path):
+        return path
+    import math
+    import struct
+    import tempfile
+    import wave
+    samples = bytearray()
+    ramp = int(_STATUS_TONE_RATE * 0.005)   # 5 ms fades keep the note edges from clicking
+    for frequency, milliseconds in notes:
+        count = int(_STATUS_TONE_RATE * milliseconds / 1000)
+        for i in range(count):
+            level = min(1.0, i / ramp, (count - 1 - i) / ramp) if ramp else 1.0
+            value = int(9000 * level * math.sin(2 * math.pi * frequency * i / _STATUS_TONE_RATE))
+            samples += struct.pack("<h", value)
+    path = os.path.join(tempfile.gettempdir(), "ghostshell_tone_%s.wav" % state)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(_STATUS_TONE_RATE)
+        out.writeframes(bytes(samples))
+    _status_tone_files[state] = path
+    return path
 
 
 def _play_status_tone(state, profile_name=None):
-    """Play the tone for a status change, off the reader thread.  Never raises.
+    """Play the tone for a status change.  Never raises.
 
-    winsound.Beep blocks until the note ends, so it runs in its own thread; a tone
+    The OS plays the WAV asynchronously, so no thread of ours waits for the notes; a tone
     that arrives while another is still playing is skipped rather than queued."""
+    global _status_tone_until
     try:
         notes = _STATUS_TONES.get(state)
         if not notes or os.name != "nt" or not _setting_bool("status_tones", False, profile_name=profile_name):
             return
-
-        def play():
-            if not _status_tone_lock.acquire(blocking=False):
-                return
-            try:
-                import winsound
-                for frequency, milliseconds in notes:
-                    winsound.Beep(frequency, milliseconds)
-            except Exception:
-                pass
-            finally:
-                _status_tone_lock.release()
-
-        threading.Thread(target=play, daemon=True).start()
+        if time.monotonic() < _status_tone_until:
+            return
+        import winsound
+        winsound.PlaySound(_status_tone_file(state, notes), winsound.SND_FILENAME | winsound.SND_ASYNC)
+        _status_tone_until = time.monotonic() + sum(ms for _f, ms in notes) / 1000.0
     except Exception:
         print("[ai_terminal] status tone failed:\n%s" % traceback.format_exc())
 
@@ -11276,6 +11300,11 @@ def plugin_unloaded():
                   % traceback.format_exc())
         _hover_poll_token = None
     _stop_layout_watcher()
+    try:
+        _aio_loop.shutdown()
+    except Exception:
+        print("[ai_terminal] plugin_unloaded: aio loop shutdown failed:\n%s"
+              % traceback.format_exc())
     # Deliberately do NOT kill ConPTY children on unload.  The terminal
     # process may be opencode itself (or another long-running CLI agent);
     # killing it here means a plugin reload triggered by the agent's own

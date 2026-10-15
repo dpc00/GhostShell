@@ -53,6 +53,14 @@ from .tsp_codec import (DEFAULT_APC_LIMIT, ERROR_VERB, TspReader, ack_event, enc
 from .tsp_document import TSP_EXTRA_KINDS, TSP_KINDS, TspDocument, check_css
 from .tsp_text import render_lines
 
+
+def _thread_call_later(delay, callback):
+    """Default scheduler for a host used outside Sublime (tools/recover_console.py): a one-shot timer thread.
+    Inside Sublime the plugin passes its own one-thread loop's call_later instead."""
+    timer = threading.Timer(delay, callback)
+    timer.daemon = True
+    timer.start()
+
 CLEAR_SCREEN = "\x1b[H\x1b[2J"        # cursor home, then erase the visible screen
 
 MODES = ("inline", "screen", "flow")
@@ -156,8 +164,10 @@ class TspHost:
     def __init__(self, send, kinds=TSP_KINDS, windows_conpty=True,
                  get_cols=None, on_change=None, get_reduce_motion=None,
                  get_dark=None, get_cell=None, get_hour12=None, get_alt_screen=None,
-                 retention_budget=RETENTION_BUDGET, blob_dir=None, clock=None, get_cwd=None, aside=False):
+                 retention_budget=RETENTION_BUDGET, blob_dir=None, clock=None, get_cwd=None, aside=False,
+                 call_later=None):
         self._send = send
+        self._call_later = call_later or _thread_call_later
         self._features = FEATURES + (ASIDE_FEATURE,) if aside else FEATURES
         self._kinds = tuple(kinds)
         self._conpty = windows_conpty
@@ -172,7 +182,7 @@ class TspHost:
         self._budget = retention_budget
         self._blob_dir = default_blob_dir() if blob_dir is None else blob_dir
         self._lock = threading.RLock()
-        self._timer = None
+        self._timer_armed = False
         self._reader = TspReader(clock)
         self._strip_reader = TspReader()    # for strip(): keeps a message that straddles two chunks whole
         self.documents = {}         # surface id -> TspDocument (the newest surface with that id, an open one first)
@@ -245,9 +255,7 @@ class TspHost:
             self._told_gone.update(stale)
             self._reply("e", {"ev": "gone", "ids": stale})
         self._reply("e", {"ev": "resize", "cols": cols - 1})
-        timer = threading.Timer(delay, lambda: self._reply("e", {"ev": "resize", "cols": cols}))
-        timer.daemon = True
-        timer.start()
+        self._call_later(delay, lambda: self._reply("e", {"ev": "resize", "cols": cols}))
 
     # ----- the stream ---------------------------------------------------------
 
@@ -267,14 +275,14 @@ class TspHost:
 
     def _arm_timer(self):
         """A chunk sequence that is left waiting must be dropped after a second even when nothing else arrives."""
-        if not self._reader.waiting() or (self._timer is not None and self._timer.is_alive()):
+        if not self._reader.waiting() or self._timer_armed:
             return
-        self._timer = threading.Timer(1.05, self._on_timer)
-        self._timer.daemon = True
-        self._timer.start()
+        self._timer_armed = True
+        self._call_later(1.05, self._on_timer)
 
     def _on_timer(self):
         with self._lock:
+            self._timer_armed = False
             for verb, body, params in self._reader.poll():
                 self._handle_safely(verb, body, params)
             self._arm_timer()
