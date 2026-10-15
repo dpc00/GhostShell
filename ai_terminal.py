@@ -5495,17 +5495,21 @@ _TAB_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 def _tsp_tab_status_hook(term):
     """The on_state callback for the native view when the profile sets "tsp_tab_status": true.
 
-    A program that draws natively (omp) sends its working state inside TSP frames, not as an OSC title, so
-    osc_title_updates_tab never shows it.  The tab label is built the way omp builds its own title in a plain
-    terminal: the profile's tsp_tab_prefix (omp: "π"), then a spinner frame while the view has something animating
-    (the program is working) or ">" when it is idle, then the program's OSC 0/2 title (the session label) or, until
-    it sends one, the profile name.
+    A program that draws natively (omp) leaves its run state out of the title, so osc_title_updates_tab never shows
+    it.  The tab label is built the way omp builds its own title in a plain terminal (oh-my-pi title-generator.ts,
+    buildTerminalTitleWithState): the profile's tsp_tab_prefix (omp: "π"), then the run state, then the session label.
+    The run state is the one omp publishes through the Program Status Protocol (OSC 7501, kept in term.program_status;
+    omp writes only the root record, id ""): a spinner frame while "working", "!" while "blocked" (waiting on the
+    person), ">" otherwise.  The label is omp's card-form title, or the profile name until it sends one.
     """
     def on_state(animated, now):
         view = term.view
         if not view or not view.is_valid():
             return
-        state = _TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)] if animated else ">"
+        record = term.__dict__.get("program_status", {}).get("") or {}
+        run_state = record.get("state")
+        state = (_TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)] if run_state == "working"
+                 else "!" if run_state == "blocked" else ">")
         parts = (_setting_string("tsp_tab_prefix", "", profile_name=term.profile_name), state,
                  _tab_title_text(term) or term.profile_name)
         name = " ".join(part for part in parts if part)
@@ -5537,15 +5541,13 @@ def _tab_title_text(term):
     The console is shared with omp's child processes (npm, the MCP servers, cmd.exe), and their titles arrive as OSC
     0/2 too ("npm exec chrome-devtools-mcp", "C:\\Windows\\system32\\cmd.exe").  In a plain terminal omp re-writes its
     title many times a second and so always wins; in native mode it writes the session title once, so only a card-form
-    title (see _card_title_icon) is taken as omp's, and the last one stays until omp sends another.  A Nerd Font icon
-    is dropped from the label because a tab's font draws it as an empty box; an emoji icon is kept.
+    title (see _card_title_icon) is taken as omp's, and the last one stays until omp sends another.  The title is
+    shown exactly as omp sent it.
     """
     get_title = getattr(term.parser, "get_title", None)
     title = get_title() if get_title is not None else None
-    icon = _card_title_icon(title) if title else None
-    if icon is not None:
-        private = all(0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000 for ch in icon)
-        term._tsp_session_title = title[len(icon):].strip() if private else title
+    if title and _card_title_icon(title) is not None:
+        term._tsp_session_title = title
     return getattr(term, "_tsp_session_title", None)
 
 
