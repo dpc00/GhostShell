@@ -4755,10 +4755,10 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
     close path; sublime-mcp's close tool now goes through
     window.run_command() specifically so it lands here instead.
 
-    Every detachable ai_terminal tab now gets a plain yes/no gate regardless
-    of profile; profiles with ``tab_close_input`` additionally get the
-    graceful-exit flow (send the exit string, wait for the agent to quit on
-    its own) once confirmed.
+    Only profiles with ``tab_close_input`` are intercepted now (confirm,
+    send the exit string, wait for the agent to quit on its own); every other
+    tab closes normally. The earlier blanket block on all ai_terminal tabs was
+    removed 2026-10-15 at the owner's order.
     """
 
     # "close" is what Ctrl+W and File > Close File actually dispatch (NOT
@@ -4852,26 +4852,12 @@ class AiTerminalTabCloseInterceptor(sublime_plugin.EventListener):
             # plain-confirm branch below which resolves in a single pass.
             return ("ai_terminal_noop_window", {})
 
-        # No configured graceful-exit command for this profile: block the
-        # native window-command close outright, no dialog at all. Tried a
-        # native sublime.yes_no_cancel_dialog here first (2026-09-15) -- it
-        # works, but a native OS-modal dialog can lose focus and end up
-        # hidden behind other windows on Windows while it blocks all of
-        # Sublime, with zero in-app indication it's even pending (confirmed
-        # live the same day; see memory:
-        # ghostshell-close-dialog-can-hide-behind-windows). Ending or
-        # detaching a session is reachable through controls this plugin
-        # fully owns instead and that can't hide behind another window:
-        # Tab Context menu / Command Palette's Close & Keep Alive / Kill
-        # Session / End Session (AiTerminalCloseKeepAliveCommand /
-        # AiTerminalKillSessionCommand / AiTerminalEndSessionCommand) --
-        # an in-tab toolbar equivalent is the natural next step here.
-        sublime.status_message(
-            "Ai terminal: window close is disabled for ai_terminal tabs -- "
-            "use this tab's Close & Keep Alive / Kill Session / End Session "
-            "controls (Tab Context menu or Command Palette) instead"
-        )
-        return ("ai_terminal_noop_window", {})
+        # No configured graceful-exit command for this profile: let the close through. A blanket block
+        # (added 2026-09-15 after an agent closed its own hosting tab) was removed 2026-10-15 at the
+        # owner's order: it also stopped a dead tab from being closed, and he wants no blocks -- agents are
+        # expected not to close their own tab mid-session. Ending or detaching a session without
+        # closing the tab is still Close & Keep Alive / Kill Session / End Session.
+        return None
 
 
 def _vwrite(view, text):
