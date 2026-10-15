@@ -5514,24 +5514,38 @@ def _tsp_tab_status_hook(term):
     return on_state
 
 
-def _is_private_use(ch):
-    return 0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000
+_CARD_TITLE = re.compile(r"^(\S+) ([A-Z0-9]{1,6}): (\S.*)$")
+
+
+def _card_title_icon(title):
+    """The icon of an omp card-form session title ``<icon> <CODE>: <title>``, or None when ``title`` is not one.
+
+    The form is omp's own (oh-my-pi utils/title-card.ts, CARD_LINE and isCardIcon): one to eight non-ASCII characters,
+    a space, one to six capitals or digits, a colon, the title.  omp titles every session this way, in a plain terminal
+    and in native mode alike.
+    """
+    match = _CARD_TITLE.match(title)
+    if match is None:
+        return None
+    icon = match.group(1)
+    return icon if len(icon) <= 8 and all(ord(ch) >= 0x80 for ch in icon) else None
 
 
 def _tab_title_text(term):
-    """The session label for the tab: the program's own OSC 0/2 title, icon removed, or None before it sends one.
+    """The session label for the tab, or None before omp has sent one.
 
-    The console is shared with the program's child processes (omp starts npm, MCP servers and cmd.exe), and their
-    titles arrive as OSC 0/2 too: "npm exec chrome-devtools-mcp", "C:\\Windows\\system32\\cmd.exe".  omp marks its own
-    session title with a Nerd Font icon (a private-use character, which also draws as an empty box in a tab, so it is
-    removed here); titles without one are not taken.  The last accepted label stays until omp sends another.
+    The console is shared with omp's child processes (npm, the MCP servers, cmd.exe), and their titles arrive as OSC
+    0/2 too ("npm exec chrome-devtools-mcp", "C:\\Windows\\system32\\cmd.exe").  In a plain terminal omp re-writes its
+    title many times a second and so always wins; in native mode it writes the session title once, so only a card-form
+    title (see _card_title_icon) is taken as omp's, and the last one stays until omp sends another.  A Nerd Font icon
+    is dropped from the label because a tab's font draws it as an empty box; an emoji icon is kept.
     """
     get_title = getattr(term.parser, "get_title", None)
     title = get_title() if get_title is not None else None
-    if title and any(_is_private_use(ch) for ch in title):
-        clean = "".join(ch for ch in title if not _is_private_use(ch)).strip()
-        if clean:
-            term._tsp_session_title = clean
+    icon = _card_title_icon(title) if title else None
+    if icon is not None:
+        private = all(0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000 for ch in icon)
+        term._tsp_session_title = title[len(icon):].strip() if private else title
     return getattr(term, "_tsp_session_title", None)
 
 
