@@ -62,6 +62,7 @@ class TspHost:
         self._changed = []          # surface ids whose frames changed since the last paint
         self._surface_order = []    # surface ids in the order the program opened them
         self._closed = set()        # surface ids the program has closed
+        self._deaf = set()          # surfaces opened with listen:false: nothing is sent back for them
         self._told_gone = set()     # unknown surface ids we already answered with `gone`
         self.blobs = {}             # content hash -> base64 text of an image the program sent
         self.events_sent = []       # the last events sent to the program (clicks), newest last
@@ -172,6 +173,10 @@ class TspHost:
             # The program wants to reuse a surface we no longer have.
             self._reply("e", {"ev": "gone", "ids": [surface_id]})
             return
+        if value.get("listen") is False:    # not listening: no acks, events or errors for this surface
+            self._deaf.add(surface_id)
+        elif "listen" in value or not value.get("adopt"):
+            self._deaf.discard(surface_id)
         if not value.get("adopt"):
             self.documents[surface_id] = TspDocument(surface_id)
             if surface_id in self._surface_order:
@@ -204,10 +209,12 @@ class TspHost:
         for error in document.apply_frame(value):
             self.errors.append(error)
             del self.errors[:-20]       # keep only the newest 20
-            self._reply("e", {"ev": "error", "sf": surface_id,
-                              "s": error["s"], "op": error["op"],
-                              "msg": error["msg"]})
-        self._reply("e", ack_event(surface_id, value.get("s")))
+            if surface_id not in self._deaf:
+                self._reply("e", {"ev": "error", "sf": surface_id,
+                                  "s": error["s"], "op": error["op"],
+                                  "msg": error["msg"]})
+        if surface_id not in self._deaf:
+            self._reply("e", ack_event(surface_id, value.get("s")))
         if surface_id not in self._changed:
             self._changed.append(surface_id)
         if self._on_change:
@@ -219,6 +226,8 @@ class TspHost:
         A ``change`` click on a form control of an ``el`` node is completed here: the document
         takes the new checked state and the event gets the control's value, name and the form's
         ``values``; an ``action`` from inside a form carries the form's ``values`` too."""
+        if event.get("sf") in self._deaf:
+            return
         document = self.documents.get(event.get("sf"))
         if document is not None and event.get("ev") == "change":
             fields = document.click_control(event.get("id"))
