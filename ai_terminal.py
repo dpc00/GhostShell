@@ -5490,6 +5490,9 @@ def _update_debug_status(term):
 
 
 _TAB_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# The other OSC 7501 run states.  omp's own title shows done and error as ">" (its titleState()), which hides that a
+# turn finished or failed; the tab shows them.  "idle", and no report yet, stay ">".
+_TAB_STATE_MARKS = {"blocked": "!", "done": "✓", "error": "✗"}
 
 
 def _tsp_tab_status_hook(term):
@@ -5500,7 +5503,7 @@ def _tsp_tab_status_hook(term):
     buildTerminalTitleWithState): the profile's tsp_tab_prefix (omp: "π"), then the run state, then the session label.
     The run state is the one omp publishes through the Program Status Protocol (OSC 7501, kept in term.program_status;
     omp writes only the root record, id ""): a spinner frame while "working", "!" while "blocked" (waiting on the
-    person), ">" otherwise.  The label is omp's card-form title, or the profile name until it sends one.
+    person), a check mark when "done", a cross on "error", ">" when idle.  The label is omp's card-form title, or the profile name until it sends one.
     """
     def on_state(animated, now):
         view = term.view
@@ -5509,7 +5512,7 @@ def _tsp_tab_status_hook(term):
         record = term.__dict__.get("program_status", {}).get("") or {}
         run_state = record.get("state")
         state = (_TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)] if run_state == "working"
-                 else "!" if run_state == "blocked" else ">")
+                 else _TAB_STATE_MARKS.get(run_state, ">"))
         parts = (_setting_string("tsp_tab_prefix", "", profile_name=term.profile_name), state,
                  _tab_title_text(term) or term.profile_name)
         name = " ".join(part for part in parts if part)
