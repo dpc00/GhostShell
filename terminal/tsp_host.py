@@ -26,7 +26,7 @@ import json
 import threading
 
 from .tsp_codec import TspReader, ack_event, encode_message, hello_reply
-from .tsp_document import TSP_KINDS, TspDocument
+from .tsp_document import TSP_EXTRA_KINDS, TSP_KINDS, TspDocument
 from .tsp_text import render_lines
 
 CLEAR_SCREEN = "\x1b[H\x1b[2J"        # cursor home, then erase the visible screen
@@ -145,8 +145,14 @@ class TspHost:
         if kind == "hello":
             self.hello_seen = True
             cols = self._get_cols() if self._get_cols else None
+            # omp keeps the list it has always been given (an extra kind could change what it
+            # sends); any other program (a Tern SDK program) is also offered media, block and el.
+            app = str(value.get("app") or "").lower()
+            kinds = self._kinds
+            if app and "omp" not in app and "oh-my-pi" not in app:
+                kinds = tuple(kinds) + tuple(k for k in TSP_EXTRA_KINDS if k not in kinds)
             self._reply("r", hello_reply(
-                self._kinds,
+                kinds,
                 features=("blobs", "settle", "adopt", "dock"),
                 cols=cols,
             ))

@@ -355,8 +355,43 @@ def _draw_effort(node, width):
     return ["effort: %s" % (node.get("p") or {}).get("level", "")]
 
 
+_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark")
+
+
+def _draw_el(node, width):
+    """An HTML element node (the Tern SDK's `el`): inline tags join their children on one line,
+    controls get a text form ([x], (*), [ button ]), every other tag stacks its lines."""
+    props = node.get("p") or {}
+    tag = str(props.get("tag") or "div").lower()
+    text = plain(props.get("spans") if props.get("spans") else props.get("text"))
+    if tag == "input":
+        kind = str(props.get("type") or "text").lower()
+        if kind == "radio":
+            return ["(*)" if props.get("checked") else "( )"]
+        if kind == "checkbox":
+            return ["[x]" if props.get("checked") else "[ ]"]
+        return ["[%s]" % (plain(props.get("value")) or plain(props.get("placeholder")) or "____")]
+    if tag == "button":
+        return ["[ %s ]" % (text or " ".join(line.strip() for line in _children(node, width)))]
+    if tag in ("br", "hr"):
+        return [""] if tag == "br" else ["-" * min(width, 40)]
+    child_lines = _children(node, width)
+    if tag in _EL_INLINE_TAGS:
+        pieces = [text] if text else []
+        pieces.extend(line.strip() for line in child_lines if line.strip())
+        return [" ".join(pieces)] if pieces else []
+    lines = [text] if text else []
+    return lines + child_lines
+
+
+def _draw_media(node, width):
+    props = node.get("p") or {}
+    return ["[media: %s]" % (plain(props.get("alt")) or plain(props.get("title")) or props.get("src") or "")]
+
+
 # One entry per kind in tsp_document.TSP_KINDS; a kind missing here is drawn as its children.
 _DRAWERS = {
+    "el": _draw_el, "media": _draw_media,
     "col": _draw_children, "row": _draw_row, "card": _draw_card,
     "section": _draw_section, "rule": _draw_rule, "spacer": _draw_spacer,
     "text": _draw_text_block, "md": _draw_text_block, "math": _draw_text_block,

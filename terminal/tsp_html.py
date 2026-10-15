@@ -1423,7 +1423,42 @@ def _draw_effort(node, ctx):
     return '<span style="color: %s">%s%s</span>' % (ctx.theme.color("accent"), "●" * rungs, "○" * (6 - rungs))
 
 
+_EL_INLINE_TAGS = ("span", "label", "a", "b", "i", "em", "strong", "code", "small", "kbd", "u", "s", "mark")
+
+
+def _draw_el(node, ctx):
+    """An HTML element node (the Tern SDK's `el`), drawn with the few tags minihtml handles:
+    inline tags as spans, controls as glyphs and chips, every other tag as a block.  The
+    program's stylesheet (the `s` message) is not applied."""
+    props = node.get("p") or {}
+    tag = str(props.get("tag") or "div").lower()
+    own = text_html(props["spans"] if props.get("spans") else props.get("text"), ctx)
+    if tag == "input":
+        kind = str(props.get("type") or "text").lower()
+        if kind == "radio":
+            return "&#9673;" if props.get("checked") else "&#9675;"
+        if kind == "checkbox":
+            return "&#9745;" if props.get("checked") else "&#9744;"
+        return chip(plain_text(props.get("value")) or plain_text(props.get("placeholder")) or "    ", ctx, "muted")
+    if tag == "button":
+        return chip(plain_text(props.get("text")) or node_text(node), ctx)
+    if tag == "br":
+        return "<br>"
+    if tag == "hr":
+        return _draw_rule(node, ctx)
+    inner = own + _children(node, ctx)
+    if tag in _EL_INLINE_TAGS:
+        return "<span>%s</span>%s" % (inner, "&nbsp;&nbsp;" if tag == "label" else "")
+    return "<div>%s</div>" % inner
+
+
+def _draw_media(node, ctx):
+    props = node.get("p") or {}
+    return "<span>[media: %s]</span>" % esc(plain_text(props.get("alt")) or plain_text(props.get("title")) or "")
+
+
 _DRAWERS = {
+    "el": _draw_el, "media": _draw_media,
     "col": _draw_col, "row": _draw_row, "card": _draw_card, "section": _draw_section, "rule": _draw_rule,
     "spacer": _draw_spacer, "text": _draw_text, "md": _draw_md, "code": _draw_code, "diff": _draw_diff,
     "ansi": _draw_ansi, "math": _draw_math, "image": _draw_image, "kv": _draw_kv, "table": _draw_table,

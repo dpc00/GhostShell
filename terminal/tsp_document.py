@@ -28,8 +28,13 @@ TSP_KINDS = (
     "rows", "picker", "prefs", "tool", "checklist", "agent", "chart", "meter",
     "effort",
 )
+# Kinds of the Tern SDK vocabulary (stencil-hq/tern-sdk wire.py KINDS) that omp's list lacks.
+# The document accepts them always; the host offers them in its hello reply only to programs
+# other than omp (see TspHost._handle_query), so omp's own rendering path is unchanged.
+TSP_EXTRA_KINDS = ("media", "block", "el")
+TSP_ACCEPTED_KINDS = TSP_KINDS + TSP_EXTRA_KINDS
 # Kinds whose main text the "text" and "splice" ops address (the "text" prop).
-TSP_TEXT_KINDS = ("text", "md", "code", "ansi", "math", "editor", "input", "shimmer")
+TSP_TEXT_KINDS = ("text", "md", "code", "ansi", "math", "editor", "input", "shimmer", "el")
 
 
 class OpError(Exception):
@@ -277,7 +282,7 @@ class TspDocument:
         if not isinstance(node_id, str) or not node_id:
             raise OpError("node without id")
         kind = wire.get("k")
-        if kind not in TSP_KINDS:
+        if kind not in TSP_ACCEPTED_KINDS:
             raise OpError("unknown kind %s" % (kind,))
         if node_id in self._index or node_id in seen:
             raise OpError("duplicate id %s" % (node_id,))
