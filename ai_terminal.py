@@ -1142,13 +1142,20 @@ class _AioQueue:
     a timer, a status reply), get() is awaited by the writer task on the plugin's loop."""
 
     def __init__(self):
-        self._queue = asyncio.Queue()
+        # Not created here: before Python 3.10 an asyncio.Queue binds to the event loop that is current when it
+        # is created, and this runs outside the plugin's loop. It is made on first use, on the loop.
+        self._queue = None
+
+    def _loop_queue(self):
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        return self._queue
 
     def put(self, item):
-        _aio_loop.call_soon(self._queue.put_nowait, item)
+        _aio_loop.call_soon(lambda: self._loop_queue().put_nowait(item))
 
     async def get(self):
-        return await self._queue.get()
+        return await self._loop_queue().get()
 
 
 class _BrokerOutput(asyncio.Protocol):

@@ -1,6 +1,12 @@
 # Release notes
 
 
+## 0.2.8
+
+**Fixed:** with 0.2.7, typing did nothing in a tab on Sublime Text builds that run plugins on a real Python 3.8 (build 4200 and earlier): the keystrokes never reached the session, and the console showed "got Future attached to a different loop". The write queue was created before the plugin's event loop existed, which Python 3.8 binds to the wrong loop. It is now created on the loop. Found by running 0.2.7 in a portable build 4200, which I should have done before releasing it.
+
+Tested on Python 3.8.12 (build 4200): opening a tab, typing, detaching with Close Tab (Keep Session Alive), Recover Session with its replay, resize, a plugin reload with the tab open, and End Session. Also still working on build 4215 (Python 3.14). Not tried: Relaunch, and Move to Windows Terminal on build 4200.
+
 ## 0.2.7
 
 **Changed:** GhostShell no longer runs a thread of its own for the terminal. Each tab used to have a reader thread and a writer thread, the broker that keeps a session alive had five, and timers, session discovery and the Windows Terminal ConPTY download each started threads too. All of that now runs on one asyncio loop that Sublime Text's main thread steps, and the broker (`tools/agent_broker.py`) is one asyncio program. Typing, output, resize, Close Tab (Keep Session Alive), Recover Session, Kill Session, End Session and New Session work as before. The cast recorder and the session text log keep their own thread on purpose, so a slow disk never holds up the editor. A profile with `"detachable": false` still uses the old direct ConPTY and its threads.
