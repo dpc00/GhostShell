@@ -1,6 +1,22 @@
 # Release notes
 
 
+## 0.2.6
+
+**Fixed:** the switches, steppers, drop-downs and Reset buttons on omp's `/settings` page did nothing when clicked. Every one of them now sends its change to omp. Reset puts a setting back to its default.
+
+**Fixed:** coloured text from a program that draws through the Tern Surface Protocol (for example green "ok" marks) was drawn black on the dark panel. Programs that do not set their own colours now get the standard ANSI palette.
+
+**Fixed:** the Claude tab no longer jumps past the end of its text after a large block of old output is trimmed.
+
+**Changed:** omp's `/settings` page opens at its top, with its title, page list and search box in view, instead of at its end. Typing in its search box no longer pulls the view to the bottom. The page stays inside the omp tab: the window's groups and layout are not changed.
+
+**Added:** the setting `tsp_aside_column` (off by default). When it is on, the Settings page opens in a column of its own beside the tab, as the Tern protocol describes, and closes again with the tab layout restored. It adds a group to the window, so it is off unless you ask for it. Takes effect for tabs started after the change.
+
+**Added:** much fuller support for the Tern Surface Protocol, so programs other than omp can draw rich output in a tab: plain HTML elements and forms with checkboxes and radio buttons, images and command blocks, style sheets, output that stays in the scrollback after the program ends, scrolling and jumping to an item in a list, and announcing the terminal's colours and reduced-motion setting. A program that opens a surface with `listen:false` no longer gets any answers sent into its input.
+
+Restart Sublime Text after updating instead of reloading the package. Once, after a detach and reattach that followed a code change, an omp tab showed raw protocol text until Sublime was restarted.
+
 ## 0.2.5
 
 **Fixed:** in omp's native view, a view that the reader pushed below the last line while omp is working could still be thrown back to the ordinary bottom by a redraw. The view is now put back where the reader left it.
