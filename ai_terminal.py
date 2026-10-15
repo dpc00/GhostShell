@@ -1457,6 +1457,7 @@ class _BrokerPtyAio(_BrokerPty):
         self._eof_seen = False
         self._eof_error = None
         self._finished = False
+        self._detached = False
 
     def start(self):
         raise RuntimeError("_BrokerPtyAio is started with 'await astart()'")
@@ -1539,6 +1540,8 @@ class _BrokerPtyAio(_BrokerPty):
             self._finish(self._eof_error)
 
     def _on_output(self, data):
+        if self._detached:
+            return      # kill() was called: the tab may already have freed its parser
         if self._on_data is None:
             self._pending_output.append(data)
         else:
@@ -1558,7 +1561,8 @@ class _BrokerPtyAio(_BrokerPty):
             return
         self._finished = True
         self._alive = False
-        self._finish_replay()
+        if not self._detached:
+            self._finish_replay()   # (after a detach the tab may have freed its parser; hand it nothing more)
         self._on_finished(error)
 
     def _finish_replay(self, flush_tail=True):
@@ -1648,6 +1652,7 @@ class _BrokerPtyAio(_BrokerPty):
     def kill(self):
         """Disconnect this client only (the broker and its child keep running). From another thread the work is
         handed to the main thread, where the loop lives."""
+        self._detached = True
         if not _aio_loop.on_main_thread():
             self._alive = False
             sublime.set_timeout(self.kill, 0)
@@ -6568,7 +6573,10 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         # apart from a real command anyway (sublimehq/sublime_text#1922), so
         # there is no signal here to decide a kill on -- see conversation
         # 2026-09-09 for the confirmation-dialog approach this replaced.
-        threading.Thread(target=term.kill, daemon=True).start()
+        if getattr(term.pty, "aio", False):
+            term.kill()         # no blocking calls any more: a detach is a handle close on the loop
+        else:
+            threading.Thread(target=term.kill, daemon=True).start()
 
         # Every OTHER way to reach this point (Close & Keep Alive, Kill
         # Session, End Session, AiTerminalTabCloseInterceptor's blocked
@@ -10090,6 +10098,17 @@ class AiTerminalKillSessionCommand(sublime_plugin.WindowCommand):
                 0,
             )
 
+        if getattr(pty, "aio", False):
+            async def _akill():
+                try:
+                    await pty._aexplicit_kill()
+                except Exception as e:
+                    print(f"[ai_terminal] explicit_kill (Kill Session) failed: {e}")
+                sublime.status_message("Ai terminal: session killed, tab kept open")
+
+            _aio_loop.run(_akill())
+            return
+
         # explicit_kill() reconnects over a named pipe with up to ~1s of
         # WaitNamedPipeW/connect retries -- run off the main thread so a
         # slow/stale broker can't freeze Sublime's UI for that long.
@@ -10177,6 +10196,18 @@ class AiTerminalEndSessionCommand(sublime_plugin.WindowCommand):
                 lambda: view.close() if view.is_valid() else None, 0
             )
 
+        if getattr(pty, "aio", False):
+            async def _aend():
+                try:
+                    await pty._aexplicit_kill()
+                except Exception as e:
+                    print(f"[ai_terminal] explicit_kill (End Session) failed: {e}")
+                if view.is_valid():
+                    view.close()
+
+            _aio_loop.run(_aend())
+            return
+
         # explicit_kill() reconnects over a named pipe with up to ~1s of
         # WaitNamedPipeW/connect retries -- run off the main thread so a
         # slow/stale broker can't freeze Sublime's UI for that long.
@@ -10221,34 +10252,45 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
         # kill an already-dead broker again.
         term._expected_termination_reason = "killed"
 
+        def _restart_view():
+            if not view.is_valid():
+                return
+            with _term_lock():
+                _term_registry().pop(view.id(), None)
+            if term._watcher is not None:
+                term._watcher.dispose()
+                term._watcher = None
+            view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
+            view.run_command("ai_terminal_nuke")
+            for setting_name in (
+                _BROKER_PIPE_SETTING, _BROKER_PROFILE_SETTING, _BROKER_CWD_SETTING,
+            ):
+                view.settings().erase(setting_name)
+            s = _settings_obj()
+            resolved_profile, argv, extra_env = _resolve_profile_launch(profile_name, s)
+            _spawn_into_view(view, path, resolved_profile, argv, extra_env)
+
         def _do_relaunch():
             try:
                 pty.explicit_kill()
             except Exception as e:
                 print(f"[ai_terminal] explicit_kill (Relaunch) failed: {e}")
 
-            def _restart():
-                if not view.is_valid():
-                    return
-                with _term_lock():
-                    _term_registry().pop(view.id(), None)
-                if term._watcher is not None:
-                    term._watcher.dispose()
-                    term._watcher = None
-                view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
-                view.run_command("ai_terminal_nuke")
-                for setting_name in (
-                    _BROKER_PIPE_SETTING, _BROKER_PROFILE_SETTING, _BROKER_CWD_SETTING,
-                ):
-                    view.settings().erase(setting_name)
-                s = _settings_obj()
-                resolved_profile, argv, extra_env = _resolve_profile_launch(profile_name, s)
-                _spawn_into_view(view, path, resolved_profile, argv, extra_env)
-
             # Tear down + respawn on the main thread -- everything touched
             # here (registry, phantoms, view content/settings, PTY bring-up)
             # is main-thread-only, same as _spawn's own callers.
-            sublime.set_timeout(_restart, 0)
+            sublime.set_timeout(_restart_view, 0)
+
+        if getattr(pty, "aio", False):
+            async def _arelaunch():
+                try:
+                    await pty._aexplicit_kill()
+                except Exception as e:
+                    print(f"[ai_terminal] explicit_kill (Relaunch) failed: {e}")
+                _restart_view()
+
+            _aio_loop.run(_arelaunch())
+            return
 
         # explicit_kill() reconnects over a named pipe with up to ~1s of
         # WaitNamedPipeW/connect retries -- run off the main thread so a
