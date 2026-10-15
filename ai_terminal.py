@@ -5496,20 +5496,32 @@ def _tsp_tab_status_hook(term):
     """The on_state callback for the native view when the profile sets "tsp_tab_status": true.
 
     A program that draws natively (omp) sends its working state inside TSP frames, not as an OSC title, so
-    osc_title_updates_tab never shows it.  While the view has something animating (the program is working) a spinner
-    frame goes in front of the tab's label; when the work stops the plain label comes back.  The label is the program's
-    OSC title when osc_title_updates_tab is on and one was sent, else the profile name.
+    osc_title_updates_tab never shows it.  The tab label is built the way omp builds its own title in a plain
+    terminal: the profile's tsp_tab_prefix (omp: "π"), then a spinner frame while the view has something animating
+    (the program is working) or ">" when it is idle, then the program's OSC 0/2 title (the session label) or, until
+    it sends one, the profile name.
     """
     def on_state(animated, now):
         view = term.view
         if not view or not view.is_valid():
             return
-        title = term._applied_osc_title if _osc_title_enabled(term) else None
-        label = title or term.profile_name
-        name = "%s %s" % (_TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)], label) if animated else label
+        state = _TAB_SPINNER[int(now * 8) % len(_TAB_SPINNER)] if animated else ">"
+        parts = (_setting_string("tsp_tab_prefix", "", profile_name=term.profile_name), state,
+                 _tab_title_text(term) or term.profile_name)
+        name = " ".join(part for part in parts if part)
         if view.name() != name:
             view.set_name(name)
     return on_state
+
+
+def _tab_title_text(term):
+    """The program's OSC 0/2 title without private-use glyphs (Nerd Font icons draw as empty boxes in a tab), or None."""
+    get_title = getattr(term.parser, "get_title", None)
+    title = get_title() if get_title is not None else None
+    if not title:
+        return None
+    clean = "".join(ch for ch in title if not (0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000))
+    return clean.strip() or None
 
 
 def _tsp_render_native(term):

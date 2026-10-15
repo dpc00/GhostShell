@@ -41,7 +41,7 @@ NUMBER_KEYS = frozenset({
     "tsp_reserved_width",
 })
 
-STRING_KEYS = frozenset({"tab_close_input"})
+STRING_KEYS = frozenset({"tab_close_input", "tsp_tab_prefix"})
 
 PROFILE_KEYS = frozenset(
     {"launch_command", "spawn_env"} | BOOLEAN_KEYS | NUMBER_KEYS | STRING_KEYS
