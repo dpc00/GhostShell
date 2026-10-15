@@ -5495,6 +5495,8 @@ def _tsp_render_native(term):
         return False
     try:
         if term._tsp.active_surface() is None:
+            if term._tsp_view is not None:
+                term._tsp_view.close_aside()
             return False        # the program is not drawing natively (yet, or any more)
         if term._tsp_view is None:
             from .terminal.tsp_view import TspView
@@ -6046,6 +6048,9 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
         with _term_lock():
             _term_registry().pop(self.view.id(), None)
         self.view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
+        native = getattr(term, "_tsp_view", None)
+        if native is not None:      # a TSP aside sheet is a column of its own: give it back with the tab
+            native.close_aside()
 
         # Closing a tab -- by any method (mouse-X, Ctrl+W, whole-window
         # close, a script's view.close()) -- only ever detaches now, never

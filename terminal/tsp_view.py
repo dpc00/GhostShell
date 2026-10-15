@@ -200,7 +200,8 @@ class _Aside:
     def _restore(self, window, saved):
         if window.is_valid():
             window.set_layout(saved)
-            window.focus_view(self._main)
+            if self._main.is_valid():
+                window.focus_view(self._main)
 
 
 _phantom_sets = {}      # view id -> the PhantomSet drawn there; the convention sublime-mcp's get_view_phantoms reads
@@ -236,7 +237,7 @@ class TspView:
         self._reveal_entry = None   # (main entry id, where) waiting for the drawing to end
         self._reveal_id = 0         # bumped to cancel the pending tries of the last reveal
         self._reveal_set = None     # where the last reveal try put the view
-        self._eff_cols = 100        # width the program is told: the pane less an open aside sheet
+        self._eff_cols = 100        # width the program is told: the pane's own width (an open aside sheet is a column of its own)
         self._reported = None       # (surface, cols, cell w, cell h) last sent in a resize event
         self._dark = True           # appearance last told to the program (the hello says dark)
         self._aside = _Aside(view)
@@ -414,29 +415,28 @@ class TspView:
         return True
 
     def _regions(self, host, snapshot, palette, cols):
-        """The document's HTML regions.  With feature ``aside`` a layer ``prefs`` sheet is taken out of the
-        overlays and drawn narrower beside the pane: the rest is laid out at the narrower ``cols``."""
+        """The document's HTML regions.  A layer ``prefs`` sheet (the terminal feature ``aside``, always on:
+        the hello reply announces it) is taken out of the overlays and drawn narrower beside the pane: the
+        rest is laid out at the narrower ``cols``."""
         blobs = getattr(host, "blobs", None)
 
         def draw(width, aside):
             return tsp_html.render_regions(snapshot, palette, width, self._clock, blobs, self._local, aside=aside,
                                            reduce_motion=self._animation_ms <= 0, toast_region=True)
 
-        if "aside" not in (getattr(host, "hello_features", None) or ()):
-            self._eff_cols = cols
-            self._aside_active = False
-            return draw(cols, None)
-        width = max(10, min(ASIDE_COLS, int(cols * ASIDE_MAX_FRACTION)))
-        self._aside_cols = width
-        regions = draw(cols - width if self._aside_active else cols, width)
+        # The sheet is a column of its own, so once it is open the pane is already that much narrower and
+        # ``cols`` (measured from the view) is the width main is drawn at; the sheet keeps the width it opened with.
+        if self._aside_active and self._aside_cols:
+            width = self._aside_cols
+        else:
+            width = max(10, min(ASIDE_COLS, int(cols * ASIDE_MAX_FRACTION)))
+            self._aside_cols = width
+        regions = draw(cols, width)
         aside_id = regions.get("aside_id")
         if aside_id is None:
             self._aside_dismissed = None
-        wanted = bool(regions.get("aside")) and aside_id != self._aside_dismissed
-        if wanted != self._aside_active:
-            self._aside_active = wanted
-            regions = draw(cols - width if wanted else cols, width)
-        self._eff_cols = cols - width if self._aside_active else cols
+        self._aside_active = bool(regions.get("aside")) and aside_id != self._aside_dismissed
+        self._eff_cols = cols
         return regions
 
     def _update_aside(self, host, palette):
@@ -602,6 +602,11 @@ class TspView:
             self.render(self._host, self._cols)
         except Exception as error:      # a drawing fault must not keep a timer running
             print("[tsp_view] animation stopped: %s" % error)
+
+    def close_aside(self):
+        """Remove the aside sheet and give its column back (the surface ended, or the tab is closing)."""
+        self._aside.close()
+        self._aside_active = False
 
     def clear(self):
         """Take every panel down (native view turned off, or a drawing fault)."""
