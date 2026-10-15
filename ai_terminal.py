@@ -4160,7 +4160,13 @@ class _Terminal:
             # Rarely actually seen -- the view is usually already gone
             # by the time this async finally block runs -- kept for
             # the unusual ordering where it isn't yet.
-            notice = "\n[closed -- session kept alive, still running]\n"
+            # "Still running" must be checked, not assumed: a plugin reload also lands here, and the session
+            # may have ended while this tab did not know (the broker deletes its record file when it exits).
+            pipe_name = getattr(self.pty, "pipe_name", None)
+            if pipe_name and not os.path.exists(_existing_broker_registry_file(pipe_name)):
+                notice = "\n[tab detached -- the session had already ended, tab kept]\n"
+            else:
+                notice = "\n[closed -- session kept alive, still running]\n"
         elif error is None:
             notice = "\n[process exited]\n"
         else:
