@@ -928,6 +928,20 @@ async def _send_broker_ctl_line_async(pipe_name, line, timeout_s=2.0):
         _k32.CloseHandle(h)
 
 
+async def _release_pipe_async(pipe_name):
+    """Make sure no other client holds the broker's one connection slot. If one does (a Windows Terminal
+    hand-off, say), ask the broker to disconnect it and wait for the slot to free. True when it is free."""
+    if await _pipe_instance_free_async(pipe_name):
+        return True
+    await _send_broker_ctl_line_async(pipe_name, b"DISCONNECT\n")
+    # DISCONNECT only requests the cancel: the other client's read has to fail and its process exit first.
+    for _ in range(20):
+        await asyncio.sleep(0.1)
+        if await _pipe_instance_free_async(pipe_name):
+            return True
+    return False
+
+
 def _send_broker_ctl_line(pipe_name, line, timeout_s=2.0):
     """Send one line to a broker's control pipe by name alone, with no live
     _BrokerPty object required.
@@ -1271,6 +1285,12 @@ class _BrokerPty(_BrokerPtyBase):
         h_out = await self._aconnect(out_path, _GENERIC_READ, initial_timeout)
         if h_out is None:
             if not self._allow_spawn:
+                last = self._last_pipe_error
+                if last is not None and last[1] == _ERROR_PIPE_BUSY:
+                    raise OSError(
+                        f"the detachable session on pipe {self.pipe_name!r} is running but busy: "
+                        f"another client (for example Windows Terminal) holds it"
+                    )
                 raise OSError(
                     f"no broker answering on pipe {self.pipe_name!r} -- "
                     f"the detachable session is gone, not reattaching"
@@ -9666,15 +9686,8 @@ class AiTerminalOpenInWindowsTerminalCommand(sublime_plugin.TextCommand):
             sublime.error_message(error)
             return
 
-        if not sublime.ok_cancel_dialog(
-            "This tab will close as soon as Windows Terminal connects -- "
-            "only one client can hold the session at a time. The agent "
-            "keeps running either way; use 'Recover Session...' to bring "
-            "it back into Sublime later.",
-            "Move to Windows Terminal",
-        ):
-            return
-
+        # No confirmation dialog (removed 2026-10-15 at the owner's order): moving is harmless -- the session
+        # keeps running and Recover Session brings it back -- and a native dialog can hide behind windows.
         pipe_name, error = _handoff_term_to_windows_terminal(term, wt_exe, python_exe)
         if error:
             sublime.error_message(error)
@@ -10654,8 +10667,10 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                       % traceback.format_exc())
                 name = None
             pipe_free = broker.get("pipe_free", True) if broker else True
-            if term is None:
-                state = "orphaned broker" if pipe_free else "busy — close its other window first"
+            if not pipe_free:
+                state = "busy in another window — picking it takes it over"
+            elif term is None:
+                state = "orphaned broker"
             elif _same_view(view, active):
                 state = "active tab"
             else:
@@ -10676,17 +10691,30 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             if index < 0 or index >= len(sessions):
                 return
             pipe_name, term, broker = sessions[index]
-            if term is not None:
-                self._reattach(term)
-                return
+
+            def _attach():
+                if term is not None:
+                    self._reattach(term)
+                else:
+                    self._attach_orphan(pipe_name, broker or {})
+
             if broker and not broker.get("pipe_free", True):
-                sublime.error_message(
-                    "Ai Terminal: {} is still held by another client "
-                    "(e.g. a Windows Terminal hand-off) -- close that "
-                    "window first, then Recover Session again.".format(pipe_name)
-                )
+                # Held by another client (e.g. a Windows Terminal hand-off): ask it to let go, as Reattach All
+                # does, then take the session here. (Before 2026-10-15 a stale local terminal skipped this
+                # check, connected into the busy pipe and reported the live session as gone.)
+                async def _take_over():
+                    if await _release_pipe_async(pipe_name):
+                        _attach()
+                    else:
+                        sublime.error_message(
+                            "Ai Terminal: {} is still held by another client after asking it to disconnect "
+                            "(e.g. a Windows Terminal hand-off) -- close that window, then Recover Session "
+                            "again.".format(pipe_name)
+                        )
+
+                _aio_loop.run(_take_over())
                 return
-            self._attach_orphan(pipe_name, broker or {})
+            _attach()
 
         self.window.show_quick_panel(rows, _picked)
 
