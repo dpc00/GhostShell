@@ -210,7 +210,27 @@ class TspHost:
             self._on_change(surface_id)
 
     def send_event(self, event):
-        """Send a terminal -> program event (a click or key result) to the program."""
+        """Send a terminal -> program event (a click or key result) to the program.
+
+        A ``change`` click on a form control of an ``el`` node is completed here: the document
+        takes the new checked state and the event gets the control's value, name and the form's
+        ``values``; an ``action`` from inside a form carries the form's ``values`` too."""
+        document = self.documents.get(event.get("sf"))
+        if document is not None and event.get("ev") == "change":
+            fields = document.click_control(event.get("id"))
+            if fields is None:
+                return
+            event = dict(event, **fields)
+            event["values"] = document.form_values(event["id"])
+            surface_id = event["sf"]
+            if surface_id not in self._changed:
+                self._changed.append(surface_id)
+            if self._on_change:
+                self._on_change(surface_id)
+        elif document is not None and event.get("ev") == "action" and "values" not in event:
+            values = document.form_values(event.get("id"))
+            if values:
+                event = dict(event, values=values)
         self.events_sent.append(event)
         del self.events_sent[:-50]      # keep the last 50 for diagnosis
         self._reply("e", event)

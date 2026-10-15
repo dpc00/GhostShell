@@ -99,6 +99,64 @@ class TspDocument:
         node = self._index.get(node_id)
         return self._export(node) if node is not None else None
 
+    # ----- form controls (el nodes with tag input) ----------------------
+
+    def _form_scope(self, node):
+        """The nearest ancestor el with tag form, or the root."""
+        scope = node.parent
+        while scope is not None and scope is not self._root:
+            if scope.kind == "el" and str(scope.props.get("tag", "")).lower() == "form":
+                return scope
+            scope = scope.parent
+        return self._root
+
+    @staticmethod
+    def _named_inputs(scope):
+        stack = list(scope.children)
+        while stack:
+            node = stack.pop(0)
+            if node.kind == "el" and str(node.props.get("tag", "")).lower() == "input" and node.props.get("name"):
+                yield node
+            stack = list(node.children) + stack
+
+    def form_values(self, node_id):
+        """The named controls of the form around ``node_id``: {name: value}; a checked radio or
+        checkbox gives its value, an unchecked one nothing, a text input its value."""
+        node = self._index.get(node_id)
+        if node is None:
+            return {}
+        values = {}
+        for control in self._named_inputs(self._form_scope(node)):
+            kind = str(control.props.get("type") or "text").lower()
+            name = control.props["name"]
+            if kind in ("radio", "checkbox"):
+                if control.props.get("checked"):
+                    values[name] = control.props.get("value", "on")
+            else:
+                values[name] = control.props.get("value", "")
+        return values
+
+    def click_control(self, node_id):
+        """A click on a radio or checkbox el: check it (a radio unchecks the others of its name in
+        the form) or toggle it.  Returns the ``change`` event fields, or None for any other node."""
+        node = self._index.get(node_id)
+        if node is None or node.kind != "el" or str(node.props.get("tag", "")).lower() != "input":
+            return None
+        kind = str(node.props.get("type") or "text").lower()
+        if kind == "radio":
+            for other in self._named_inputs(self._form_scope(node)):
+                if other is not node and other.props.get("name") == node.props.get("name") \
+                        and str(other.props.get("type") or "").lower() == "radio":
+                    other.props.pop("checked", None)
+            node.props["checked"] = True
+        elif kind == "checkbox":
+            node.props["checked"] = not node.props.get("checked")
+        else:
+            return None
+        self._unsettle(node)
+        return {"value": node.props.get("value", "on"), "checked": bool(node.props.get("checked")),
+                "name": node.props.get("name")}
+
     # ----- internals ---------------------------------------------------
 
     def _export(self, node):

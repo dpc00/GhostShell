@@ -1435,10 +1435,16 @@ def _draw_el(node, ctx):
     own = text_html(props["spans"] if props.get("spans") else props.get("text"), ctx)
     if tag == "input":
         kind = str(props.get("type") or "text").lower()
-        if kind == "radio":
-            return "&#9673;" if props.get("checked") else "&#9675;"
-        if kind == "checkbox":
-            return "&#9745;" if props.get("checked") else "&#9744;"
+        if kind in ("radio", "checkbox"):
+            if kind == "radio":
+                glyph = "&#9673;" if props.get("checked") else "&#9675;"
+            else:
+                glyph = "&#9745;" if props.get("checked") else "&#9744;"
+            if ctx.surface_id is None:
+                return glyph
+            return '<a href="%s" style="text-decoration: none; color: %s">%s</a>' % (
+                event_href({"ev": "change", "sf": ctx.surface_id, "id": node.get("id")}),
+                ctx.theme.color("text"), glyph)
         return chip(plain_text(props.get("value")) or plain_text(props.get("placeholder")) or "    ", ctx, "muted")
     if tag == "button":
         return chip(plain_text(props.get("text")) or node_text(node), ctx)
