@@ -1361,7 +1361,7 @@ def _tune_profile_panel_html(term):
             if respawns else ""
         )
         return (
-            '<a href="tp_set:%s">%s %s</a>%s<br>'
+            '<a href="tp_set:%s">%s&nbsp;%s</a>%s<br>'
             '<span style="padding-left:1.4em;">%s</span>'
             % (key, glyph, key, suffix, desc)
         )
@@ -1401,7 +1401,7 @@ def _close_menu_panel_html():
         + "<br>".join(
             '<a href="%s">%s</a><br>'
             '<span style="padding-left:1.4em; font-style:italic;">%s</span>'
-            % (href, caption, desc)
+            % (href, caption.replace(" ", "&nbsp;"), desc)
             for href, caption, desc in rows
         )
     )
@@ -1580,7 +1580,7 @@ def _add_close_toolbar(term):
     if cur:
         lines.append(cur)
     row_html = [
-        sep.join('<a href="%s">%s</a>' % (href, markup) for href, markup in line)
+        sep.join('<a href="%s">%s</a>' % (href, markup.replace(" ", "&nbsp;")) for href, markup in line)
         for line in lines
     ]
     panel_html = ""
