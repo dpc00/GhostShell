@@ -242,6 +242,8 @@ class TspView:
         self._dark = True           # appearance last told to the program (the hello says dark)
         self._aside = _Aside(view)
         self._aside_active = False  # the aside sheet is open
+        self._aside_seen = False    # ... as of the last time the view was pinned for a change
+        self._clamp_id = 0          # bumped to cancel the pending look-agains of the last aside change
         self._aside_cols = 0
         self._aside_html = ""
         self._aside_id = None
@@ -439,6 +441,36 @@ class TspView:
         self._eff_cols = cols
         return regions
 
+    def _pin_on_aside_change(self):
+        """The sheet opened or closed, so the pane is about to get narrower or wider and the text reflows: a view
+        that is at the end now must still end at the input box afterwards, not stay where the old layout put it
+        (past the new end, after a close).  Measured before the column changes."""
+        if self._aside_active == self._aside_seen:
+            return
+        self._aside_seen = self._aside_active
+        line = self.view.line_height() or 20
+        reach = self.view.viewport_position()[1] + self.view.viewport_extent()[1]
+        if reach >= self.view.layout_extent()[1] - 2 * line:
+            self._pin_bottom = True
+            self._clamp_soon()
+
+    def _clamp_soon(self):
+        """The text reflows over the next second or two (the pane changes width, the phantoms wrap again) and
+        Sublime does not pull a view back that ends up past the new end.  Look again a few times: a view that
+        is past the end is put at the end; one that is not is left alone."""
+        self._clamp_id += 1
+        clamp_id = self._clamp_id
+        for delay in (100, 300, 600, 1000, 1600, 2500):
+            sublime.set_timeout(lambda: self._clamp_now(clamp_id), delay)
+
+    def _clamp_now(self, clamp_id):
+        view = self.view
+        if clamp_id != self._clamp_id or not view.is_valid():
+            return
+        bottom = max(0, view.layout_extent()[1] - view.viewport_extent()[1])
+        if view.viewport_position()[1] > bottom + (view.line_height() or 20):
+            view.set_viewport_position((0, bottom), False)
+
     def _update_aside(self, host, palette):
         """Keep the sheet view beside the pane in step: open, redraw or close it."""
         if not self._aside_active:
@@ -449,6 +481,7 @@ class TspView:
             self._aside_active = False
             self._aside.close()
             self._shown = None      # redraw main at the full width
+            self._pin_on_aside_change()
             sublime.set_timeout(lambda: self._host is not None and self.render(self._host, self._cols), 0)
             return
         fraction = self._aside_cols / float(max(self._cols, self._aside_cols + 1))
@@ -518,6 +551,7 @@ class TspView:
             # panels go with it): draw everything again rather than trust what we think is on screen.
             self._shown = None
             self._prepared = False
+        self._pin_on_aside_change()
         self._update_aside(host, palette)
         if parts == self._shown and outline == self._outline:
             self._after_draw(host)
