@@ -1,7 +1,23 @@
 # Release notes
 
 
-## Unreleased
+## 0.2.7
+
+**Changed:** GhostShell no longer runs a thread of its own for the terminal. Each tab used to have a reader thread and a writer thread, the broker that keeps a session alive had five, and timers, session discovery and the Windows Terminal ConPTY download each started threads too. All of that now runs on one asyncio loop that Sublime Text's main thread steps, and the broker (`tools/agent_broker.py`) is one asyncio program. Typing, output, resize, Close Tab (Keep Session Alive), Recover Session, Kill Session, End Session and New Session work as before. The cast recorder and the session text log keep their own thread on purpose, so a slow disk never holds up the editor. A profile with `"detachable": false` still uses the old direct ConPTY and its threads.
+
+- Output is parsed on the main thread now. A 30,000-line burst stalls the editor no more than it did with threads (measured against the old client on the same burst).
+- Reloading the plugin detaches each tab and reattaches it, as after a restart; the session itself keeps running.
+- Tested on Windows 11 with Sublime Text build 4215, where a 3.8 plugin runs on the 3.14 host. Older builds with a real 3.8 host were not tried.
+
+**Fixed:** Move to Windows Terminal opens its window at the tab's size and keeps the session at that size. Before, the session was resized to the Windows Terminal window, so what the program drew there (boxes, rules) was laid out at another width when the tab came back, and the conversation showed smeared frames and over-long lines.
+
+**Fixed:** the status tones (setting `status_tones`) no longer play note by note with gaps. They are rendered once to a small sound file and played by Windows, so they come out faster and smoother. A plugin reload no longer makes the tone player raise "release unlocked lock".
+
+**Fixed:** `auto_approve_permissions`, `modern_conpty`, `scroll_manipulation_enabled` and `tsp_aside_column` were reported as unknown profile settings every time the plugin loaded, although they work. They are known now.
+
+**Changed:** Recover Session, List Sessions, Reattach All From Windows Terminal and the Windows Terminal ConPTY download no longer make the editor wait while they look for sessions, ask a busy pipe to free up, or download the 1.7 MB.
+
+Restart Sublime Text after updating instead of reloading the package: a plugin reload loads `ai_terminal.py` but not the files under `terminal/` and `tools/`.
 
 **Added:** the setting `tsp_tab_status` (off by default, on in the omp profile) and its companion `tsp_tab_prefix` (omp: `π`). omp leaves its run state and session name out of the window title when it draws through the Tern Surface Protocol, so its tab showed only the profile name. With `tsp_tab_status` the tab is named the way omp names its own title in a plain terminal: the prefix, the run state, then the session name.
 
