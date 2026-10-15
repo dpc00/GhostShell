@@ -89,7 +89,18 @@ def run(coro):
     if threading.get_ident() != _MAIN_THREAD:
         sublime.set_timeout(lambda: run(coro), 0)
         return None
-    return ensure_started().create_task(coro)
+    task = ensure_started().create_task(coro)
+    task.add_done_callback(_report_failure)
+    return task
+
+
+def _report_failure(task):
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        print("[ai_terminal] background task failed:\n%s"
+              % "".join(traceback.format_exception(type(error), error, error.__traceback__)))
 
 
 def call_later(delay_s, callback, *args):

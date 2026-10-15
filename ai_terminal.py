@@ -41,6 +41,7 @@ import signal
 import subprocess
 import sys
 import threading
+import asyncio
 import time
 import traceback
 import uuid
@@ -840,6 +841,53 @@ def _pipe_instance_free(pipe_name, timeout_ms=150):
     if _k32.WaitNamedPipeW(_broker_pipe_path(pipe_name), timeout_ms):
         return True
     return ctypes.get_last_error() == _ERROR_FILE_NOT_FOUND
+
+
+async def _pipe_instance_free_async(pipe_name, timeout_ms=150):
+    """_pipe_instance_free for code on the plugin's loop: the same answer, but it waits by awaiting
+    (WaitNamedPipeW is only ever asked for 1 ms at a time), so the editor is never held up."""
+    if not _PTY_OK or os.name != "nt":
+        return True
+    path = _broker_pipe_path(pipe_name)
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while True:
+        if _k32.WaitNamedPipeW(path, 1):
+            return True
+        if ctypes.get_last_error() == _ERROR_FILE_NOT_FOUND:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+
+
+async def _send_broker_ctl_line_async(pipe_name, line, timeout_s=2.0):
+    """_send_broker_ctl_line for code on the plugin's loop: retries wait by awaiting, not by blocking."""
+    if not _PTY_OK or os.name != "nt":
+        return False
+    path = _broker_pipe_path(pipe_name + "-ctl")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        h = _k32.CreateFileW(path, _GENERIC_WRITE, 0, None, _OPEN_EXISTING, 0, None)
+        if h != _INVALID_HANDLE_VALUE:
+            break
+        err = ctypes.get_last_error()
+        if time.monotonic() > deadline:
+            return False
+        if err == _ERROR_PIPE_BUSY:
+            await asyncio.sleep(0.05)
+        elif err == _ERROR_FILE_NOT_FOUND:
+            await asyncio.sleep(0.1)
+        else:
+            return False
+    try:
+        data = line if isinstance(line, bytes) else line.encode("utf-8")
+        written = DWORD(0)
+        return bool(
+            _k32.WriteFile(h, data, len(data), byref(written), None)
+            and written.value == len(data)
+        )
+    finally:
+        _k32.CloseHandle(h)
 
 
 def _send_broker_ctl_line(pipe_name, line, timeout_s=2.0):
@@ -7394,13 +7442,13 @@ def _with_conpty_folder(extra_env, profile_name):
             extra_env[conpty_api.CONPTY_FOLDER_ENV_VAR] = folder
             return extra_env
 
-        def download():
-            if conpty_api.ensure_default_files(log=print):
-                sublime.set_timeout(lambda: sublime.status_message(
-                    "Ai terminal: the Windows Terminal ConPTY is ready; open a new tab for the native view"), 0)
+        async def download():
+            if await conpty_api.ensure_default_files_async(log=print):
+                sublime.status_message(
+                    "Ai terminal: the Windows Terminal ConPTY is ready; open a new tab for the native view")
 
         sublime.status_message("Ai terminal: downloading the Windows Terminal ConPTY (1.7 MB) for the native view")
-        threading.Thread(target=download, daemon=True).start()
+        _aio_loop.run(download())
     except Exception:
         print("[ai_terminal] could not prepare the Windows Terminal ConPTY:\n%s" % traceback.format_exc())
     return extra_env
@@ -10296,9 +10344,9 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
         # the standalone broker (and Codex child) remain alive.  Search both
         # the registry and old-generation Terminal objects retained by their
         # reader threads, then merge those with the authoritative broker
-        # process list.  Process discovery can be slow on Windows, so never do
-        # it on Sublime's UI thread.
-        threading.Thread(target=self._discover, daemon=True).start()
+        # process list.  Process discovery can be slow on Windows, so it is a
+        # coroutine on the plugin's loop: it awaits instead of blocking the UI.
+        _aio_loop.run(self._discover())
 
     @staticmethod
     def _local_terms():
@@ -10324,18 +10372,25 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
         return terms
 
     @staticmethod
-    def _running_brokers():
+    async def _running_brokers():
         command = (
             "Get-CimInstance Win32_Process -Filter \"Name='python.exe' or "
             "Name='pythonw.exe'\" | Select-Object -ExpandProperty CommandLine"
         )
-        output = subprocess.check_output(
-            ["powershell", "-NoProfile", "-Command", command],
-            text=True,
-            stderr=subprocess.DEVNULL,
+        process = await asyncio.create_subprocess_exec(
+            "powershell", "-NoProfile", "-Command", command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            timeout=8,
         )
+        try:
+            raw, _ = await asyncio.wait_for(process.communicate(), timeout=8)
+        except asyncio.TimeoutError:
+            process.kill()
+            raise
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, "powershell")
+        output = raw.decode(errors="replace")
         pattern = re.compile(
             r"agent_broker\.py.*?--pipe-name\s+(ghostshell_[0-9a-f]+)"
             r".*?--cwd\s+(\S+).*?--\s+(.+)$",
@@ -10352,7 +10407,7 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                 })
         return brokers
 
-    def _discover(self):
+    async def _discover(self):
         terms = self._local_terms()
         brokers = []
         error = None
@@ -10377,20 +10432,18 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
             error = str(exc)
         if not brokers:
             try:
-                brokers = self._running_brokers()
+                brokers = await self._running_brokers()
             except Exception as exc:
                 if error is None:
                     error = str(exc)
-        # Off the main thread (WaitNamedPipeW can block up to ~150ms each):
-        # a broker being alive doesn't mean its pipe is free -- something
-        # else (a WT hand-off) may already hold the one connection slot.
-        # Confirmed live 2026-09-06: this command listed such a session as
-        # a plain "orphaned broker" with no indication it was still busy.
+        # Awaited (WaitNamedPipeW can wait ~150ms each): a broker being alive
+        # doesn't mean its pipe is free -- something else (a WT hand-off) may
+        # already hold the one connection slot. Confirmed live 2026-09-06:
+        # this command listed such a session as a plain "orphaned broker"
+        # with no indication it was still busy.
         for broker in brokers:
-            broker["pipe_free"] = _pipe_instance_free(broker["pipe_name"])
-        sublime.set_timeout(
-            lambda: self._show_choices(terms, brokers, error), 0
-        )
+            broker["pipe_free"] = await _pipe_instance_free_async(broker["pipe_name"])
+        self._show_choices(terms, brokers, error)
 
     def _show_choices(self, terms, brokers, error=None):
         def _has_usable_view(term):
@@ -10511,9 +10564,9 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
     """
 
     def run(self):
-        threading.Thread(target=self._discover, daemon=True).start()
+        _aio_loop.run(self._discover())
 
-    def _discover(self):
+    async def _discover(self):
         terms = AiTerminalRecoverSessionCommand._local_terms()
         brokers = []
         error = None
@@ -10536,7 +10589,7 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
             error = str(exc)
         if not brokers:
             try:
-                brokers = AiTerminalRecoverSessionCommand._running_brokers()
+                brokers = await AiTerminalRecoverSessionCommand._running_brokers()
             except Exception as exc:
                 if error is None:
                     error = str(exc)
@@ -10547,7 +10600,7 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
         }
         pipe_free_by_pipe = {}
         for broker in brokers:
-            pipe_free_by_pipe[broker["pipe_name"]] = _pipe_instance_free(broker["pipe_name"])
+            pipe_free_by_pipe[broker["pipe_name"]] = await _pipe_instance_free_async(broker["pipe_name"])
         # A local term with no matching broker record still needs its own
         # pipe_free check -- e.g. a just-spawned session that hasn't hit the
         # on-disk registry yet, or a stale gc-retained _Terminal object left
@@ -10558,10 +10611,8 @@ class AiTerminalListSessionsCommand(sublime_plugin.WindowCommand):
         # block up to ~150ms each).
         for pipe_name in terms_by_pipe:
             if pipe_name not in pipe_free_by_pipe:
-                pipe_free_by_pipe[pipe_name] = _pipe_instance_free(pipe_name)
-        sublime.set_timeout(
-            lambda: self._show(terms_by_pipe, brokers, pipe_free_by_pipe, error), 0
-        )
+                pipe_free_by_pipe[pipe_name] = await _pipe_instance_free_async(pipe_name)
+        self._show(terms_by_pipe, brokers, pipe_free_by_pipe, error)
 
     def _show(self, terms_by_pipe, brokers, pipe_free_by_pipe, error=None):
         def _open_view(term):
@@ -10703,9 +10754,9 @@ class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.Application
     """
 
     def run(self):
-        threading.Thread(target=self._discover_and_reattach, daemon=True).start()
+        _aio_loop.run(self._discover_and_reattach())
 
-    def _discover_and_reattach(self):
+    async def _discover_and_reattach(self):
         with _term_lock():
             terms = list(_term_registry().values())
         attached_pipes = set()
@@ -10745,11 +10796,7 @@ class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.Application
 
         targets = [b for b in brokers if b.get("pipe_name") not in attached_pipes]
         if not targets:
-            sublime.set_timeout(
-                lambda: sublime.status_message(
-                    "Ai terminal: no sessions outside Sublime to reattach"
-                ), 0,
-            )
+            sublime.status_message("Ai terminal: no sessions outside Sublime to reattach")
             return
 
         reattached, still_busy = [], []
@@ -10757,16 +10804,16 @@ class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.Application
             pipe_name = broker.get("pipe_name")
             if not pipe_name:
                 continue
-            if not _pipe_instance_free(pipe_name):
-                _send_broker_ctl_line(pipe_name, b"DISCONNECT\n")
+            if not await _pipe_instance_free_async(pipe_name):
+                await _send_broker_ctl_line_async(pipe_name, b"DISCONNECT\n")
                 # DISCONNECT only requests the cancel; the relay's own
                 # ReadFile has to actually fail and its process exit before
                 # the pipe instance is truly free again -- poll briefly
                 # rather than assuming it happened synchronously.
                 freed = False
                 for _ in range(20):
-                    time.sleep(0.1)
-                    if _pipe_instance_free(pipe_name):
+                    await asyncio.sleep(0.1)
+                    if await _pipe_instance_free_async(pipe_name):
                         freed = True
                         break
                 if not freed:
@@ -10774,9 +10821,7 @@ class AiTerminalReattachAllFromWindowsTerminalCommand(sublime_plugin.Application
                     continue
             reattached.append(broker)
 
-        sublime.set_timeout(
-            lambda: self._finish(reattached, still_busy, frozen_terms_by_pipe), 0
-        )
+        self._finish(reattached, still_busy, frozen_terms_by_pipe)
 
     def _finish(self, reattached, still_busy, frozen_terms_by_pipe):
         window = sublime.active_window()

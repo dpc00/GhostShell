@@ -164,7 +164,6 @@ def ensure_default_files(log=print, timeout=30):
             % platform.machine())
         return None
     package_path = os.path.join(os.path.dirname(DEFAULT_FOLDER), ".conpty-%s.nupkg.part" % uuid.uuid4().hex)
-    written = []
     try:
         os.makedirs(DEFAULT_FOLDER, exist_ok=True)
         with urllib.request.urlopen(NUGET_URL, timeout=timeout) as response, open(package_path, "wb") as out:
@@ -173,6 +172,55 @@ def ensure_default_files(log=print, timeout=30):
                 if not block:
                     break
                 out.write(block)
+    except OSError as error:
+        log("[conpty_api] could not get the Windows Terminal ConPTY (%s); using the built-in one" % error)
+        _remove_quietly(package_path)
+        return None
+    return _install_package(package_path, log)
+
+
+async def ensure_default_files_async(log=print, timeout=30):
+    """ensure_default_files for a caller that must not block or use a thread: the download is an awaited
+    curl.exe child process (part of Windows 10 and later); verifying and unpacking the 1.7 MB are quick."""
+    import asyncio
+    import subprocess
+    folder = default_folder_if_ready()
+    if folder:
+        return folder
+    if platform.machine().lower() not in ("amd64", "x86_64"):
+        log("[conpty_api] the Windows Terminal ConPTY download is only set up for x64 Windows (this is %s)"
+            % platform.machine())
+        return None
+    package_path = os.path.join(os.path.dirname(DEFAULT_FOLDER), ".conpty-%s.nupkg.part" % uuid.uuid4().hex)
+    try:
+        os.makedirs(DEFAULT_FOLDER, exist_ok=True)
+        process = await asyncio.create_subprocess_exec(
+            "curl.exe", "--silent", "--show-error", "--fail", "--location", "--max-time", str(timeout),
+            "--output", package_path, NUGET_URL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        _out, err = await process.communicate()
+        if process.returncode != 0:
+            raise OSError("curl.exe exit %s: %s" % (process.returncode, err.decode(errors="replace").strip()))
+    except OSError as error:
+        log("[conpty_api] could not get the Windows Terminal ConPTY (%s); using the built-in one" % error)
+        _remove_quietly(package_path)
+        return None
+    return _install_package(package_path, log)
+
+
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _install_package(package_path, log):
+    """Verify the downloaded package, unpack the two files and move them into place.
+    Always removes package_path. Returns the folder, or None after one log line."""
+    written = []
+    try:
         found = _sha256_of_file(package_path)
         if found != NUGET_SHA256:
             raise ValueError("the downloaded package does not match the expected SHA-256 (found %s)" % found)
