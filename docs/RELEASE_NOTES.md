@@ -5,7 +5,7 @@
 
 **Fixed:** with 0.2.7, typing did nothing in a tab on Sublime Text builds that run plugins on a real Python 3.8 (build 4200 and earlier): the keystrokes never reached the session, and the console showed "got Future attached to a different loop". The write queue was created before the plugin's event loop existed, which Python 3.8 binds to the wrong loop. It is now created on the loop. Found by running 0.2.7 in a portable build 4200, which I should have done before releasing it.
 
-Tested on Python 3.8.12 (build 4200): opening a tab, typing, detaching with Close Tab (Keep Session Alive), Recover Session with its replay, resize, a plugin reload with the tab open, and End Session. Also still working on build 4215 (Python 3.14). Not tried: Relaunch, and Move to Windows Terminal on build 4200.
+Tested on Python 3.8.12 (build 4200): opening a tab, typing, detaching with Close Tab (Keep Session Alive), Recover Session with its replay, resize, a plugin reload with the tab open, Relaunch (a new broker replaced the old one), Move to Windows Terminal (the relay was given the tab's size, 73x29) and back with Recover Session, and End Session. Also still working on build 4215 (Python 3.14).
 
 ## 0.2.7
 
