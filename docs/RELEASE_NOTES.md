@@ -1,7 +1,7 @@
 # Release notes
 
 
-## Unreleased
+## 0.2.9
 
 **Changed:** each Sublime Text keeps the records of its own sessions in its own data folder, `<data folder>\Local\GhostShell\broker_sessions`, instead of one machine-wide folder (`%LOCALAPPDATA%\GhostShell\broker_sessions`) shared by the installed Sublime and every portable copy. With the shared folder, Recover Session and List Sessions in a portable Sublime listed the installed Sublime's sessions, and Reattach All From Windows Terminal could take over a session that belonged to another Sublime (it asks a busy session to disconnect, which would have detached the other Sublime's tab). Now a Sublime lists and reattaches only its own sessions.
 
