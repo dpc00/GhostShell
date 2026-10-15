@@ -1006,7 +1006,9 @@ class TspHost:
             if surface is None or not surface.listen or surface.doc.suspended:
                 return
             document = surface.doc
-            if kind == "change":
+            if kind == "change" and "item" not in event:
+                # A click on an `el` checkbox or radio; a `prefs` row's change (it names its `item`) is the
+                # program's own and goes through as it is.
                 fields = document.click_control(event.get("id"))
                 if fields is None:
                     return
