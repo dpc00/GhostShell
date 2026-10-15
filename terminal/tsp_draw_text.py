@@ -21,7 +21,7 @@ import re
 import sys
 import unicodedata
 
-from . import tsp_html
+from . import tsp_html, tsp_style
 
 DRAWERS = {}
 
@@ -1823,7 +1823,7 @@ class _Terminal(object):
 
 def _terminal_lines(term, ctx, fade=None):
     """A terminal's lines as HTML (one string per line), trailing blanks dropped, in the terminal's colours."""
-    palette = list(getattr(tsp_html, "_ANSI16", ())) or ["#000000"] * 16
+    palette = list(tsp_style._ANSI)      # the theme's `ansiN` tokens below override these defaults
     for index in range(16):
         override = _tok(ctx, "ansi%d" % index)
         if override:
