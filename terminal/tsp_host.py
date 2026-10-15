@@ -55,6 +55,8 @@ class TspHost:
         self._strip_reader = TspReader()    # for strip(): keeps a message that straddles two chunks whole
         self.documents = {}         # surface id -> TspDocument
         self.hello_seen = False     # the program asked, so it speaks TSP
+        self.hello_app = None       # the "app" of its hello (lower case)
+        self.kinds_offered = ()     # the kinds the hello reply listed
         self.errors = []            # rejected ops, newest last (kept short)
         self.palettes = {}          # surface id -> latest palette message
         self._changed = []          # surface ids whose frames changed since the last paint
@@ -151,6 +153,8 @@ class TspHost:
             kinds = self._kinds
             if app and "omp" not in app and "oh-my-pi" not in app:
                 kinds = tuple(kinds) + tuple(k for k in TSP_EXTRA_KINDS if k not in kinds)
+            self.hello_app = app            # for diagnosis: who asked, and which kinds were offered
+            self.kinds_offered = tuple(kinds)
             self._reply("r", hello_reply(
                 kinds,
                 features=("blobs", "settle", "adopt", "dock"),
