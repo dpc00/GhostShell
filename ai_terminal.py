@@ -5514,14 +5514,25 @@ def _tsp_tab_status_hook(term):
     return on_state
 
 
+def _is_private_use(ch):
+    return 0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000
+
+
 def _tab_title_text(term):
-    """The program's OSC 0/2 title without private-use glyphs (Nerd Font icons draw as empty boxes in a tab), or None."""
+    """The session label for the tab: the program's own OSC 0/2 title, icon removed, or None before it sends one.
+
+    The console is shared with the program's child processes (omp starts npm, MCP servers and cmd.exe), and their
+    titles arrive as OSC 0/2 too: "npm exec chrome-devtools-mcp", "C:\\Windows\\system32\\cmd.exe".  omp marks its own
+    session title with a Nerd Font icon (a private-use character, which also draws as an empty box in a tab, so it is
+    removed here); titles without one are not taken.  The last accepted label stays until omp sends another.
+    """
     get_title = getattr(term.parser, "get_title", None)
     title = get_title() if get_title is not None else None
-    if not title:
-        return None
-    clean = "".join(ch for ch in title if not (0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000))
-    return clean.strip() or None
+    if title and any(_is_private_use(ch) for ch in title):
+        clean = "".join(ch for ch in title if not _is_private_use(ch)).strip()
+        if clean:
+            term._tsp_session_title = clean
+    return getattr(term, "_tsp_session_title", None)
 
 
 def _tsp_render_native(term):
