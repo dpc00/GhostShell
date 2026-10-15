@@ -3662,6 +3662,7 @@ class _Terminal:
                     windows_conpty=(os.name == "nt"),
                     get_cols=lambda: self.screen.cols,
                     on_change=lambda _surface: _schedule_render(self),
+                    get_reduce_motion=lambda: _setting_number("tsp_animation_ms", 250, profile_name=profile_name) <= 0,
                 )
             except Exception:
                 print("[ai_terminal] TSP support could not start: %s"

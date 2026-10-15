@@ -45,12 +45,13 @@ class TspHost:
     """
 
     def __init__(self, send, kinds=TSP_KINDS, windows_conpty=True,
-                 get_cols=None, on_change=None):
+                 get_cols=None, on_change=None, get_reduce_motion=None):
         self._send = send
         self._kinds = tuple(kinds)
         self._conpty = windows_conpty
         self._get_cols = get_cols
         self._on_change = on_change
+        self._get_reduce_motion = get_reduce_motion
         self._reader = TspReader()
         self._strip_reader = TspReader()    # for strip(): keeps a message that straddles two chunks whole
         self.documents = {}         # surface id -> TspDocument
@@ -145,8 +146,7 @@ class TspHost:
         elif verb == "f":
             self._handle_frame(value)
         elif verb == "t":
-            if "sf" in value:
-                self.palettes[value["sf"]] = value
+            self._handle_palette(value)
         elif verb == "s":
             self._handle_sheet(value)
         # Any other verb is unknown: ignored, as the protocol requires.
@@ -166,8 +166,9 @@ class TspHost:
             self.kinds_offered = tuple(kinds)
             self._reply("r", hello_reply(
                 kinds,
-                features=("blobs", "settle", "adopt", "dock", "styles", "flow"),
+                features=("blobs", "settle", "adopt", "dock", "styles", "flow", "program-palette", "reduce-motion"),
                 cols=cols,
+                reduce_motion=bool(self._get_reduce_motion and self._get_reduce_motion()),
             ))
         elif kind == "blobs":
             wanted = value.get("ids") or []
@@ -192,6 +193,20 @@ class TspHost:
                 self._surface_order.remove(surface_id)
             self._surface_order.append(surface_id)
             self._closed.discard(surface_id)
+
+    def _handle_palette(self, value):
+        """A program palette (`t`) replaces the surface's previous one whole and is drawn at once."""
+        surface_id = value.get("sf") or self.active_surface()
+        if isinstance(surface_id, str):
+            self.palettes[surface_id] = value   # kept even before the surface is known, as omp has always worked
+        if surface_id not in self.documents:
+            if surface_id not in self._deaf:
+                self._reply("e", {"ev": "error", "msg": "palette for an unknown surface"})
+            return
+        if surface_id not in self._changed:
+            self._changed.append(surface_id)
+        if self._on_change:
+            self._on_change(surface_id)
 
     def _handle_sheet(self, value):
         """A stylesheet (`s`): kept with the surface (the live one when `sf` is absent)."""
