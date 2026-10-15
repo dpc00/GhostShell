@@ -1296,6 +1296,12 @@ class _BrokerPty(_BrokerPtyBase):
         self._alive = True
         self._read_transport, _protocol = await loop.connect_read_pipe(
             lambda: _BrokerOutput(self), windows_utils.PipeHandle(h_out))
+        # When the broker ends the session its pipe can fail the read with WinError 233 (not the plain EOF).
+        # asyncio's error path (_force_close) then reads _empty_waiter, which only its write transports define,
+        # raises AttributeError and never calls connection_lost: the tab then never learns the session ended
+        # and never auto-closes (seen 2026-10-15, Python 3.14). Defining it lets the error path finish.
+        if not hasattr(self._read_transport, "_empty_waiter"):
+            self._read_transport._empty_waiter = None
         # Control pipe connect is best-effort, as in the thread version.
         ctl = await self._aconnect(_broker_pipe_path(self.pipe_name + "-ctl"), _GENERIC_WRITE, 2.0)
         if ctl is not None:
