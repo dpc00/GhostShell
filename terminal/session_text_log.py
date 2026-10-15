@@ -109,9 +109,10 @@ class SessionTextLog:
             self._trailing_newline = bool(trailing_newline)
             self._dirty = True
             if self._write_timer is None:
-                from . import aio_loop      # Sublime only; imported here so this module loads anywhere
+                import sublime      # imported here so this module loads outside Sublime too
                 self._write_timer = True    # armed; a write made earlier (flush_now) leaves the callback a no-op
-                aio_loop.call_later(_WRITE_DEBOUNCE_S, self._flush_pending)
+                # set_timeout is thread-safe and survives a plugin reload (the plugin's own loop does not).
+                sublime.set_timeout(self._flush_pending, int(_WRITE_DEBOUNCE_S * 1000))
 
     def _flush_pending(self):
         with self._lock:
