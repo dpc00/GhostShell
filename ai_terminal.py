@@ -3663,6 +3663,7 @@ class _Terminal:
                     get_cols=lambda: self.screen.cols,
                     on_change=lambda _surface: _schedule_render(self),
                     get_reduce_motion=lambda: _setting_number("tsp_animation_ms", 250, profile_name=profile_name) <= 0,
+                    aside=_profile_bool(profile_name, "tsp_aside_column", False),
                 )
             except Exception:
                 print("[ai_terminal] TSP support could not start: %s"
@@ -5501,7 +5502,8 @@ def _tsp_render_native(term):
         if term._tsp_view is None:
             from .terminal.tsp_view import TspView
             term._tsp_view = TspView(
-                term.view, _setting_number("tsp_animation_ms", 250, profile_name=term.profile_name))
+                term.view, _setting_number("tsp_animation_ms", 250, profile_name=term.profile_name),
+                aside=_profile_bool(term.profile_name, "tsp_aside_column", False))
         drawn = term._tsp_view.render(term._tsp, term.screen.cols)
         term._tsp_native_failures = 0
         return drawn

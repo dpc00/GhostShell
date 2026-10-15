@@ -210,7 +210,7 @@ _phantom_sets = {}      # view id -> the PhantomSet drawn there; the convention 
 class TspView:
     """Draws the newest TSP surface of a host into ``view``."""
 
-    def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS):
+    def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS, aside=False):
         self.view = view
         self._phantoms = sublime.PhantomSet(view, PHANTOM_KEY)
         _phantom_sets[view.id()] = self._phantoms     # editor tools that list a view's phantoms (sublime-mcp get_view_phantoms) look here
@@ -226,6 +226,8 @@ class TspView:
         self._timer_armed = False
         self._local = {}            # view-only state (expanded sections, shown-row counts)
         self._overlay_open = False
+        self._prefs_page = False        # a settings (prefs) page is what the program shows, in main or as an overlay
+        self._prefs_seen = False        # ... as of the last drawing
         self._pin_bottom = False    # the reader typed: the next drawing must end at the input box
         self._surface_id = None     # the surface drawn last (a new one: show its end, e.g. after a reattach)
         self._text = None           # the tab text last written (one caption line per panel)
@@ -240,6 +242,7 @@ class TspView:
         self._eff_cols = 100        # width the program is told: the pane's own width (an open aside sheet is a column of its own)
         self._reported = None       # (surface, cols, cell w, cell h) last sent in a resize event
         self._dark = True           # appearance last told to the program (the hello says dark)
+        self._aside_enabled = aside     # may a layer prefs sheet open in a column of its own (off: it is an overlay in the tab)
         self._aside = _Aside(view)
         self._aside_active = False  # the aside sheet is open
         self._aside_seen = False    # ... as of the last time the view was pinned for a change
@@ -324,7 +327,7 @@ class TspView:
         stays until a drawing has put the view at the bottom, so the echo of the keystroke cannot
         leave the box out of sight either.
         """
-        if not self._prepared or self._dock_in_view():
+        if not self._prepared or self._dock_in_view() or self._prefs_page:
             return          # the reader can see the input box where it is: leave the view alone
         self._pin_bottom = True
         self._to_bottom_soon()
@@ -364,6 +367,19 @@ class TspView:
         self._hold_id += 1          # an explicit scroll to the bottom beats any pending hold
         self._pin_set = max(0, view.layout_extent()[1] - view.viewport_extent()[1])
         view.set_viewport_position((0, self._pin_set), False)
+
+    def _to_top_soon(self):
+        """Show the top of the view once Sublime has laid the new panels out (same tries as the scroll to the
+        bottom), cancelling any pending pin to the bottom."""
+        self._pin_id += 1
+        self._hold_id += 1
+        pin_id = self._pin_id
+        for delay in (0, 40, 120, 300, 700):
+            sublime.set_timeout(lambda: self._to_top_now(pin_id), delay)
+
+    def _to_top_now(self, pin_id):
+        if pin_id == self._pin_id and self.view.is_valid():
+            self.view.set_viewport_position((0, 0), False)
 
     def _hold_position(self, position):
         """Put the view back at ``position`` once the layout has settled, unless a pin to the bottom came since."""
@@ -426,6 +442,11 @@ class TspView:
             return tsp_html.render_regions(snapshot, palette, width, self._clock, blobs, self._local, aside=aside,
                                            reduce_motion=self._animation_ms <= 0, toast_region=True)
 
+        if not self._aside_enabled:
+            # The sheet stays an overlay inside this tab: the window's groups and layout are never touched.
+            self._eff_cols = cols
+            self._aside_active = False
+            return draw(cols, None)
         # The sheet is a column of its own, so once it is open the pane is already that much narrower and
         # ``cols`` (measured from the view) is the width main is drawn at; the sheet keeps the width it opened with.
         if self._aside_active and self._aside_cols:
@@ -501,6 +522,8 @@ class TspView:
         self._aside_html = regions.get("aside") or "" if self._aside_active else ""
         self._aside_id = regions.get("aside_id")
         main = next((r for r in snapshot.get("c") or [] if r.get("id") == "main"), None) or {}
+        self._prefs_page = (any(child.get("k") == "prefs" for child in main.get("c") or [])
+                            or (not self._aside_active and any(o.get("prefs") for o in regions.get("overlays") or [])))
         self._part_ids = {"main%d" % i: child.get("id") for i, child in enumerate(main.get("c") or [])}
         layers = [html for html in regions["layer"] if html]
         toast = regions.get("toast") or ""
@@ -612,6 +635,16 @@ class TspView:
             # as omp lays it out: the overlay above, the input box under it.
             self._overlay_open = overlay_open
             at_bottom = True
+        if self._prefs_page != self._prefs_seen:
+            self._prefs_seen = self._prefs_page
+            if self._prefs_page:
+                # A settings page is long, its title, pages and search are at the top, and its keys go to its own
+                # search box, not to the input box: open it at the top.
+                at_bottom = False
+                self._pin_bottom = False
+                self._to_top_soon()
+            else:
+                at_bottom = True        # the page closed: the transcript and the input box are back
         if at_bottom or self._pin_bottom:
             self._pin_bottom = False
             self._to_bottom_soon()

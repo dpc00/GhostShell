@@ -56,8 +56,8 @@ from .tsp_text import render_lines
 CLEAR_SCREEN = "\x1b[H\x1b[2J"        # cursor home, then erase the visible screen
 
 MODES = ("inline", "screen", "flow")
-FEATURES = ("blobs", "settle", "adopt", "dock", "program-palette", "reduce-motion", "aside", "scroll",
-            "styles", "flow")
+FEATURES = ("blobs", "settle", "adopt", "dock", "program-palette", "reduce-motion", "scroll", "styles", "flow")
+ASIDE_FEATURE = "aside"         # announced only when the view may open the sheet in a column of its own
 CREDITS = 2
 RETENTION_BUDGET = 64 * 1024 * 1024         # bytes of document state per pane
 MAX_BLOB_BYTES = 16 * 1024 * 1024           # one blob, decoded
@@ -156,8 +156,9 @@ class TspHost:
     def __init__(self, send, kinds=TSP_KINDS, windows_conpty=True,
                  get_cols=None, on_change=None, get_reduce_motion=None,
                  get_dark=None, get_cell=None, get_hour12=None, get_alt_screen=None,
-                 retention_budget=RETENTION_BUDGET, blob_dir=None, clock=None, get_cwd=None):
+                 retention_budget=RETENTION_BUDGET, blob_dir=None, clock=None, get_cwd=None, aside=False):
         self._send = send
+        self._features = FEATURES + (ASIDE_FEATURE,) if aside else FEATURES
         self._kinds = tuple(kinds)
         self._conpty = windows_conpty
         self._get_cols = get_cols
@@ -399,7 +400,7 @@ class TspHost:
             reduce_motion = bool(self._get_reduce_motion and self._get_reduce_motion())
         hour12 = self._get_hour12() if self._get_hour12 else system_hour12()
         return hello_reply(
-            self.kinds_offered, features=FEATURES, cols=cols, cell=cell, dark=dark,
+            self.kinds_offered, features=self._features, cols=cols, cell=cell, dark=dark,
             reduce_motion=reduce_motion, apc=DEFAULT_APC_LIMIT, credits=CREDITS, hour12=hour12)
 
     # ----- surfaces ---------------------------------------------------------------

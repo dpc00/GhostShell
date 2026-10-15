@@ -847,6 +847,11 @@
             // as plain text (terminal/tsp_host.py). Off until proven in a live tab.
             // Takes effect for tabs spawned after the change.
             "tsp_enabled": true,
+            // true = a Settings sheet that a TSP program (omp /settings) draws in its layer opens in a column
+            // of its own beside the tab, which adds a group to the window. false = it is an overlay inside
+            // the tab and the window's groups and layout are never touched. Takes effect for tabs spawned
+            // after the change.
+            "tsp_aside_column": false,
             // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
             // DA1 sentinel to any terminal (pi-tui terminal.ts). A terminal that
             // does not answer it gets omp's classic ANSI renderer, which is what
