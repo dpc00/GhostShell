@@ -4022,6 +4022,7 @@ class _Terminal:
             # Live output only: a replay is history, so its status reports and
             # questions are not answered or recorded.
             self._status_filter(text)
+            self._session_name_filter(text)
         # A program asks its startup questions in one order and expects the
         # answers in that same order, so the answer to the status question is
         # sent between the parser's answers to the questions before it and
@@ -4221,6 +4222,24 @@ class _Terminal:
             pieces.append((rest[:match.end()], self._ps_reply()))
             self._ps_probe_open = False     # answered in its place
             rest = rest[match.end():]
+
+    _SESSION_NOTICE = re.compile("\x1b\\]9;([^\x07\x1b]+): Complete(?:\x07|\x1b\\\\)")
+
+    def _session_name_filter(self, text):
+        """Remember the session name omp announces when a turn finishes: the OSC 9 notice "<session name>: Complete".
+
+        The console title cannot say which title is the session's (omp's child processes write it too), but no other
+        program in the console sends this notice, and it carries the name as omp holds it, a hand-typed rename included.
+        The name is kept in term._tsp_session_name for the tab label (profile key tsp_tab_status).  Never raises."""
+        try:
+            window = getattr(self, "_session_notice_tail", "") + text
+            for match in self._SESSION_NOTICE.finditer(window):
+                name = match.group(1).strip()
+                if name:
+                    self._tsp_session_name = name
+            self._session_notice_tail = window[-400:]
+        except Exception:
+            print("[ai_terminal] session name filter failed:\n%s" % traceback.format_exc())
 
     def _status_filter(self, text):
         """Find OSC 7501 sequences in ``text`` (live output) and handle each.
@@ -5544,14 +5563,17 @@ def _tab_title_text(term):
     The console is shared with omp's child processes (npm, the MCP servers, cmd.exe), and their titles arrive as OSC
     0/2 too ("npm exec chrome-devtools-mcp", "C:\\Windows\\system32\\cmd.exe").  In a plain terminal omp re-writes its
     title many times a second and so always wins; in native mode it writes the session title once, so only a card-form
-    title (see _card_title_icon) is taken as omp's, and the last one stays until omp sends another.  The title is
-    shown exactly as omp sent it.
+    title (see _card_title_icon) is taken from the console title, and the name omp announces at the end of each turn
+    (see _session_name_filter, which also carries a hand-typed rename) is taken as well.  The newest of the two stays
+    until omp sends another.  The name is shown exactly as omp sent it.
     """
     get_title = getattr(term.parser, "get_title", None)
     title = get_title() if get_title is not None else None
-    if title and _card_title_icon(title) is not None:
-        term._tsp_session_title = title
-    return getattr(term, "_tsp_session_title", None)
+    if title and title != getattr(term, "_tsp_seen_osc_title", None):
+        term._tsp_seen_osc_title = title        # a new title only: an old one must not undo a newer notice name
+        if _card_title_icon(title) is not None:
+            term._tsp_session_name = title
+    return getattr(term, "_tsp_session_name", None)
 
 
 def _tsp_render_native(term):

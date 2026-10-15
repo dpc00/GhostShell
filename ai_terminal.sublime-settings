@@ -853,10 +853,15 @@
             // after the change.
             "tsp_aside_column": false,
             // true = the tab label is built the way omp builds its own title in a plain terminal:
-            // tsp_tab_prefix, then a spinner frame while omp is working (its native view has something
-            // animating) or ">" when idle, then omp's session label (its OSC title, Nerd Font icons removed;
-            // the profile name until it sends one). omp sends its working state inside TSP frames, not as an
-            // OSC title, so osc_title_updates_tab cannot show it. Takes effect for tabs spawned after the change.
+            // tsp_tab_prefix, then the run state, then the session name. In native mode omp leaves both out
+            // of its title, and its child processes (npm, MCP servers, cmd.exe) write the console title too,
+            // so osc_title_updates_tab cannot show them.
+            // Run state, from omp's OSC 7501 status report: a spinner frame while working, "!" while it
+            // waits on you, a check mark when a turn is done, a cross on error, ">" when idle.
+            // Session name, shown exactly as omp sends it: the card-form title omp sets in the console title
+            // (<icon> CODE: title), or the name omp announces when a turn finishes ("<name>: Complete"), which
+            // also carries a hand-typed /rename. The profile name shows until omp has sent one.
+            // Takes effect for tabs spawned after the change.
             "tsp_tab_status": true,
             "tsp_tab_prefix": "π",
             // omp 18.4.4+ sends a Tern Surface Protocol (TSP) "hello" probe plus a
