@@ -6131,9 +6131,24 @@ class AiTerminalViewListener(sublime_plugin.ViewEventListener):
                 term.screen.dirty = True
             _schedule_render(term, delay_ms=0)
         _maybe_reattach_broker(self.view)
+        self._tsp_visible()
 
     def on_deactivated(self):
         self._preclamp_vp()
+        self._tsp_visible()
+
+    def _tsp_visible(self):
+        """Tell a TSP program whether its tab can be seen (the `visible` event): it is the active tab of its group."""
+        term = _Terminal.from_id(self.view.id())
+        native = getattr(term, "_tsp_view", None) if term is not None else None
+        window = self.view.window()
+        if native is None or window is None:
+            return
+        group, _index = window.get_view_index(self.view)
+        try:
+            native.set_visible(group >= 0 and window.active_view_in_group(group) == self.view)
+        except Exception:       # a display report must never disturb the tab
+            print("[ai_terminal] TSP visible report failed:\n%s" % traceback.format_exc())
 
 
 def _mouse_hist_len(term):

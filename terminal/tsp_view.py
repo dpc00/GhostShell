@@ -24,7 +24,11 @@ protocol side) keeps the document up to date; this class draws it:
 Needs Sublime (it uses the sublime module), so it runs inside Sublime only.
 """
 
+import os
+import re
 import time
+import urllib.parse
+import urllib.request
 import webbrowser
 
 import sublime
@@ -83,6 +87,122 @@ def describe_event(event):
     return str(kind)
 
 
+_LINE_SUFFIX = re.compile(r"(?:#L(\d+)(?:-L?\d+)?|:(\d+)(?:-\d+)?(?::(\d+))?)$")
+
+
+def parse_link(target):
+    """What a link text points at: ("web", url), ("mail", url) or ("file", path, line, column); None if unusable.
+
+    A file target may be a file:// URL, ~/x, C:\\x, /x or a relative path, with a :line, :a-b, :line:col,
+    #L3 or #L10-L20 suffix (the first line is used)."""
+    target = target.strip()
+    if target.startswith(("http://", "https://")):
+        return ("web", target)
+    if target.startswith("mailto:"):
+        return ("mail", target)
+    if target.startswith("file://"):
+        target = urllib.request.url2pathname(urllib.parse.urlparse(target).path)
+        if re.match(r"^[/\\][A-Za-z]:", target):
+            target = target[1:]
+    line = column = None
+    found = _LINE_SUFFIX.search(target)
+    if found and found.start() > 1:
+        line = int(found.group(1) or found.group(2))
+        column = int(found.group(3)) if found.group(3) else None
+        target = target[:found.start()]
+    if not target:
+        return None
+    return ("file", os.path.expanduser(target), line, column)
+
+
+ASIDE_COLS = 44             # the settings sheet's width in cells; at most ASIDE_MAX_FRACTION of the pane
+ASIDE_MAX_FRACTION = 0.6
+
+
+def split_layout(layout, group, fraction):
+    """``layout`` with a new group to the right of ``group``, taking ``fraction`` of its width.
+
+    The new group gets the last index, so the existing groups keep theirs."""
+    cols = list(layout["cols"])
+    cells = [list(cell) for cell in layout["cells"]]
+    left, top, right, bottom = cells[group]
+    x = cols[left] + (cols[right] - cols[left]) * (1.0 - fraction)
+    index = left + 1
+    while index < right and cols[index] < x:
+        index += 1
+    cols.insert(index, x)
+    for cell in cells:
+        if cell[0] >= index:
+            cell[0] += 1
+        if cell[2] >= index:
+            cell[2] += 1
+    cells[group][2] = index
+    cells.append([index, top, right + 1, bottom])
+    return {"cols": cols, "rows": list(layout["rows"]), "cells": cells}
+
+
+class _Aside:
+    """The aside sheet: a view in a new column right of the pane's group, removed again when it closes."""
+
+    def __init__(self, main_view):
+        self._main = main_view
+        self._view = None
+        self._saved = None          # the window layout from before the column was added
+        self._window = None
+        self._phantoms = None
+        self._html = None
+
+    def dismissed(self):
+        """True when the sheet was open and its tab has been closed by the reader."""
+        return self._view is not None and not self._view.is_valid()
+
+    def show(self, html, fraction, navigate):
+        if self._view is None and not self._open(fraction):
+            return
+        if html == self._html:
+            return
+        self._html = html
+        self._phantoms.update([sublime.Phantom(sublime.Region(0, 0), html, sublime.LAYOUT_BLOCK, navigate)])
+
+    def _open(self, fraction):
+        window = self._main.window()
+        if window is None:
+            return False
+        group = window.get_view_index(self._main)[0]
+        self._saved = window.layout()
+        window.set_layout(split_layout(self._saved, group, fraction))
+        view = window.new_file()
+        view.set_scratch(True)
+        view.set_name("TSP aside")
+        for name, value in VIEW_SETTINGS:
+            if name != "ai_tsp_native":
+                view.settings().set(name, value)
+        view.run_command("append", {"characters": "\n"})
+        view.set_read_only(True)
+        window.set_view_index(view, len(self._saved["cells"]), 0)
+        window.focus_view(self._main)
+        self._window, self._view = window, view
+        self._phantoms = sublime.PhantomSet(view, PHANTOM_KEY)
+        self._html = None
+        return True
+
+    def close(self):
+        """Remove the sheet and give the column back (the previous layout exactly)."""
+        if self._view is None and self._saved is None:
+            return
+        view, window, saved = self._view, self._window, self._saved
+        self._view = self._window = self._saved = self._phantoms = self._html = None
+        if view is not None and view.is_valid():
+            view.close()
+        if window is not None and saved is not None:
+            sublime.set_timeout(lambda: self._restore(window, saved), 50)
+
+    def _restore(self, window, saved):
+        if window.is_valid():
+            window.set_layout(saved)
+            window.focus_view(self._main)
+
+
 _phantom_sets = {}      # view id -> the PhantomSet drawn there; the convention sublime-mcp's get_view_phantoms reads
 
 
@@ -109,6 +229,49 @@ class TspView:
         self._surface_id = None     # the surface drawn last (a new one: show its end, e.g. after a reattach)
         self._text = None           # the tab text last written (one caption line per panel)
         self._outline = None        # (kind, caption) of each panel last drawn: what the text and minimap marks show
+        self._anchors = []          # [(part key, text offset of its caption line)] of the last drawing
+        self._part_ids = {}         # part key "mainN" -> the id of that main entry
+        self._reveal_doc = None     # the document whose reveal op was last taken up
+        self._reveal_seen = 0       # sequence number of that reveal
+        self._reveal_entry = None   # (main entry id, where) waiting for the drawing to end
+        self._reveal_id = 0         # bumped to cancel the pending tries of the last reveal
+        self._reveal_set = None     # where the last reveal try put the view
+        self._eff_cols = 100        # width the program is told: the pane less an open aside sheet
+        self._reported = None       # (surface, cols, cell w, cell h) last sent in a resize event
+        self._dark = True           # appearance last told to the program (the hello says dark)
+        self._aside = _Aside(view)
+        self._aside_active = False  # the aside sheet is open
+        self._aside_cols = 0
+        self._aside_html = ""
+        self._aside_id = None
+        self._last_click = None     # (href, time) of the last click on a row that has a double-click event
+        self._aside_dismissed = None    # id of an aside node whose sheet tab the reader closed
+
+    def _open_link(self, target):
+        """Open a link's target: a web or mail link in the system's handler, a file in Sublime at its line."""
+        parsed = parse_link(target)
+        if parsed is None:
+            return
+        if parsed[0] != "file":
+            webbrowser.open(parsed[1])
+            return
+        _kind, path, line, column = parsed
+        window = self.view.window()
+        if not os.path.isabs(path) and window is not None:
+            base = next((os.path.join(folder, path) for folder in window.folders()
+                         if os.path.exists(os.path.join(folder, path))), None)
+            path = base or path
+        if not os.path.exists(path):
+            sublime.status_message("Not found: " + path)
+            return
+        if os.path.isdir(path):
+            webbrowser.open(path)
+            return
+        if window is None:
+            return
+        if line:
+            path = "%s:%d:%d" % (path, line, column or 1)
+        window.open_file(path, sublime.ENCODED_POSITION)
 
     def navigate(self, href):
         """A link in a panel was clicked: send the event it stands for back to the program."""
@@ -117,21 +280,39 @@ class TspView:
             if href.startswith(("http://", "https://")):
                 webbrowser.open(href)
             return
+        event = dict(event)
+        also = event.pop("also", None)      # a local change that goes with the event: applied first
+        dbl = event.pop("dbl", None)        # the event a quick second click on the same row stands for
+        if isinstance(dbl, dict) and self._host is not None:
+            now, last = time.monotonic(), self._last_click
+            self._last_click = (href, now)
+            if last is not None and last[0] == href and now - last[1] < 0.4:
+                self._last_click = None
+                self._host.send_event(dbl)
+                sublime.status_message("Sent to omp: " + describe_event(dbl))
+                return
+        if isinstance(also, dict) and also.get("local") == "set":
+            self._local[also.get("key")] = also.get("value")
         local = event.get("local")
         if local == "set":
             self._local[event.get("key")] = event.get("value")
             if self._host is not None:
+                send = event.get("send")
+                if isinstance(send, dict):
+                    self._host.send_event(send)
                 self.render(self._host, self._cols)
         elif local == "copy":
             sublime.set_clipboard(event.get("text", ""))
             sublime.status_message("Copied")
         elif local == "open":
-            target = event.get("href") or ""
-            if target.startswith(("http://", "https://")):
-                webbrowser.open(target)
+            self._open_link(event.get("href") or "")
+        elif isinstance(local, str):
+            return          # a local event this view does not handle (e.g. "none"): never sent to the program
         elif self._host is not None:
             self._host.send_event(event)
             sublime.status_message("Sent to omp: " + describe_event(event))
+            if also:
+                self.render(self._host, self._cols)
 
     def pin_to_bottom(self):
         """The reader pressed a key: the input box is at the bottom, so show it, now and after the echo.
@@ -232,30 +413,87 @@ class TspView:
         self._text = text
         return True
 
+    def _regions(self, host, snapshot, palette, cols):
+        """The document's HTML regions.  With feature ``aside`` a layer ``prefs`` sheet is taken out of the
+        overlays and drawn narrower beside the pane: the rest is laid out at the narrower ``cols``."""
+        blobs = getattr(host, "blobs", None)
+
+        def draw(width, aside):
+            return tsp_html.render_regions(snapshot, palette, width, self._clock, blobs, self._local, aside=aside,
+                                           reduce_motion=self._animation_ms <= 0, toast_region=True)
+
+        if "aside" not in (getattr(host, "hello_features", None) or ()):
+            self._eff_cols = cols
+            self._aside_active = False
+            return draw(cols, None)
+        width = max(10, min(ASIDE_COLS, int(cols * ASIDE_MAX_FRACTION)))
+        self._aside_cols = width
+        regions = draw(cols - width if self._aside_active else cols, width)
+        aside_id = regions.get("aside_id")
+        if aside_id is None:
+            self._aside_dismissed = None
+        wanted = bool(regions.get("aside")) and aside_id != self._aside_dismissed
+        if wanted != self._aside_active:
+            self._aside_active = wanted
+            regions = draw(cols - width if wanted else cols, width)
+        self._eff_cols = cols - width if self._aside_active else cols
+        return regions
+
+    def _update_aside(self, host, palette):
+        """Keep the sheet view beside the pane in step: open, redraw or close it."""
+        if not self._aside_active:
+            self._aside.close()
+            return
+        if self._aside.dismissed():
+            self._aside_dismissed = self._aside_id
+            self._aside_active = False
+            self._aside.close()
+            self._shown = None      # redraw main at the full width
+            sublime.set_timeout(lambda: self._host is not None and self.render(self._host, self._cols), 0)
+            return
+        fraction = self._aside_cols / float(max(self._cols, self._aside_cols + 1))
+        self._aside.show(tsp_html.page(self._aside_html, palette), fraction, self.navigate)
+
     def _parts(self, host, cols):
         """([(key, html)], palette, animated, overlay_open, [(kind, caption)]) for the newest surface, or Nones."""
         surface_id = host.active_surface()
         if surface_id is None:
             return None, None, False, False, []
         palette = host.palettes.get(surface_id)
-        regions = tsp_html.render_regions(host.documents[surface_id].snapshot(), palette, cols, self._clock,
-                                          getattr(host, "blobs", None), self._local)
-        if regions["layer"]:
-            # An overlay is open: it is the whole screen.  Only the topmost one is drawn.
-            parts = [("layer", regions["layer"][0])]
-            outline = [("sheet", "")]
+        document = host.documents[surface_id]
+        self._local["focus"] = document.focus
+        self._handle_ops(host, document, surface_id)
+        snapshot = document.snapshot()
+        regions = self._regions(host, snapshot, palette, cols)
+        self._aside_html = regions.get("aside") or "" if self._aside_active else ""
+        self._aside_id = regions.get("aside_id")
+        main = next((r for r in snapshot.get("c") or [] if r.get("id") == "main"), None) or {}
+        self._part_ids = {"main%d" % i: child.get("id") for i, child in enumerate(main.get("c") or [])}
+        layers = [html for html in regions["layer"] if html]
+        toast = regions.get("toast") or ""
+        if layers:
+            # An overlay is open: it is the whole screen.  omp's stack shows only the topmost one; a layer of
+            # plain overlays lists them all, in order.
+            parts = [("layer%d" % i, html) for i, html in enumerate(layers)]
+            outline = [("sheet", "") for _html in layers]
             if regions.get("under"):
                 parts.append(("under", tsp_html.overlay_note(regions["under"], palette)))
                 outline.append(("", ""))
             if regions["dock"]:
                 parts.append(("dock", regions["dock"]))     # the command line stays in sight under the overlay
                 outline.append(("input", ""))
+            if toast:
+                parts.append(("toast", toast))
+                outline.append(("", ""))
             return parts, palette, regions["animated"], True, outline
         parts = [("main%d" % i, html) for i, html in enumerate(regions["main"]) if html]
         outline = [item for item, html in zip(regions["main_outline"], regions["main"]) if html]
         if regions["dock"]:
             parts.append(("dock", regions["dock"]))
             outline.append(("input", ""))
+        if toast:
+            parts.append(("toast", toast))      # the notice sits at the bottom of the view, under the input box
+            outline.append(("", ""))
         return parts, palette, regions["animated"], False, outline
 
     def render(self, host, cols=100):
@@ -280,7 +518,9 @@ class TspView:
             # panels go with it): draw everything again rather than trust what we think is on screen.
             self._shown = None
             self._prepared = False
+        self._update_aside(host, palette)
         if parts == self._shown and outline == self._outline:
+            self._after_draw(host)
             return True
         if not self._prepared:
             self._prepare_view()
@@ -299,7 +539,8 @@ class TspView:
         for caption in captions:
             starts.append(offset)
             offset += len(caption) + 1
-        self._dock_anchor = starts[-1] if parts and parts[-1][0] == "dock" else None
+        self._anchors = [(key, start) for start, (key, _html) in zip(starts, parts)]
+        self._dock_anchor = next((start for key, start in self._anchors if key == "dock"), None)
         text_changed = self._set_text("\n" + "".join(caption + "\n" for caption in captions))
         if text_changed:
             self._phantoms.update([])           # the old anchors are gone with the old text
@@ -340,6 +581,7 @@ class TspView:
         if at_bottom or self._pin_bottom:
             self._pin_bottom = False
             self._to_bottom_soon()
+        self._after_draw(host)
         return True
 
     # ---- animation heartbeat ---------------------------------------------------------
@@ -363,6 +605,8 @@ class TspView:
 
     def clear(self):
         """Take every panel down (native view turned off, or a drawing fault)."""
+        self._aside.close()
+        self._aside_active = False
         self.view.erase_phantoms(PHANTOM_KEY)
         self._phantoms = sublime.PhantomSet(self.view, PHANTOM_KEY)
         _phantom_sets[self.view.id()] = self._phantoms
@@ -373,3 +617,183 @@ class TspView:
         self._outline = None
         self._text = None
         self.view.settings().set("ai_tsp_native", False)    # text-row scrolling may act again
+
+    # ---- after a drawing: reveal, environment reports -----------------------------------
+
+    def _after_draw(self, host):
+        entry, self._reveal_entry = self._reveal_entry, None
+        if entry is not None and not self._overlay_open:
+            self._reveal_soon(*entry)
+        self._report_environment(host)
+
+    def _reveal_soon(self, child_id, where):
+        """Scroll the pane so the main entry ``child_id`` shows, once the layout has settled (only the latest reveal runs)."""
+        key = next((k for k, _off in self._anchors if self._part_ids.get(k) == child_id), None)
+        if key is None:
+            return
+        self._pin_id += 1           # a reveal beats the pin to the bottom and the position hold
+        self._hold_id += 1
+        self._reveal_id += 1
+        self._reveal_set = None
+        reveal_id = self._reveal_id
+        for delay in (0, 40, 120, 300, 700):
+            sublime.set_timeout(lambda: self._reveal_now(reveal_id, key, where), delay)
+
+    def _entry_span(self, key):
+        """(top, bottom) layout y of the entry under anchor ``key``: its caption line down to the next anchor."""
+        view = self.view
+        offsets = [off for _k, off in self._anchors]
+        keys = [k for k, _off in self._anchors]
+        index = keys.index(key)
+        top = view.text_to_layout(offsets[index])[1]
+        if index + 1 < len(offsets):
+            bottom = view.text_to_layout(offsets[index + 1])[1]
+        else:
+            bottom = view.layout_extent()[1]
+        return top, bottom
+
+    def _reveal_now(self, reveal_id, key, where):
+        view = self.view
+        if reveal_id != self._reveal_id or not view.is_valid() or key not in dict(self._anchors):
+            return
+        current = view.viewport_position()[1]
+        if self._reveal_set is not None and abs(current - self._reveal_set) > 3:
+            self._reveal_id += 1    # the reader scrolled since our last move: stop fighting them
+            return
+        top, bottom = self._entry_span(key)
+        height = view.viewport_extent()[1]
+        if where == "start":
+            target = top
+        elif where == "end":
+            target = bottom - height
+        elif top >= current and bottom <= current + height:
+            target = current
+        elif top < current or bottom - top > height:
+            target = top
+        else:
+            target = bottom - height
+        self._reveal_set = max(0, target)
+        view.set_viewport_position((0, self._reveal_set), False)
+
+    # ---- scroll and reveal inside containers (state lives in self._local) ---------------
+
+    def _handle_ops(self, host, document, surface_id):
+        """Carry out the document's pending scroll ops and a new reveal, before the drawing."""
+        for node_id, step in document.take_scrolls():
+            self._apply_scroll(host, document, surface_id, node_id, step)
+        reveal = document.reveal
+        if reveal is not None and (document is not self._reveal_doc or reveal[2] != self._reveal_seen):
+            self._reveal_doc = document
+            self._reveal_seen = reveal[2]
+            self._start_reveal(document, reveal[0], reveal[1])
+
+    def _info(self, node_id):
+        info = self._local.get("scrollinfo:" + node_id)
+        return info if isinstance(info, dict) else None
+
+    def _apply_scroll(self, host, document, surface_id, node_id, step):
+        path = document.ancestry(node_id) or []
+        for ancestor, _kind in reversed(path):
+            info = self._info(ancestor)
+            if info is not None:
+                self._scroll_container(ancestor, info, step)
+                return
+        mode = getattr(host, "surface_mode", lambda _sf: None)(surface_id)
+        if mode == "screen" and len(path) > 1 and path[1][0] == "main":
+            self._scroll_view(step)     # a screen surface's own main
+        # an inline surface's main scrolls with the pane and ignores the op
+
+    def _scroll_container(self, node_id, info, step):
+        total, shown = int(info.get("total") or 0), max(1, int(info.get("shown") or 1))
+        first = int(info.get("first") or 0)
+        last = max(0, total - shown)
+        moves = {"line-up": first - 1, "line-down": first + 1, "page-up": first - max(1, shown - 1),
+                 "page-down": first + max(1, shown - 1), "start": 0, "end": last}
+        new = min(max(moves[step], 0), last)
+        self._set_first(node_id, info, new, last)
+
+    def _set_first(self, node_id, info, new, last):
+        key = "scroll:" + node_id
+        if info.get("follow") and new >= last:
+            self._local.pop(key, None)      # at the tail: following (again)
+        else:
+            self._local[key] = new
+        self._local["scrollinfo:" + node_id] = dict(info, first=new)
+
+    def _scroll_view(self, step):
+        view = self.view
+        line, height = view.line_height() or 20, view.viewport_extent()[1]
+        current = view.viewport_position()[1]
+        bottom = max(0, view.layout_extent()[1] - height)
+        moves = {"line-up": current - line, "line-down": current + line, "page-up": current - (height - line),
+                 "page-down": current + (height - line), "start": 0, "end": bottom}
+        self._pin_id += 1
+        self._hold_id += 1
+        view.set_viewport_position((0, min(max(moves[step], 0), bottom)), False)
+
+    def _start_reveal(self, document, node_id, where):
+        """Scroll the containers the node sits in; remember the main entry to bring into view."""
+        self._reveal_entry = None
+        path = document.ancestry(node_id)
+        if not path:
+            return
+        names = [item[0] for item in path]
+        for position, ancestor in enumerate(names[:-1]):
+            info = self._info(ancestor)
+            ids = info.get("ids") if info else None
+            if ids:
+                inner = next((n for n in names[position + 1:] if n in ids), None)
+                if inner is not None:
+                    self._reveal_in(ancestor, info, ids.index(inner), where)
+        if len(names) > 2 and names[1] == "main":
+            self._reveal_entry = (names[2], where)
+
+    def _reveal_in(self, node_id, info, index, where):
+        total, shown = int(info.get("total") or 0), max(1, int(info.get("shown") or 1))
+        first = int(info.get("first") or 0)
+        last = max(0, total - shown)
+        if where == "start":
+            new = index
+        elif where == "end":
+            new = index - shown + 1
+        elif index < first:
+            new = index
+        elif index >= first + shown:
+            new = index - shown + 1
+        else:
+            new = first
+        self._set_first(node_id, info, min(max(new, 0), last), last)
+
+    # ---- what the spec asks the terminal to report ---------------------------------------
+
+    def _is_dark(self):
+        try:
+            colour = self.view.style().get("background") or "#000000"
+            digits = colour.lstrip("#")[:6]
+            red, green, blue = (int(digits[i:i + 2], 16) for i in (0, 2, 4))
+            return (0.299 * red + 0.587 * green + 0.114 * blue) < 128
+        except (ValueError, AttributeError):
+            return True
+
+    def _report_environment(self, host):
+        """Send ``resize`` (first drawing, a new width or cell size) and ``theme`` (appearance switched)."""
+        if not getattr(host, "hello_seen", False):
+            return
+        surface_id = host.active_surface()
+        view = self.view
+        cell = {"w": int(view.em_width() or 8), "h": int(view.line_height() or 17)}
+        signature = (surface_id, self._eff_cols, cell["w"], cell["h"])
+        if surface_id is not None and signature != self._reported:
+            self._reported = signature
+            host.send_event({"ev": "resize", "sf": surface_id, "cols": self._eff_cols, "cell": cell, "visible": True})
+        dark = self._is_dark()
+        if dark != self._dark:
+            self._dark = dark
+            host.send_event({"ev": "theme", "dark": dark})
+
+    def set_visible(self, visible):
+        """The tab was hidden or shown again (call from the tab's activated/deactivated handlers)."""
+        host = self._host
+        surface_id = host.active_surface() if host is not None else None
+        if surface_id is not None and getattr(host, "hello_seen", False):
+            host.send_event({"ev": "visible", "sf": surface_id, "visible": bool(visible)})
