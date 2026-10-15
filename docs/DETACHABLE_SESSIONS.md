@@ -16,7 +16,11 @@ reconnects to them.
 - `_BrokerPty` in `ai_terminal.py` is the Sublime-side client. It connects to
   three local named pipes for output, input, and control messages.
 - `tools/agent_broker.py` owns the ConPTY and child agent process. It accepts
-  one client at a time and retains a bounded raw-output replay buffer.
+  one client at a time and retains a bounded raw-output replay buffer. It is
+  a single-threaded asyncio program (Proactor loop): the ConPTY pipes, the
+  three named-pipe servers and the child-exit wait all run on that one loop.
+  The Sublime-side client (`_BrokerPty`) still uses reader/writer threads;
+  where this document says "reader thread" below, it means that client.
 - `tools/spawn_outside_job.ps1` starts the broker independently of Sublime's
   process job. It uses a short-lived interactive Windows Scheduled Task.
 - A JSON record under the broker registry directory identifies each live
