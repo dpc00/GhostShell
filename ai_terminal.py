@@ -10241,8 +10241,25 @@ def _toggle_profile_bool(profile_name, key, default):
     new_value = not bool(base.get(key, default))
     settings = sublime.load_settings(_SETTINGS_NAME)
 
+    def remember(value):
+        # Sublime's resource reader can still return the OLD file text for a
+        # moment after a write, so a rebuild from disk right now would undo
+        # the toggle (the toolbar showed the old value, the next click flipped
+        # it back, and tones kept playing). Pin the new value against the
+        # files' current modification times; a later edit moves them again.
+        global _profiles_cache
+        packages = sublime.packages_path()
+        signature = (
+            _file_mtime(os.path.join(packages, "User", _SETTINGS_NAME)),
+            _file_mtime(os.path.join(packages, "GhostShell", _SETTINGS_NAME)),
+        )
+        catalog = _all_profiles(settings)
+        catalog[profile_name] = dict(catalog.get(profile_name) or {}, **{key: value})
+        _profiles_cache = (signature, catalog)
+
     if settings.get("profile_tuner_writes_package_file", False):
         if _write_profile_key_to_package_file(profile_name, key, new_value):
+            remember(new_value)
             return new_value
         sublime.status_message(
             "Ai terminal: could not edit the shipped settings file for %s.%s"
@@ -10336,18 +10353,20 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
                 self._respawn(view, term, profile_name)
                 return
             key, _desc, default = _LIVE_TUNABLE_PROFILE_KEYS[idx]
-            self._toggle(profile_name, key, default)
+            self._toggle(profile_name, key, default, term)
 
         self.window.show_quick_panel(
             rows, on_pick, placeholder="Tune %s -- which setting?" % profile_name
         )
 
-    def _toggle(self, profile_name, key, default):
+    def _toggle(self, profile_name, key, default, term=None):
         new_value = _toggle_profile_bool(profile_name, key, default)
         sublime.status_message(
             "Ai terminal: %s.%s = %s -- live now, no respawn needed"
             % (profile_name, key, "on" if new_value else "off")
         )
+        if term is not None:
+            _add_close_toolbar(term)   # keep the toolbar's Settings panel in step
 
     def _respawn(self, view, term, profile_name):
         # Fresh Sublime-side tab, SAME underlying agent process -- not a new
