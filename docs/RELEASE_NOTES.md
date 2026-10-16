@@ -1,6 +1,24 @@
 # Release notes
 
 
+## 0.2.10
+
+**Fixed:** a tab did not close itself after its program exited (for example after `/exit` in Claude Code), although `close_tab_on_exit` was on. When the broker ended the session, the tab's read of its pipe failed with WinError 233, and Python 3.14's asyncio crashed handling that error (`'_ProactorReadPipeTransport' object has no attribute '_empty_waiter'`) without telling the tab the session had ended. The tab now gets the end of the session and closes itself 1.5 seconds later. The thread-free client that introduced this came with 0.2.7.
+
+**Fixed:** Move to Windows Terminal no longer asks for approval; the move is harmless, the session keeps running. Recover Session now takes a session back from a Windows Terminal window: it asks the broker to disconnect that window, waits, then attaches. Before, it connected into the busy pipe, reported the live session as gone, and left an empty tab while the session stayed in Windows Terminal. The picker row says "busy in another window — picking it takes it over".
+
+**Fixed:** reattaching to a session (Recover Session, a plugin reload, a restart) could draw a repeated banner and overwrite text when the tab was not the width the session had been. The broker's saved output mixes screen draws made at different widths, and the tab replayed them all at one width. The broker now records each resize in its saved output, and the tab resizes its screen at the same points during the replay. Sessions started before the update have no records and replay as before.
+
+**Fixed:** Recover Session listed nothing for a tab that had died but still had its view open; it now lists such a tab. List Sessions no longer lists sessions that have already ended.
+
+**Fixed:** after a plugin reload, a detached tab said "session kept alive, still running" even if the session had ended meanwhile. It now checks, and says the session had already ended.
+
+**Changed:** closing a tab with Ctrl+W, the tab's close button or the Close File command is no longer blocked on GhostShell tabs. A plain close detaches the session (it keeps running, and Recover Session brings it back); it does not kill it. Kill Session, End Session and Close Tab (Keep Session Alive) work as before.
+
+- Restart Sublime Text after updating: the changed broker is under `tools/` and a plugin reload does not load it. Sessions already running keep their old broker.
+- Tested on Windows 11 with the installed Sublime Text (build 4215, Python 3.14): natural exit, an outside kill, Kill Session, End Session on a live and a dead tab, Close Tab (Keep Session Alive) with Recover Session, a plugin reload, Move to Windows Terminal and back, Detach All and Reattach All, and a full Sublime restart. Also on a portable build 4200 (Python 3.8): the same list, and on the final code natural exit, typing, detach with Recover Session, and a plugin reload.
+- Known flaw, not fixed: in a very narrow tab (about 20 columns) on build 4200, text typed after a plugin reload was drawn into the middle of the prompt row. Tabs at the normal width (94 columns) did not show it, and it is not caused by the width records above (it also showed before them). Not investigated further.
+
 ## 0.2.9
 
 **Changed:** each Sublime Text keeps the records of its own sessions in its own data folder, `<data folder>\Local\GhostShell\broker_sessions`, instead of one machine-wide folder (`%LOCALAPPDATA%\GhostShell\broker_sessions`) shared by the installed Sublime and every portable copy. With the shared folder, Recover Session and List Sessions in a portable Sublime listed the installed Sublime's sessions, and Reattach All From Windows Terminal could take over a session that belonged to another Sublime (it asks a busy session to disconnect, which would have detached the other Sublime's tab). Now a Sublime lists and reattaches only its own sessions.
