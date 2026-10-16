@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.2.11
+
+**Fixed:** the toolbar's Settings panel could show a profile setting as off when it was on (or the reverse), and a second click then flipped it back. GhostShell read its settings files through Sublime's resource reader, which can return the old text for a moment after a file changes. Loose settings files are now read straight from disk, and a toggle pins its new value.
+
+**Fixed:** the toolbar's Settings panel did not follow changes made any other way (the Tune Profile quick panel, or a hand edit of the settings file). Every open tab's toolbar is now redrawn when the settings change.
+
+- Not tested live by the author before release; the change is small and only touches how settings files are read and when the toolbar is redrawn.
+
 
 ## 0.2.10
 
