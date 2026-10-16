@@ -10434,9 +10434,13 @@ class AiTerminalTuneProfileCommand(sublime_plugin.WindowCommand):
             # exists to avoid.
             sublime.set_timeout(_finish, 150)
 
-        # Off the main thread: pty.kill()'s pipe teardown shouldn't block
-        # Sublime's UI thread, same reasoning as Kill/Close Session.
-        threading.Thread(target=_do_respawn, daemon=True).start()
+        if getattr(pty, "aio", False):
+            # A detach is a handle close on the loop, nothing blocks: no thread.
+            _do_respawn()
+        else:
+            # Off the main thread: pty.kill()'s pipe teardown shouldn't block
+            # Sublime's UI thread, same reasoning as Kill/Close Session.
+            threading.Thread(target=_do_respawn, daemon=True).start()
         sublime.status_message(
             "Ai terminal: respawning %s -- same process, fresh tab" % profile_name
         )
