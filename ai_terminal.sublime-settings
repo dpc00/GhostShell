@@ -292,6 +292,7 @@
             "spawn_env": {}
         },
         "Claude": {
+            "status_tones": true,
             "home_end_native": false,
             "scroll_manipulation_enabled": false,
             "auto_approve_permissions": true,
