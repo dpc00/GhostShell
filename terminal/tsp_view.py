@@ -24,7 +24,9 @@ protocol side) keeps the document up to date; this class draws it:
 Needs Sublime (it uses the sublime module), so it runs inside Sublime only.
 """
 
+import base64
 import os
+import tempfile
 import re
 import time
 import urllib.parse
@@ -34,6 +36,7 @@ import webbrowser
 import sublime
 
 from . import tsp_html
+from . import tsp_draw_data
 
 PHANTOM_KEY = "tsp-native"
 VIEW_SETTINGS = (("line_numbers", False), ("gutter", False), ("highlight_line", False),
@@ -280,6 +283,26 @@ class TspView:
             path = "%s:%d:%d" % (path, line, column or 1)
         window.open_file(path, sublime.ENCODED_POSITION)
 
+    def _open_image(self, blob_id):
+        """Write a picture the program sent to a temp file with the right extension and open it in the system viewer."""
+        text = self._host.blobs.get(blob_id) if self._host is not None else None
+        info = tsp_draw_data.image_info(text) if text else None
+        if not info:
+            sublime.status_message("Image not available")
+            return
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
+               "image/svg+xml": "svg"}.get(info[0], "png")
+        folder = os.path.join(tempfile.gettempdir(), "ghostshell-images")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "%s.%s" % (str(blob_id)[:16], ext))
+        if not os.path.exists(path):
+            with open(path, "wb") as handle:
+                handle.write(base64.b64decode(text))
+        if hasattr(os, "startfile"):
+            os.startfile(path)
+        else:
+            webbrowser.open("file://" + path)
+
     def navigate(self, href):
         """A link in a panel was clicked: send the event it stands for back to the program."""
         event = tsp_html.href_event(href)
@@ -313,6 +336,9 @@ class TspView:
             sublime.status_message("Copied")
         elif local == "open":
             self._open_link(event.get("href") or "")
+        elif local == "image":
+            self._open_image(event.get("blob"))
+            self.render(self._host, self._cols)
         elif isinstance(local, str):
             return          # a local event this view does not handle (e.g. "none"): never sent to the program
         elif self._host is not None:

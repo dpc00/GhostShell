@@ -935,8 +935,25 @@ def _draw_image(node, ctx):
         bound_w = min(width_px, parsed_w) if parsed_w else width_px
         bound_h = parsed_h or _IMAGE_MAX_H
         shrink = min(1.0, bound_w / shown_w, bound_h / shown_h)
+        key = "image:%s" % node.get("id")
+        step = ctx.local.get(key, 0) if isinstance(getattr(ctx, "local", None), dict) else 0
+        wide_px = max(width_px, (ctx.cols - 8) * _cell_px(ctx))      # enlarged: the whole view width, not the indented card's share
+        enlarged = min(1.0, wide_px / natural_w) / scale
+        step = 1 if step == 1 and enlarged > shrink * 1.02 else 0      # enlarging that changes nothing is skipped
+        if step:       # clicked once: natural size, at most the pane width
+            shrink = enlarged
+        factor = scale * shrink
         picture = '<img src="data:%s;base64,%s" width="%d" height="%d">' % (
-            mime, blob, max(1, int(shown_w * shrink)), max(1, int(shown_h * shrink)))
+            mime, blob, max(1, int(natural_w * factor)), max(1, int(natural_h * factor)))
+        if ctx.surface_id is not None:
+            if step or enlarged <= shrink * 1.02:    # already as big as the pane allows: open the full-size picture, back to small
+                event = {"local": "image", "blob": blob_id, "also": {"local": "set", "key": key, "value": 0}}
+                title = "click to open full size"
+            else:
+                event = {"local": "set", "key": key, "value": 1}
+                title = "click to enlarge"
+            picture = '<a href="%s" title="%s" style="text-decoration: none">%s</a>' % (
+                tsp_html.event_href(event), title, picture)
     if over:
         return "<div><div>%s</div>%s</div>" % (picture, over)
     return "<span>%s</span>" % picture
