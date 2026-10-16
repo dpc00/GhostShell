@@ -75,6 +75,14 @@ _INVALID_HANDLE_VALUE = HANDLE(-1).value
 _REPLAY_END = b"\x1b]777;GhostShellReplayEnd\x07"
 
 
+def _resize_marker(cols, rows):
+    """A private OSC written into the saved output (never sent to a live client) each time the pseudoconsole's
+    size changes, and once at the start. The saved bytes mix screen draws made at different widths; a client
+    replaying them at one fixed width laid the later repaints on the wrong rows (a repeated banner, overwritten
+    text). With these markers the client resizes its screen at the same points, as a live tab did."""
+    return b"\x1b]777;GhostShellResize;%d;%d\x07" % (cols, rows)
+
+
 # Win32 COORD (wincon.h): a column/row cell size, used here only for the
 # ConPTY's (cols, rows) argument to CreatePseudoConsole/ResizePseudoConsole.
 class _COORD(Structure):
@@ -302,6 +310,7 @@ class _Pty:
             self._conpty_folder = self._env.pop(conpty_api.CONPTY_FOLDER_ENV_VAR) or ""
         self._cols = cols
         self._rows = rows
+        self.on_resize = None      # called with (cols, rows) after the pseudoconsole accepted a changed size
         # Event-loop state, created by attach().
         self._read_transport = None
         self._on_data = None
@@ -537,7 +546,13 @@ class _Pty:
                 % (cols, rows, hr & 0xFFFFFFFF)
             )
             return False
+        changed = (cols, rows) != (self._cols, self._rows)
         self._cols, self._rows = cols, rows
+        if changed and self.on_resize is not None:
+            try:
+                self.on_resize(cols, rows)
+            except OSError:
+                print("[agent_broker] resize marker write failed:\n%s" % traceback.format_exc())
         return True
 
     def is_alive(self):
@@ -1216,6 +1231,9 @@ async def _run(args, child_argv, launch_env):
         args.scrollback_bytes,
         path=_scrollback_path_for_registry(args.registry_file),
     )
+    # The saved output starts with the size it is drawn at, and gets a marker at every later resize.
+    scrollback.append(_resize_marker(pty._cols, pty._rows))
+    pty.on_resize = lambda cols, rows: scrollback.append(_resize_marker(cols, rows))
     out_server = _OutputServer(args.pipe_name, pty, scrollback)
     in_server = _InputServer(
         args.pipe_name, pty, on_disconnect=out_server.disconnect_client

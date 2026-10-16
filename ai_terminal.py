@@ -562,6 +562,9 @@ _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _BROKER_REPLAY_END = b"\x1b]777;GhostShellReplayEnd\x07"
 _BROKER_REPLAY_IDLE_S = 0.15
+# The broker writes this into its saved output at its start and at every pseudoconsole resize (see
+# agent_broker._resize_marker); the replay applies each size to the tab's parser at the same point.
+_BROKER_RESIZE_PREFIX = b"\x1b]777;GhostShellResize;"
 
 
 def _broker_registry_dir():
@@ -1244,6 +1247,8 @@ class _BrokerPty(_BrokerPtyBase):
         self._pending_output = []
         self._on_data = None
         self._on_replay_complete = None
+        self._on_replay_resize = None
+        self._rz_carry = b""        # the start of a resize marker that a chunk boundary cut in two
         self._on_finished = None
         self._marker_tail = bytearray()
         self._replay_done = False
@@ -1330,11 +1335,13 @@ class _BrokerPty(_BrokerPtyBase):
 
     # ----- output -------------------------------------------------------------------
 
-    def attach_reader(self, on_data, on_replay_complete=None, on_finished=None):
+    def attach_reader(self, on_data, on_replay_complete=None, on_finished=None, on_replay_resize=None):
         """Start delivering output (first whatever arrived since astart) to on_data; on_replay_complete fires once
-        at the end of the broker's replay; on_finished(error) once when the pipe ends."""
+        at the end of the broker's replay; on_finished(error) once when the pipe ends; on_replay_resize(cols, rows)
+        for each size the broker recorded in its replay (None drops them)."""
         self._on_data = on_data
         self._on_replay_complete = on_replay_complete or (lambda: None)
+        self._on_replay_resize = on_replay_resize
         self._on_finished = on_finished or (lambda error: None)
         pending, self._pending_output = self._pending_output, []
         for data in pending:
@@ -1372,8 +1379,9 @@ class _BrokerPty(_BrokerPtyBase):
         if self._replay_done:
             return
         if flush_tail and self._marker_tail:
-            self._on_data(bytes(self._marker_tail))
+            self._replay_feed(bytes(self._marker_tail))
             self._marker_tail.clear()
+        self._replay_flush()
         self._replay_done = True
         self._idle_generation += 1      # an armed idle boundary is now stale
         self._on_replay_complete()
@@ -1403,16 +1411,59 @@ class _BrokerPty(_BrokerPtyBase):
             after = bytes(tail[marker_at + len(_BROKER_REPLAY_END):])
             tail.clear()
             if before:
-                self._on_data(before)
+                self._replay_feed(before)
             self._finish_replay(flush_tail=False)
             if after:
                 self._on_data(after)
             return
         safe = len(tail) - len(_BROKER_REPLAY_END) + 1
         if safe > 0:
-            self._on_data(bytes(tail[:safe]))
+            self._replay_feed(bytes(tail[:safe]))
             del tail[:safe]
         self._arm_idle_boundary()
+
+    def _replay_feed(self, data):
+        """Hand replayed output to the tab, applying the broker's resize markers (_BROKER_RESIZE_PREFIX) at the
+        points where they were written, so the screen is laid out at each width the bytes were drawn at. A marker
+        that a chunk boundary cut in two waits in _rz_carry."""
+        buf = self._rz_carry + data
+        self._rz_carry = b""
+        prefix = _BROKER_RESIZE_PREFIX
+        pos = 0
+        while True:
+            i = buf.find(prefix, pos)
+            if i < 0:
+                break
+            j = buf.find(b"\x07", i)
+            if j < 0:
+                if len(buf) - i < 64:       # the marker is still arriving
+                    if i > pos:
+                        self._on_data(buf[pos:i])
+                    self._rz_carry = buf[i:]
+                    return
+                break                        # too long to be a marker: ordinary bytes
+            if i > pos:
+                self._on_data(buf[pos:i])
+            try:
+                cols, rows = (int(part) for part in buf[i + len(prefix):j].split(b";"))
+            except ValueError:
+                cols = rows = 0
+            if cols > 0 and rows > 0 and self._on_replay_resize is not None:
+                self._on_replay_resize(cols, rows)
+            pos = j + 1
+        end = len(buf)
+        for keep in range(min(len(prefix) - 1, end - pos), 0, -1):
+            if buf.endswith(prefix[:keep]):     # the start of a marker cut by the end of this chunk
+                self._rz_carry = buf[end - keep:]
+                end -= keep
+                break
+        if end > pos:
+            self._on_data(buf[pos:end])
+
+    def _replay_flush(self):
+        carry, self._rz_carry = self._rz_carry, b""
+        if carry:
+            self._on_data(carry)
 
     # ----- input and control ----------------------------------------------------------
 
@@ -4008,6 +4059,7 @@ class _Terminal:
                 self._on_data,
                 self._on_broker_replay_complete if self._reattach_bootstrap else None,
                 self._reader_finished,
+                self._on_replay_resize if self._reattach_bootstrap else None,
             )
             return
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -4293,6 +4345,25 @@ class _Terminal:
             self._cast("o", text)
         _schedule_render(self)
 
+    def _apply_parser_size(self, cols, rows):
+        """Resize only this tab's parser/screen (the child's pseudoconsole is left alone). Caller holds _lock."""
+        if hasattr(self.parser, "resize"):
+            self.parser.resize(cols, rows)
+        else:
+            self.screen.resize(cols, rows)
+
+    def _on_replay_resize(self, cols, rows):
+        """The broker's saved output was drawn at this size from here on: lay the replay out at it, as the live
+        tab did at the time (the tab's real size is put back when the replay ends)."""
+        with self._lock:
+            if not self._reattach_bootstrap:
+                return
+            try:
+                self._apply_parser_size(cols, rows)
+                self._replay_resized = True
+            except Exception:
+                print("[ai_terminal] replay resize to %sx%s failed:\n%s" % (cols, rows, traceback.format_exc()))
+
     def _on_broker_replay_complete(self):
         """Publish native grid and history after broker replay.
 
@@ -4303,6 +4374,14 @@ class _Terminal:
         with self._lock:
             if not self._reattach_bootstrap:
                 return
+            if getattr(self, "_replay_resized", False):
+                self._replay_resized = False
+                try:
+                    self._apply_parser_size(
+                        self._last_cols, getattr(self, "_last_rows", None) or self.screen.rows
+                    )
+                except Exception:
+                    print("[ai_terminal] restoring the tab size after replay failed:\n%s" % traceback.format_exc())
             if getattr(self, "_bootstrap_got_bytes", False):
                 self.parser.finish_bootstrap()
             else:
@@ -10614,17 +10693,30 @@ class AiTerminalRecoverSessionCommand(sublime_plugin.WindowCommand):
                 return False
             view = getattr(term, "view", None)
             try:
-                return bool(view and view.is_valid() and view.window())
+                if not (view and view.is_valid() and view.window()):
+                    return False
+                # An open tab whose connection to the session has died (a failed replay, a lost pipe) is exactly
+                # what this command repairs, so it must be listed (found 2026-10-15: such a tab was left out
+                # because it still had a view, while List Sessions showed it). Only a tab with a live client
+                # needs nothing.
+                pty = getattr(term, "pty", None)
+                return bool(pty is not None and pty.is_alive())
             except (RuntimeError, AttributeError):
                 print("[ai_terminal] recover session: view usability check failed:\n%s"
                       % traceback.format_exc())
                 return False
 
-        terms_by_pipe = {
-            getattr(getattr(term, "pty", None), "pipe_name", None): term
-            for term in terms
-            if getattr(getattr(term, "pty", None), "pipe_name", None)
-        }
+        # Several terminal objects can exist for one session (the registered one, plus old ones kept alive by the
+        # garbage-collector scan after a plugin reload): prefer the one whose connection is alive, so a healthy
+        # tab is never mistaken for a broken one.
+        terms_by_pipe = {}
+        for term in terms:
+            pipe = getattr(getattr(term, "pty", None), "pipe_name", None)
+            if not pipe:
+                continue
+            kept = terms_by_pipe.get(pipe)
+            if kept is None or (not _has_usable_view(kept) and _has_usable_view(term)):
+                terms_by_pipe[pipe] = term
         sessions = []
         seen_pipes = set()
         for broker in brokers:
