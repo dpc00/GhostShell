@@ -2633,7 +2633,19 @@ def _read_profiles_layer(resource_path):
     """The "profiles" dict from ONE settings file, read on its own so Sublime's
     one-level merge cannot hide the other layer. {} if missing or malformed."""
     try:
-        data = sublime.decode_value(sublime.load_resource(resource_path))
+        # A loose file is read straight from disk: load_resource can return the
+        # old text for a moment after the file changed, which left the toolbar,
+        # the tuner panel and the tone/approve checks on a stale value.
+        text = None
+        parts = resource_path.split("/", 2)
+        if len(parts) == 3 and parts[0] == "Packages":
+            loose = os.path.join(sublime.packages_path(), parts[1], parts[2])
+            if os.path.isfile(loose):
+                with open(loose, encoding="utf-8") as handle:
+                    text = handle.read()
+        if text is None:
+            text = sublime.load_resource(resource_path)
+        data = sublime.decode_value(text)
     except Exception:
         return {}
     profiles = data.get("profiles") if isinstance(data, dict) else None
@@ -3725,6 +3737,10 @@ def _on_settings_change():
             msg = f"ERROR: _on_settings_change failed on terminal {t}: {e}\n{traceback.format_exc()}"
             print(f"[ai_terminal] {msg}")
             _settings_debug_log(msg)
+        try:
+            _add_close_toolbar(t)   # the toolbar's Settings panel shows the new values
+        except Exception:
+            print("[ai_terminal] toolbar refresh failed:\n%s" % traceback.format_exc())
     _settings_debug_log("<<< _on_settings_change FINISHED")
 
 
