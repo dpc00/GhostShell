@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.2.12
+
+**Changed:** Respawn (the Tune Profile settings that need a fresh tab, such as font face and size) no longer starts a worker thread for a detachable tab. Detaching from the broker is now a handle close on the event loop and does not block, so the thread was left over from before the one-thread rework; Relaunch and tab close already skipped it. The fresh tab still attaches to the same running session. Tabs of a profile with `detachable` off keep the thread. Nothing changes for the user.
+
+- Tested on Windows 11 with the installed Sublime Text (build 4215, Python 3.14) after a full restart, on a throwaway tab: Respawn started no thread (13 threads before and after), the fresh tab was attached to the same broker pipe, showed the earlier output and accepted typing, and End Session removed the tab and its broker.
+- Not tested on a build with Python 3.8 (build 4200 and earlier) before release, by the owner's decision. The change calls the same `kill()` that closing a tab already calls on the main thread, and creates no asyncio objects.
+
+
 ## 0.2.11
 
 **Fixed:** the toolbar's Settings panel could show a profile setting as off when it was on (or the reverse), and a second click then flipped it back. GhostShell read its settings files through Sublime's resource reader, which can return the old text for a moment after a file changes. Loose settings files are now read straight from disk, and a toggle pins its new value.
