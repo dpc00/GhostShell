@@ -7,6 +7,42 @@ depending on another terminal package.
 
 ![12 AI coding CLIs running in GhostShell terminal tabs](docs/screenshots/supported-clis.png)
 
+## What GhostShell does now
+
+Releases 0.2.0 to 0.2.12 added the following. The full list, with the reason for
+each change, is in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+
+- **Tern Surface Protocol (TSP): a native view for omp.** omp 18.4.4 and newer
+  describe their screen as components (cards, lists, markdown, forms, images,
+  command blocks, style sheets) instead of rows of characters. GhostShell answers
+  omp's probe and draws that description in the Sublime tab, so omp does not
+  repaint on resize and its transcript stays live. It is on in the shipped `omp`
+  profile (`tsp_enabled`) and opt-in for other profiles. Related settings:
+  `tsp_aside_column` (open omp's settings sheet in a column of its own),
+  `tsp_tab_status` and `tsp_tab_prefix` (run state and session name in the tab
+  label, see [The omp tab label](#the-omp-tab-label)) and `tsp_animation_ms`.
+  Tested only with omp 18.11.0. Much fuller support arrived in 0.2.6; the design
+  notes are in section 15 of
+  [docs/DEVIATIONS_FROM_TERMINUS.md](docs/DEVIATIONS_FROM_TERMINUS.md).
+- **One thread.** Since 0.2.7 the broker and the Sublime client run on a single
+  asyncio loop instead of reader and writer threads (0.2.8 fixed it on Python 3.8).
+  Respawning a broker tab no longer needs a worker thread (0.2.12).
+- **Detachable sessions that survive.** Closing a tab with Ctrl+W detaches the
+  session and keeps it running (0.2.10); use **End Session** to stop it. Each
+  Sublime keeps its own session registry (0.2.9), so a portable and an installed
+  Sublime no longer see each other's sessions; `broker_registry_dir` overrides
+  the location. **Sessions > List Sessions** shows what is running.
+- **Windows Terminal handoff.** **Move to Windows Terminal** hands a session to
+  Windows Terminal (also when the tab is too small, 0.2.7), and **Recover
+  Session** takes it back, even while it is busy there (0.2.10). The replay
+  records terminal width, so the recovered screen is drawn at the right size.
+- **Newer ConPTY, status reports, tones and auto-approve** for Claude Code and omp
+  (see [below](#newer-conpty-status-reports-tones-and-auto-approve)).
+- **Settings toolbar** in the tab: profile settings are read from disk when you
+  change them and the toolbar redraws (0.2.11).
+- **Agents and Shells submenus** under the Ai Terminal menu, and `log_root` for
+  where logs go. All usage and quota features were removed in 0.2.0.
+
 ## Requirements
 
 - **Sublime Text 4, build 4107 or newer, on Windows x64.** The plugin selects
@@ -223,7 +259,9 @@ commit `52e2282`).
 Repository layout:
 
 - `ai_terminal.py`: Sublime adapter, ConPTY, views, commands, and settings.
-- `terminal/`: renderer, VT bindings, profiles, history, usage, and logging.
+- `terminal/`: renderer, VT bindings, profiles, history, logging, the Tern Surface
+  Protocol host and view (`tsp_*.py`), the asyncio loop (`aio_loop.py`), and the
+  newer ConPTY files (`bin/conpty`).
 - `tools/`: runtime broker/relay scripts and development utilities. The broker
   scripts must remain in release archives.
 - `docs/`: user documentation and screenshots.

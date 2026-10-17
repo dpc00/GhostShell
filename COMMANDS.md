@@ -23,7 +23,14 @@ Keep customizations in the User file so package updates do not overwrite them.
 | `AiTerminalSetWorkingDirectoryCommand` | `ai_terminal_set_working_directory` | WindowCommand | "Ai Terminal: Set Working Directory" | Tools > Ai Terminal > Set Working Directory; Side Bar: "Set Ai Terminal Working Directory" | — |
 | `AiTerminalClearWorkingDirectoryCommand` | `ai_terminal_clear_working_directory` | WindowCommand | "Ai Terminal: Clear Working Directory" | Tools > Ai Terminal > Clear Working Directory; Side Bar: "Clear Ai Terminal Working Directory" | — |
 | `AiTerminalRecoverSessionCommand` | `ai_terminal_recover_session` | WindowCommand | "Ai Terminal: Recover Session..." | — | — |
-| `AiTerminalOpenInWindowsTerminalCommand` | `ai_terminal_open_in_windows_terminal` | TextCommand | "Ai Terminal: Open in Windows Terminal" | — | — |
+| `AiTerminalOpenInWindowsTerminalCommand` | `ai_terminal_open_in_windows_terminal` | TextCommand | "Ai Terminal: Open in Windows Terminal" (the release notes call it "Move to Windows Terminal") | — | — |
+| `AiTerminalListSessionsCommand` | `ai_terminal_list_sessions` | WindowCommand | "Ai Terminal: List Sessions…" | Tools > Ai Terminal > Sessions > List Sessions… | — |
+| `AiTerminalDetachAllToWindowsTerminalCommand` | `ai_terminal_detach_all_to_windows_terminal` | WindowCommand | "Ai Terminal: Detach All to Windows Terminal (before risky plugin edits)" | Tools > Ai Terminal > Sessions > Detach All to Windows Terminal | — |
+| `AiTerminalReattachAllFromWindowsTerminalCommand` | `ai_terminal_reattach_all_from_windows_terminal` | WindowCommand | "Ai Terminal: Reattach All from Windows Terminal" | Tools > Ai Terminal > Sessions > Reattach All from Windows Terminal | — |
+| `AiTerminalTuneProfileCommand` | `ai_terminal_tune_profile` | WindowCommand | "Ai Terminal: Tune Profile…" | Tab Context.sublime-menu: "Tune Profile Settings…" | — |
+| `AiTerminalToggleCopyModeCommand` | `ai_terminal_toggle_copy_mode` | TextCommand | "Ai Terminal: Toggle Text Edit Mode (keys and mouse to Sublime)" | Tools > Ai Terminal > Toggle Text Edit Mode | `ctrl+alt+c` (context: `setting.ai_terminal_view`) |
+| `AiTerminalSwitchPanelCommand` | `ai_terminal_switch_panel` | WindowCommand | "Ai Terminal: Switch Panel..." | — | — |
+| `AiTerminalTogglePanelCommand` | `ai_terminal_toggle_panel` | TextCommand | "Ai Terminal: Toggle Tab ⇄ Panel" | — | `ctrl+alt+m` (context: `setting.ai_terminal_view`) |
 | `AiTerminalKillSessionCommand` | `ai_terminal_kill_session` | WindowCommand | "Ai Terminal: Kill Session (Keep Tab Open)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalCloseKeepAliveCommand` | `ai_terminal_close_keep_alive` | WindowCommand | "Ai Terminal: Close Tab (Keep Session Alive)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
 | `AiTerminalEndSessionCommand` | `ai_terminal_end_session` | WindowCommand | "Ai Terminal: End Session (Kill + Close)" | Tab Context.sublime-menu > "Ai Terminal: Session" submenu (`{"group": -1, "index": -1}`, see above) | — |
@@ -43,7 +50,11 @@ so the "why isn't this in a menu" question has one place to be answered.
 | `AiTerminalSendStringWindowCommand` | `ai_terminal_send_string_window` | WindowCommand | Same, but resolves the target terminal view within the window without it needing focus |
 | `AiTerminalRenderCommand` | `ai_terminal_render` | TextCommand | `ai_terminal.py`'s own PTY-output loop (`view.run_command("ai_terminal_render", ...)`) on every screen update |
 | `AiTerminalNoopCommand` | `ai_terminal_noop` | TextCommand | `AiTerminalKeyInterceptor.on_text_command` returns this to swallow a command it intercepted (e.g. blocking a default ST binding while a terminal view is focused) |
-| `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | Meant for a `.sublime-mousemap`; no mousemap ships in this package, so it's currently inert until a user adds one |
+| `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | `Default.sublime-mousemap`: mouse wheel up/down in terminal views (see "Mouse" below) |
+| `AiTerminalNativeClickCommand` | `ai_terminal_native_click` | TextCommand | `Default.sublime-mousemap`: left press (single, double, triple) on a Tern Surface Protocol native view (`setting.ai_tsp_native`); it does nothing, so Sublime's own press handler cannot move the caret and scroll the view (the panels are phantoms with their own links) |
+| `AiTerminalToggleTuneProfilePanelCommand` / `AiTerminalTuneProfileSetCommand` | `ai_terminal_toggle_tune_profile_panel` / `ai_terminal_tune_profile_set` | TextCommand | The settings toolbar's links in the tab, and **Tune Profile** |
+| `AiTerminalQueueInputCommand` / `AiTerminalQueueInputToCommand` | `ai_terminal_queue_input` / `ai_terminal_queue_input_to` | WindowCommand | Programmatic: queue a string to land in the terminal once the session has been idle for a few seconds (the second form addresses a tab by name or index) |
+| `AiTerminalNoopWindowCommand` | `ai_terminal_noop_window` | WindowCommand | Sink used when a terminal consumes the native tab-close command |
 | `AiTerminalDumpScreenCommand` | `ai_terminal_dump_screen` | TextCommand | Manual invocation from the console (`view.run_command("ai_terminal_dump_screen")`) for debugging; prints the screen grid/cursor to the ST console |
 
 ## Listeners (not commands — no ST command name, nothing to bind)
@@ -52,6 +63,12 @@ so the "why isn't this in a menu" question has one place to be answered.
 |---|---|---|
 | `AiTerminalViewListener` | `ViewEventListener` | Per-view lifecycle (activation, modification, resize) for views with `ai_terminal_view` set; scoped via `is_applicable` |
 | `AiTerminalKeyInterceptor` | `EventListener` | `on_text_command`: redirects clipboard/mouse commands to the PTY when the focused view is a terminal and the app enabled DEC mouse tracking |
+| `AiTerminalWindowCloseListener` | `EventListener` | Marks detachable-broker views so the tab-close interceptor can tell a window closing from a deliberate single-tab close |
+| `AiTerminalTabCloseInterceptor` | `EventListener` | `on_window_command`: handles closing a terminal tab (plain Ctrl+W detaches a detachable session and keeps it running, 0.2.10; **End Session** stops it) |
+
+## Mouse
+
+`Default.sublime-mousemap` ships: drag-select by words and lines, `ai_terminal_native_click` on native (Tern Surface Protocol) views, and wheel scrolling through `ai_terminal_trackpad_scroll` while a program has not asked for the wheel (`ai_terminal_wheel_to_pty`).
 
 ## Non-command config surfaces
 

@@ -903,7 +903,11 @@ wrote only that profile's key to `Packages/User`; with the dev switch on, a togg
 `Ori omp` profile and left `Packages/User` without a `profiles` block. The `_deep_merge` rules were also checked on sample data
 outside Sublime.
 
-## 15. Tern Surface Protocol (TSP) host support (2026-10-01, IN PROGRESS: modules written, not wired in)
+## 15. Tern Surface Protocol (TSP) host support (started 2026-10-01; shipped, on in the `omp` profile since 0.2.0)
+
+**Status (2026-10-16).** This section is the 2026-10-01 working log and is kept as the record of what was measured then. The "not wired in" and "not done" lines below are
+history: the host, the native view, clicks, animation and the newer ConPTY are wired in and shipped (see `docs/RELEASE_NOTES.md`, 0.2.0 and 0.2.6 to 0.2.12). Later facts, such as
+the NuGet download of the newer ConPTY instead of a machine-specific folder, are in the README and the release notes. Tested with omp 18.11.0.
 
 **Terminus.** Does not do this (no reference). A difference is listed here because the owner asked for it (2026-10-01).
 

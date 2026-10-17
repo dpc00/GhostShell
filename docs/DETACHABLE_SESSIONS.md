@@ -19,12 +19,19 @@ reconnects to them.
   one client at a time and retains a bounded raw-output replay buffer. It is
   a single-threaded asyncio program (Proactor loop): the ConPTY pipes, the
   three named-pipe servers and the child-exit wait all run on that one loop.
-  The Sublime-side client (`_BrokerPty`) still uses reader/writer threads;
-  where this document says "reader thread" below, it means that client.
+  Since 0.2.7 the Sublime-side client (`_BrokerPty`) runs on one asyncio loop
+  too (`terminal/aio_loop.py`), with no reader/writer threads. Where this
+  document below says "reader thread" or `CancelIoEx`, it describes the
+  pre-0.2.7 design: the false-exit problem it explains is the reason for
+  `_expected_termination_reason`, which is still used.
 - `tools/spawn_outside_job.ps1` starts the broker independently of Sublime's
   process job. It uses a short-lived interactive Windows Scheduled Task.
 - A JSON record under the broker registry directory identifies each live
   broker by pipe name, PID, profile, working directory, and child command.
+  Since 0.2.9 each Sublime keeps its own registry at
+  `<Sublime data folder>\Local\GhostShell\broker_sessions`, so a portable and an
+  installed Sublime do not see each other's sessions. The setting
+  `broker_registry_dir` overrides the location.
 
 The temporary scheduled task is only a launch trampoline. Broker options,
 child arguments, and the environment are written to a randomized, one-use
@@ -129,8 +136,8 @@ the broker) until you close the WT window. Sublime -> WT -> Sublime,
 same broker PID throughout, was proven live on 2026-09-02 -- against the
 version of this fix that (incorrectly, since corrected) auto-closed the
 handed-off tab rather than freezing it; the "tab stays open" behavior
-itself is source-verified (`tests/test_broker_recovery.py`) but not yet
-re-confirmed live since.
+itself was source-verified (by a unit test deleted on 2026-09-21; it remains in
+git history) but not re-confirmed live since.
 
 Deliberate control over "kill vs. detach" x "keep tab vs. lose tab" is also
 available directly, grouped under the "Ai Terminal: Session" submenu in
@@ -146,12 +153,13 @@ plus a read-only fourth:
 - `Close Tab (Keep Session Alive)` is the mirror image: closes the tab,
   agent keeps running in the background, recoverable later the same way a
   WT hand-off is.
-- `End Session (Kill + Close)` does both together, in one action -- the
-  same combination a plain tab close already does, just explicit and
-  reachable without needing to physically close the tab.
+- `End Session (Kill + Close)` does both together, in one action. Since
+  0.2.10 this is no longer what a plain tab close (Ctrl+W) does: that
+  detaches the session and keeps it running, like Close Tab (Keep Session
+  Alive). End Session is the way to stop one.
 - `Session Info...` reports inline in the existing terminal tab. It does not
   open a separate scratch tab or dialog, send input to the child, or change
-  the session lifecycle. The report shows the profile, usage/quota label,
+  the session lifecycle. The report shows the profile,
   running/frozen status, last output time, working directory, and child
   command when available. The child command comes from the local broker
   registry and may be absent after the broker exits. The earlier scratch-tab
@@ -229,11 +237,13 @@ tab) so the broker detaches, then run
 `python tools/recover_console.py --pipe-name <name>` (or `--list` to find
 it). This is the same relay the in-app command launches through WT.
 
-A deliberate single-tab close ends that tab's underlying detachable session
--- unless something already told it not to (a WT hand-off, Kill Session, or
-Close Tab (Keep Session Alive), all above). Closing a Sublime window is
-treated differently: GhostShell detaches its local client so restored tabs
-can reconnect later.
+Since 0.2.10 a plain single-tab close (Ctrl+W) detaches the tab's session and
+leaves it running; use End Session (Kill + Close) to stop it. Closing a Sublime
+window also detaches the local client so restored tabs can reconnect later.
+
+**Recover Session from Windows Terminal (0.2.10).** Recover Session can take a
+session back even while it is still busy in Windows Terminal. The replay holds
+width records, so the recovered screen is redrawn at the width it was written at.
 
 Recovery is not persistence across Windows restart, sign-out, child-agent
 exit, or an explicit session end. A broker can only restore output still held
