@@ -46,8 +46,8 @@ so the "why isn't this in a menu" question has one place to be answered.
 
 | Class | ST command | Type | Invoked from |
 |---|---|---|---|
-| `AiTerminalSendStringCommand` | `ai_terminal_send_string` | TextCommand | Programmatic API (terminus_send_string equivalent) for other plugins/scripts to inject text into a terminal view |
-| `AiTerminalSendStringWindowCommand` | `ai_terminal_send_string_window` | WindowCommand | Same, but resolves the target terminal view within the window without it needing focus |
+| `AiTerminalSendStringCommand` | `ai_terminal_send_string` | TextCommand | Programmatic API (terminus_send_string equivalent) for other plugins/scripts to inject text into a terminal view. A trailing Enter (`\r`, `\n` or `\r\n`) is written on its own `submit_enter_delay_ms` after the text, so Claude Code submits it instead of taking text plus Enter as a paste |
+| `AiTerminalSendStringWindowCommand` | `ai_terminal_send_string_window` | WindowCommand | Same, but resolves the target terminal view within the window without it needing focus; same trailing-Enter handling |
 | `AiTerminalRenderCommand` | `ai_terminal_render` | TextCommand | `ai_terminal.py`'s own PTY-output loop (`view.run_command("ai_terminal_render", ...)`) on every screen update |
 | `AiTerminalNoopCommand` | `ai_terminal_noop` | TextCommand | `AiTerminalKeyInterceptor.on_text_command` returns this to swallow a command it intercepted (e.g. blocking a default ST binding while a terminal view is focused) |
 | `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | `Default.sublime-mousemap`: mouse wheel up/down in terminal views (see "Mouse" below) |

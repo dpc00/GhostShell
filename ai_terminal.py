@@ -4164,7 +4164,11 @@ class _Terminal:
             item = await self._write_queue.get()
             if item is None:
                 return
-            text, record = item
+            text, record = item[0], item[1]
+            if len(item) > 2 and item[2] > 0:
+                # A delayed item (see send_string delay_s): wait after the PREVIOUS write, so
+                # this one reaches the program as its own read, not glued to the last chunk.
+                await asyncio.sleep(item[2])
             try:
                 await self.pty.awrite(text.encode("utf-8", errors="replace"))
             except Exception as e:
@@ -4185,7 +4189,9 @@ class _Terminal:
             item = self._write_queue.get()
             if item is None:
                 return
-            text, record = item
+            text, record = item[0], item[1]
+            if len(item) > 2 and item[2] > 0:
+                time.sleep(item[2])     # see send_string delay_s; this is the writer thread, not Sublime's
             try:
                 # Deliver input before touching the optional recorder.  A slow
                 # file flush or contention with the output recorder must never
@@ -4414,15 +4420,45 @@ class _Terminal:
                 print("[ai_terminal] TSP resync request failed:\n%s" % traceback.format_exc())
         _schedule_render(self)
 
-    def send_string(self, s, record=True):
+    def send_string(self, s, record=True, delay_s=0.0):
         # A key command must do no I/O and acquire no recording locks on
         # Sublime's main plugin thread.  The ordered writer records and writes
         # this text in sequence. record=False for text nobody actually typed
         # (see _on_parser_write_pty) -- it still gets written to the pty, just
         # not logged as an input event.
+        # delay_s > 0: the writer waits that long after the previous write before writing
+        # this one, so it arrives as its own read (see send_text_submit).
         if record:
             self._last_typed = time.monotonic()  # auto approve waits for a pause in typing
-        self._write_queue.put((s, record))
+        self._write_queue.put((s, record, delay_s) if delay_s > 0 else (s, record))
+
+    def send_text_submit(self, text):
+        """Send text the way a person types it: a trailing Enter (CR, LF or CRLF) is
+        written separately, after a short gap, never in the same write as the text.
+
+        Why (found 2026-10-17, reproduced on the Claude Code prompt): Claude Code treats
+        a burst of text as a paste, and an Enter that arrives in the same read, or within
+        about 100 ms after it, is taken as part of the paste (a line break), not as
+        "submit". Text of 60 characters or fewer still submitted; 120 or more stayed in
+        the input box unless the Enter was a separate write at least 20 ms later
+        (tested at 20, 50, 100, 150 and 200 ms with 250 and 1500 characters).
+        The gap is the setting submit_enter_delay_ms.
+
+        Only a trailing Enter is split off; Enters inside the text are sent as written.
+        """
+        for tail in ("\r\n", "\r", "\n"):
+            if text.endswith(tail):
+                body = text[:-len(tail)]
+                break
+        else:
+            self.send_string(text)
+            return
+        if not body:
+            self.send_string("\r")
+            return
+        self.send_string(body)
+        gap_ms = _setting_number("submit_enter_delay_ms", _SUBMIT_ENTER_DELAY_MS)
+        self.send_string("\r", delay_s=max(0, gap_ms) / 1000.0)
 
     def queue_input(self, text, add_newline=True):
         """Queue text to be written via send_string once this session has
@@ -5469,14 +5505,13 @@ _RENDER_MIN_INTERVAL_MS = 30
 _QUEUED_INPUT_IDLE_S = 3.0
 _PENDING_INPUT_POLL_MS = 250
 
-# Gap between the queued text's own pty.write() and its trailing Enter's.
-# Must be enough real wall-clock separation that the two land as genuinely
-# separate stdin chunks/ticks on the child's side, not just two Python-level
-# calls -- see the comment at the call site (_check_pending_input) for the
-# specific Claude-Code-side race this avoids. 150ms comfortably clears
-# Claude Code's own PASTE_COMPLETION_TIMEOUT_MS (100ms, confirmed by reading
-# its usePasteHandler.ts) in case that path is ever involved too.
-_QUEUED_INPUT_ENTER_DELAY_MS = 150
+# Gap between a text write and its trailing Enter (send_text_submit; also used by
+# queue_input). Must be real wall-clock separation, so the two reach the child as
+# separate reads, not two Python calls glued together by the pipe. The Claude Code side
+# is usePasteHandler.ts: a paste and an Enter in the same read, or within its own
+# PASTE_COMPLETION_TIMEOUT_MS (100 ms), are taken as one paste. 150 ms clears that. The
+# setting submit_enter_delay_ms overrides this default.
+_SUBMIT_ENTER_DELAY_MS = 150
 
 
 def _arm_pending_input_poll(term):
@@ -5511,23 +5546,12 @@ def _check_pending_input(term):
             item = term._pending_input.pop(0)
     if item is not None:
         text, add_newline = item
-        term.send_string(text)
         if add_newline:
-            # A separate, delayed write -- not appended to text -- because
-            # a same-chunk text+Enter write reproduces a real, documented
-            # race in Claude Code's own input layer: usePasteHandler.ts
-            # (in the app, not this file) says plainly that when a paste
-            # and a following Enter arrive in the same stdin chunk, "both
-            # wrappedOnInput calls run in the same discreteUpdates batch
-            # before React commits -- the second call reads stale state...
-            # if that key is Enter, it submits the old input and the paste
-            # is lost." One pty.write() call is one chunk from the child's
-            # side; two separate calls, given real separation, are two
-            # ticks with committed state in between. Confirmed live +
-            # against that source on 2026-09-09/10, not assumed.
-            sublime.set_timeout(
-                lambda t=term: t.send_string("\r"), _QUEUED_INPUT_ENTER_DELAY_MS
-            )
+            # Text and Enter as two writes with a gap: a same-read text+Enter is the
+            # documented Claude Code race (see send_text_submit and _SUBMIT_ENTER_DELAY_MS).
+            term.send_text_submit(text + "\r")
+        else:
+            term.send_string(text)
     sublime.set_timeout(lambda: _check_pending_input(term), _PENDING_INPUT_POLL_MS)
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
@@ -8228,13 +8252,17 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
 class AiTerminalSendStringCommand(sublime_plugin.TextCommand):
     """Send an arbitrary string to the PTY (terminus_send_string equivalent).
 
+    A trailing Enter (CR, LF or CRLF) is written separately, after the setting
+    submit_enter_delay_ms, because Claude Code takes text plus Enter in one write
+    as a paste and does not submit it. See _Terminal.send_text_submit.
+
     No key/menu/palette binding; invoked programmatically.
     """
 
     def run(self, edit, string=""):
         term = _Terminal.from_id(self.view.id())
         if term:
-            term.send_string(string)
+            term.send_text_submit(string)
 
 
 class AiTerminalSendStringWindowCommand(sublime_plugin.WindowCommand):
@@ -8262,7 +8290,7 @@ class AiTerminalSendStringWindowCommand(sublime_plugin.WindowCommand):
             return
         term = _Terminal.from_id(view.id())
         if term:
-            term.send_string(string)
+            term.send_text_submit(string)
 
 
 class AiTerminalQueueInputCommand(sublime_plugin.WindowCommand):
