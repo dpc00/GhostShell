@@ -10162,6 +10162,9 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
                 term._watcher.dispose()
                 term._watcher = None
             view.erase_phantoms(_CLOSE_TOOLBAR_PHANTOM_KEY)
+            native = getattr(term, "_tsp_view", None)
+            if native is not None:      # the old session's panels (and aside) must not stay on the new session
+                native.clear()
             view.run_command("ai_terminal_nuke")
             for setting_name in (
                 _BROKER_PIPE_SETTING, _BROKER_PROFILE_SETTING, _BROKER_CWD_SETTING,

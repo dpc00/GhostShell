@@ -216,6 +216,12 @@ class TspView:
     def __init__(self, view, animation_ms=DEFAULT_ANIMATION_MS, aside=False, on_state=None):
         self.view = view
         self._on_state = on_state   # called as on_state(animated, now) after each draw; None = nobody listens
+        # A tab that gets a new session (Relaunch Agent, after `omp update`) keeps its view: the panels the old
+        # session's TspView put there are not in this PhantomSet, so nothing would ever take them down and the
+        # old conversation stayed on screen over the new one.
+        view.erase_phantoms(PHANTOM_KEY)
+        for kind in MARK_KINDS:
+            view.erase_regions(MARK_KEY + kind)
         self._phantoms = sublime.PhantomSet(view, PHANTOM_KEY)
         _phantom_sets[view.id()] = self._phantoms     # editor tools that list a view's phantoms (sublime-mcp get_view_phantoms) look here
         self._shown = None          # list of (key, html) last put on screen
