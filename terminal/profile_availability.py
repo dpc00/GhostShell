@@ -7,6 +7,14 @@ exists locally.
 
 import os
 import shutil
+import time
+
+
+# Sublime asks every menu entry for is_enabled, is_visible and description each time a menu opens, on the main
+# thread. With ~50 profiles and a ~50-entry PATH that was ~0.5 s of PATH walking per open, and far more when a PATH
+# directory is slow. An answer stays good for a few seconds: a CLI installed meanwhile shows up on the next open after.
+_CACHE_SECONDS = 15.0
+_cache = {}
 
 
 def command_exists(argv, path=None):
@@ -14,9 +22,19 @@ def command_exists(argv, path=None):
     if not isinstance(argv, (list, tuple)) or not argv or not isinstance(argv[0], str):
         return False
     executable = os.path.expandvars(os.path.expanduser(argv[0]))
+    key = (executable, path)
+    now = time.monotonic()
+    hit = _cache.get(key)
+    if hit is not None and now - hit[0] < _CACHE_SECONDS:
+        return hit[1]
     if os.path.isabs(executable) or os.path.dirname(executable):
-        return os.path.isfile(executable)
-    return shutil.which(executable, path=path) is not None
+        found = os.path.isfile(executable)
+    else:
+        found = shutil.which(executable, path=path) is not None
+    if len(_cache) > 512:
+        _cache.clear()
+    _cache[key] = (now, found)
+    return found
 
 
 def profile_is_available(name, profile, path=None):
