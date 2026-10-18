@@ -37,6 +37,15 @@ _stats = {
 # top; that shift is what we must keep in the file.
 _ALIGN_ROWS = 30
 _MIN_ALIGN_ROWS = 5
+# keep_on_replace: this many three-word runs, and this share of the old ones, gone from the new paint = the
+# document was replaced (a new session), not redrawn.
+_REPLACED_RUNS = 15
+_REPLACED_SHARE = 0.3
+
+
+def _shingles(lines):
+    words = " ".join(lines).split()
+    return {(words[i], words[i + 1], words[i + 2]) for i in range(len(words) - 2)}
 
 
 def session_text_log_stats():
@@ -71,6 +80,7 @@ class SessionTextLog:
         self._prev = []
         self._trailing_newline = True
         self._dirty = False
+        self._keep_on_replace = False
         self._lock = threading.Lock()
         self._write_timer = None
 
@@ -86,6 +96,7 @@ class SessionTextLog:
             self._prev = []
             self._trailing_newline = True
             self._dirty = False
+            self._keep_on_replace = False
             self._write_timer = None
 
     def write_line(self, text):
@@ -107,12 +118,22 @@ class SessionTextLog:
                 return
             if present == self._prev and trailing_newline == self._trailing_newline:
                 return
+            # Sticky: between two documents a plain paint of the screen can come first (omp redraws the grid while
+            # it starts the new session), and that paint must not drop the old document either.
+            self._keep_on_replace = self._keep_on_replace or keep_on_replace
             gone = _scrolled_off_count(self._prev, present)
             if gone:
                 self._kept.extend(self._prev[:gone])
-            elif (keep_on_replace and len(self._prev) >= 10 and len(present) * 2 < len(self._prev)
-                    and self._prev[:_MIN_ALIGN_ROWS] != present[:_MIN_ALIGN_ROWS]):
-                self._kept.extend(self._prev)
+            elif self._keep_on_replace and len(self._prev) >= 10:
+                # A replaced document: many old lines are gone from the new paint (a new session has the same
+                # welcome banner on top, so the top rows alone cannot tell).  A spinner or a finished tool changes
+                # a few lines; a new session removes the whole conversation.
+                # Compared as runs of three words, so a window resize (the same words wrapped differently)
+                # is not mistaken for a new document.
+                before, after = _shingles(self._prev), _shingles(present)
+                vanished = len(before - after)
+                if vanished >= _REPLACED_RUNS and vanished >= _REPLACED_SHARE * len(before):
+                    self._kept.extend(self._prev)
             self._prev = present
             self._trailing_newline = bool(trailing_newline)
             self._dirty = True
