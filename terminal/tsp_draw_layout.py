@@ -326,8 +326,9 @@ def _draw_row(node, ctx):
     if only_inline:
         style = ""
         if props.get("role") == "omp.btn":
-            # omp's buttons (Details, Deny, Approve): a small bordered chip in the button's tone
-            tone = _tone_color(ctx, props.get("tone"), "accent")
+            # omp's buttons (Details, Deny, Approve): a small bordered chip, all one colour (Deny and Approve must
+            # not look different: colour should not push the reader toward either)
+            tone = ctx.theme.color("accent")
             style = (' style="background-color: %s; color: %s; border: 1px solid %s; border-radius: 6px; '
                      'padding: 2px 10px"' % (tsp_html._hex_with_alpha(tone, 0.16), tone, tone))
         return "<div%s%s>%s</div>" % (classes, style, parts[0])
