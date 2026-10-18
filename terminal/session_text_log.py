@@ -92,8 +92,13 @@ class SessionTextLog:
         """Unused. The file is the painted tab plus lines the cap evicted."""
         return
 
-    def observe(self, lines, now=None, trailing_newline=True):
-        """Remember the tab text just painted. ``now`` is ignored."""
+    def observe(self, lines, now=None, trailing_newline=True, keep_on_replace=False):
+        """Remember the tab text just painted. ``now`` is ignored.
+
+        ``keep_on_replace``: for a program that draws a document (TSP) and replaces all of it at once (omp's
+        /new): a paint that is much shorter than the one before and does not line up with it by its top is a
+        new document, so the old one goes into the kept lines instead of being dropped (found live 2026-10-18:
+        the refusals and the whole earlier conversation were missing from the log after /new)."""
         present = ["" if line is None else str(line) for line in (lines or ())]
         with _stats_lock:
             _stats["observe_calls"] += 1
@@ -105,6 +110,9 @@ class SessionTextLog:
             gone = _scrolled_off_count(self._prev, present)
             if gone:
                 self._kept.extend(self._prev[:gone])
+            elif (keep_on_replace and len(self._prev) >= 10 and len(present) * 2 < len(self._prev)
+                    and self._prev[:_MIN_ALIGN_ROWS] != present[:_MIN_ALIGN_ROWS]):
+                self._kept.extend(self._prev)
             self._prev = present
             self._trailing_newline = bool(trailing_newline)
             self._dirty = True

@@ -5957,7 +5957,7 @@ def _log_tsp_document(term, force=False):
         if document is not None:
             lines = render_lines(document, term.screen.cols, _tsp_log_unfold(term))
             # omp's composer text carries raw SGR colour codes; a log wants the words only.
-            log.observe([re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines])
+            log.observe([re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines], keep_on_replace=True)
     except Exception:
         print("[ai_terminal] TSP text log failed:\n%s" % traceback.format_exc())
 
