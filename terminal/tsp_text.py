@@ -483,9 +483,20 @@ def _body_lines(node, width, skip=None, fold=False):
     return lines
 
 
+def _unfolded_for_log(props):
+    """True when render_lines was asked to open this node whatever its collapsed state (the session log)."""
+    unfold = getattr(_ctx, "unfold", None)
+    if not unfold:
+        return False
+    if unfold is True:
+        return True
+    role = props.get("role")
+    return isinstance(role, str) and any(role.startswith(prefix) for prefix in unfold)
+
+
 def _is_folded(props):
     """A collapsible node that is collapsed (collapsed alone does nothing)."""
-    return _flag(props, "collapsible") and _flag(props, "collapsed")
+    return _flag(props, "collapsible") and _flag(props, "collapsed") and not _unfolded_for_log(props)
 
 
 def _preview_lines(value):
@@ -3060,6 +3071,15 @@ def _draw(node, width):
     return out
 
 
-def render_lines(document, width=100):
-    """The whole document as a list of text lines."""
-    return _draw(document.snapshot(), width)
+def render_lines(document, width=100, unfold=None):
+    """The whole document as a list of text lines.
+
+    ``unfold`` opens collapsed nodes as if the reader had expanded them: True for all, or a list of `role`
+    prefixes (e.g. ["omp.thinking"]). The document keeps the full content of a folded node, only the drawing
+    hides it; the session log asks for it open so nothing the program said is lost.
+    """
+    _ctx.unfold = unfold
+    try:
+        return _draw(document.snapshot(), width)
+    finally:
+        _ctx.unfold = None

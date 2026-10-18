@@ -5898,6 +5898,21 @@ def _tab_title_text(term):
     return getattr(term, "_tsp_session_name", None)
 
 
+def _tsp_log_unfold(term):
+    """The "tsp_log_unfold" setting (profile first, then global) as render_lines wants it:
+    True for every folded panel, a list of `role` prefixes, or None for none."""
+    key = "tsp_log_unfold"
+    profile = _profile_settings(term.profile_name)
+    value = profile[key] if profile is not None and key in profile else _settings_obj().get(key, ["omp.thinking"])
+    if value is True or value == "all":
+        return True
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)] or None
+    return None
+
+
 def _log_tsp_document(term, force=False):
     """Give the session text log the native view's document as plain text.
 
@@ -5923,7 +5938,9 @@ def _log_tsp_document(term, force=False):
             if document is None and force and host.documents:
                 document = list(host.documents.values())[-1]
         if document is not None:
-            log.observe(render_lines(document, term.screen.cols))
+            lines = render_lines(document, term.screen.cols, _tsp_log_unfold(term))
+            # omp's composer text carries raw SGR colour codes; a log wants the words only.
+            log.observe([re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines])
     except Exception:
         print("[ai_terminal] TSP text log failed:\n%s" % traceback.format_exc())
 

@@ -153,6 +153,12 @@
     // Off by default for a public release. Set true globally, or set
     // "log_tab_text": true on a specific profile, to opt in.
     "log_tab_text": false,
+    // For a native TSP tab (omp), which folded panels the session text log writes OPEN, whatever
+    // the tab shows. A list of panel `role` prefixes: "omp.thinking" = omp's thinking,
+    // "omp.tool" = every tool call with its output (can be large), "omp.tool.bash" = Bash only.
+    // true (or "all") = every folded panel; [] = write folded panels as their header line only,
+    // as the tab draws them. Can also be set per profile.
+    "tsp_log_unfold": ["omp.thinking"],
     // Play a short tone when a program that reports its status (Program Status
     // Protocol, OSC 7501; Claude Code does once the profile has "modern_conpty")
     // changes state: blocked (waiting for you) = two alternating notes, done =
