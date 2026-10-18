@@ -2125,7 +2125,7 @@ def _pf_control(node, row, ctx, editing, query):
     return "", ""
 
 
-def _pf_row(node, ctx, row, width, focus, editing, query):
+def _pf_row(node, ctx, row, width, focus, editing, query, below=None):
     """One settings row: label, changed dot, Reset, control, then its hint / warning / reason lines."""
     theme = ctx.theme
     row_id = row.get("id")
@@ -2168,10 +2168,13 @@ def _pf_row(node, ctx, row, width, focus, editing, query):
         if note:
             out += '<div style="color: %s; padding-left: 28px; font-size: 0.85rem">%s</div>' % (
                 theme.color(tone), _pf_mark(note, query, ctx) if tone == "dim" and note == row.get("hint") else tsp_html.esc(note))
+    if below and below["html"] and not below["used"] and row_id == below["row"]:
+        below["used"] = True        # the program's picker for this row opens right under it, where the reader clicked
+        extra += '<div style="margin-left: 20px">%s</div>' % below["html"]
     return out + extra
 
 
-def _pf_section(node, ctx, section, focus, editing, query):
+def _pf_section(node, ctx, section, focus, editing, query, below=None):
     rows = [row for row in section.get("rows") or [] if isinstance(row, dict) and row.get("id") not in (None, "")]
     parts = []
     if section.get("title"):
@@ -2181,7 +2184,7 @@ def _pf_section(node, ctx, section, focus, editing, query):
         parts.append(title)
     width = min(36, max([len(str(r.get("label") if r.get("label") not in (None, "") else r.get("id"))) for r in rows] or [0]))
     for row in rows:
-        parts.append(_pf_row(node, ctx, row, width, focus, editing, query))
+        parts.append(_pf_row(node, ctx, row, width, focus, editing, query, below))
     return "".join(parts)
 
 
@@ -2253,8 +2256,12 @@ def _draw_prefs(node, ctx):
             editors.append(child)
         else:
             extras.append(child)
-    for child in editors:
-        parts.append(tsp_html._card_shell(tsp_html.draw(child, ctx), ctx, "pageBg", "borderAccent"))
+    # A picker the program opens for a row (a long choice) goes under that row, which is the focused one; at the top
+    # of the card it opened out of sight whenever the reader had scrolled down.  With no such row on the page it stays
+    # at the top.
+    editors_html = "".join(tsp_html._card_shell(tsp_html.draw(child, ctx), ctx, "pageBg", "borderAccent") for child in editors)
+    below = {"row": focus, "html": editors_html, "used": False}
+    editors_at = len(parts)
 
     sections = [s for s in props.get("sections") or [] if isinstance(s, dict)
                 and (s.get("id") == "status-line" or any(isinstance(r, dict) and r.get("id") not in (None, "") for r in s.get("rows") or []))]
@@ -2262,7 +2269,7 @@ def _draw_prefs(node, ctx):
     def draw_sections(items):
         out = []
         for section in items:
-            out.append(_pf_section(node, ctx, section, focus, editing, query))
+            out.append(_pf_section(node, ctx, section, focus, editing, query, below))
             if section.get("id") == "status-line" and status_child is not None:
                 out.append(tsp_html.draw(status_child, ctx))
         return "".join(out)
@@ -2301,6 +2308,8 @@ def _draw_prefs(node, ctx):
             parts.append(draw_sections(sections))
         if not any(any(isinstance(r, dict) for r in s.get("rows") or []) for s in sections):
             parts.append('<div style="color: %s; padding: 6px 8px">Nothing to set here</div>' % muted)
+    if editors_html and not below["used"]:
+        parts.insert(editors_at, editors_html)
     for child in extras:
         parts.append(tsp_html.draw(child, ctx))
     return tsp_html._card_shell("".join(parts), ctx, "cardBg", "borderAccent" if focus else "border")
