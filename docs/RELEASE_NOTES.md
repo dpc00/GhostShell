@@ -1,5 +1,24 @@
 # Release notes
 
+## 0.2.14
+
+**Fixed:** the session text log (`log_tab_text`) was empty for omp. An omp tab has no screen text to scrape, only panels, so nothing was logged. The log now writes the conversation from omp's native document: messages, tool calls and results as text. Folded thinking is written open (omp folds it on screen), so the log keeps what the tab hides. The new setting `tsp_log_unfold` (default `["omp.thinking"]`; a role name, a list, or `"all"`) chooses which folded panels are written open.
+
+**Fixed:** `/new` in omp erased the earlier conversation from the text log, because the log lines each paint up with the previous one by its top rows and a new session does not line up. A replaced document is now recognised by the words that vanished (compared as runs of three words, so a resize that only re-wraps lines does not count), and the old one stays in the file above the new one.
+
+**Fixed:** Relaunch Agent left the old session's panels on screen, so a tab restarted after `omp update` showed the previous session's content. The old panels are now taken down before the restart.
+
+**Fixed:** omp's settings pages: a picker (such as Tool Calling Mode) now opens under its own row and the view stays where the reader is, instead of jumping and putting the picker at the top of the page out of sight.
+
+**Fixed:** the toolbar (Text Edit Mode, Relaunch Agent and so on) sat at the top of an omp tab, or wherever it was first added. It now hangs under the last panel and moves when the conversation grows, and it is drawn as a card in omp's palette. Following the bottom of the conversation allows for its height.
+
+**Changed:** omp's permission prompt is a card with an accent edge and a bold title, and omp's buttons (Details, Deny, Approve, Dismiss) are small outlined chips, all one colour. An error line beside buttons (the red line under a failed request) is shortened to leave room for its buttons instead of pushing them off the right edge.
+
+- Tested on Windows 11, build 4215 (Python 3.14), in the live omp tab (omp 18.12.2): toolbar position and style, the permission prompt and its buttons, and the text log across `/new` (messages ALPHA3 and GAMMA stayed in the log, followed by the new session). The first versions of the log fix failed in the same tab and were corrected before this release.
+- Tested on the portable build 4200 (Python 3.8): the text log of an omp conversation including thinking, and the Relaunch Agent fix.
+- Not seen live: the error line shortened beside its buttons (no error was on screen when it was loaded), a window resize or `/compact` during a long omp session with the text log on, and the settings picker placement after the final change.
+
+
 ## 0.2.13
 
 **Fixed:** a long omp session slowed Sublime down. The omp tab drew every entry of the transcript on every spinner tick; with 650 to 800 panels one drawing took about 220 ms on the main thread, 2.4 times a second, so keystrokes queued behind it while the session sat idle. An entry is now drawn again only when its content or the environment (width, palette, stylesheets, local state, image count, toast) changed, and one old tool call still marked running no longer makes every tick take down and rebuild every panel after it. The theme is built once per drawing instead of once per panel.
