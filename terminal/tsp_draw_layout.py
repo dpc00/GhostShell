@@ -212,9 +212,25 @@ def _row_items(node, ctx):
     A child that draws nothing is dropped, unless it is an empty stack that grows: that is the spacer
     that pushes what follows to the far end."""
     items = []
-    for child in node.get("c") or []:
+    children = node.get("c") or []
+    # A growing text that truncates (an error line beside its buttons) gets only the room the other items leave,
+    # not the whole row: drawn to the full width it pushed the buttons past the right edge.
+    fillers = [child for child in children
+               if child.get("k") == "text" and (child.get("p") or {}).get("truncate")
+               and _number((child.get("p") or {}).get("grow")) > 0]
+    early = {}
+    if fillers and len(children) > len(fillers):
+        used = 0
+        for child in children:
+            if child not in fillers:
+                early[id(child)] = tsp_html.draw(child, ctx)
+                used += tsp_html.vis_len(early[id(child)], ctx.cell_px) + 2
+        for child in fillers:
+            with _Within(ctx, used):
+                early[id(child)] = tsp_html.draw(child, ctx)
+    for child in children:
         cp = child.get("p") or {}
-        drawn = tsp_html.draw(child, ctx)
+        drawn = early[id(child)] if id(child) in early else tsp_html.draw(child, ctx)
         grow = _number(cp.get("grow"))
         if not drawn:
             if grow > 0 and child.get("k") in ("row", "col") and not cp.get("hidden"):
@@ -313,7 +329,7 @@ def _draw_row(node, ctx):
             # omp's buttons (Details, Deny, Approve): a small bordered chip in the button's tone
             tone = _tone_color(ctx, props.get("tone"), "accent")
             style = (' style="background-color: %s; color: %s; border: 1px solid %s; border-radius: 6px; '
-                     'padding: 2px 10px"' % (ctx.theme.color("selectedBg"), tone, tone))
+                     'padding: 2px 10px"' % (tsp_html._hex_with_alpha(tone, 0.16), tone, tone))
         return "<div%s%s>%s</div>" % (classes, style, parts[0])
     blocks = []
     for index, piece in enumerate(parts):

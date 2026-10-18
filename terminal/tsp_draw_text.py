@@ -669,6 +669,9 @@ def _draw_text(node, ctx):
     if role.endswith("heading"):
         return '<div%s style="color: %s; font-weight: bold; margin-top: 4px">%s</div>' % (
             title_attr, ctx.theme.color("mdHeading"), body)
+    if role == "omp.approval.title":
+        return '<div%s style="color: %s; font-weight: bold">%s</div>' % (
+            title_attr, ctx.theme.color(props.get("tone") if props.get("tone") == "accent" else "text"), body)
     if role.endswith(("version", "greeting")):
         return '<div%s style="color: %s">%s</div>' % (title_attr, ctx.theme.color("muted"), body)
     return "<div%s>%s</div>" % (title_attr, body)
