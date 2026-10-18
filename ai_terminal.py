@@ -4121,6 +4121,8 @@ class _Terminal:
         log = getattr(self, "_text_log", None)
         if log is None or log.file is None:
             return
+        if getattr(self, "_tsp_view", None) is not None:
+            _log_tsp_document(self, force=True)
         log.close()
 
     def _ensure_writer(self):
@@ -5896,6 +5898,36 @@ def _tab_title_text(term):
     return getattr(term, "_tsp_session_name", None)
 
 
+def _log_tsp_document(term, force=False):
+    """Give the session text log the native view's document as plain text.
+
+    A native TSP tab paints only blank lines with HTML panels under them, and the program prints no
+    text to the screen, so `_log_painted_tab` and the retired scrollback lines have nothing to log.
+    The conversation is in the document; render it with tsp_text and let the log keep it like a painted tab.
+    Throttled to twice a second; `force` (the tab is closing) writes the final state.
+    """
+    log = getattr(term, "_text_log", None)
+    if log is None or log.file is None:
+        return
+    now = time.monotonic()
+    if not force and now - getattr(term, "_tsp_log_at", 0.0) < 0.5:
+        return
+    term._tsp_log_at = now
+    try:
+        from .terminal.tsp_text import render_lines
+        host = term._tsp
+        document = None
+        if host is not None:
+            # At close the program's surface may be gone already: take the newest document kept.
+            document = host.documents.get(host.active_surface())
+            if document is None and force and host.documents:
+                document = list(host.documents.values())[-1]
+        if document is not None:
+            log.observe(render_lines(document, term.screen.cols))
+    except Exception:
+        print("[ai_terminal] TSP text log failed:\n%s" % traceback.format_exc())
+
+
 def _tsp_render_native(term):
     """Draw the program's TSP document as rich panels. False on any fault, which
     turns the native view off for this tab so the text repaint takes over."""
@@ -5915,6 +5947,7 @@ def _tsp_render_native(term):
                           if _profile_bool(term.profile_name, "tsp_tab_status", False) else None))
         drawn = term._tsp_view.render(term._tsp, term.screen.cols)
         term._tsp_native_failures = 0
+        _log_tsp_document(term)
         return drawn
     except Exception:
         failures = getattr(term, "_tsp_native_failures", 0) + 1
