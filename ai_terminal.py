@@ -1812,16 +1812,33 @@ def _add_close_toolbar(term):
     # cols count assumed -- minihtml's default UI font isn't monospace, and
     # the cols-based line-wrap above is only valid if characters here are the
     # same width as the terminal grid's.
-    html = (
-        '<body style="padding:2px 8px; font-family:monospace;">'
-        '<style>a{text-decoration:none;}</style>'
-        + "<br>".join(row_html)
-        + panel_html
-        + "</body>"
-    )
-    size = view.size()
-    if view.settings().get("ai_tsp_native"):
-        size = 0    # omp's native view fills the tab with panels: the toolbar hangs from the first line (above them)
+    native = bool(view.settings().get("ai_tsp_native"))
+    if native:
+        # omp's native view: a card in the same palette as its panels
+        from .terminal.tsp_html import DEFAULT_TOKENS as _tok
+        row_html = [
+            line.replace(sep, '<span style="color:%s">&nbsp;&nbsp;·&nbsp;&nbsp;</span>' % _tok["dim"])
+            for line in row_html
+        ]
+        html = (
+            '<body style="padding:0; font-family:monospace;">'
+            '<style>a{text-decoration:none; color:%s;}</style>'
+            '<div style="background-color:%s; border:1px solid %s; border-radius:8px; padding:4px 12px; margin:5px 0">'
+            % (_tok["accent"], _tok["cardBg"], _tok["borderMuted"])
+            + "<br>".join(row_html)
+            + panel_html
+            + "</div></body>"
+        )
+    else:
+        html = (
+            '<body style="padding:2px 8px; font-family:monospace;">'
+            '<style>a{text-decoration:none;}</style>'
+            + "<br>".join(row_html)
+            + panel_html
+            + "</body>"
+        )
+    size = view.size()      # always the buffer's end: the bottom of the tab
+    term._toolbar_at = size
     view.add_phantom(
         _CLOSE_TOOLBAR_PHANTOM_KEY, sublime.Region(size, size), html,
         sublime.LAYOUT_BLOCK, _on_navigate,
@@ -5965,6 +5982,8 @@ def _tsp_render_native(term):
         drawn = term._tsp_view.render(term._tsp, term.screen.cols)
         term._tsp_native_failures = 0
         _log_tsp_document(term)
+        if drawn and getattr(term, "_toolbar_at", None) != term.view.size():
+            _add_close_toolbar(term)        # the panels moved the end of the text: keep the toolbar under them
         return drawn
     except Exception:
         failures = getattr(term, "_tsp_native_failures", 0) + 1

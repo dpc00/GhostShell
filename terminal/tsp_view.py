@@ -626,7 +626,8 @@ class TspView:
         end = view.layout_extent()[1]
         # Following the end = at the end, not pushed past it: a reader who scrolled beyond the last line (to put the
         # input box mid-screen) has chosen that place and keeps it.
-        at_bottom = end - 2 * line <= reach <= end + line
+        # (GhostShell's toolbar hangs under the last line, so the end is a few lines below the last panel.)
+        at_bottom = end - 5 * line <= reach <= end + line
         if self._prefs_page and self._prefs_seen:
             # A settings page already on screen changes in place (a picker opens under its row, a switch flips):
             # the reader stays where they are.  Following the end threw the view past the row they had clicked.
