@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.2.13
+
+**Fixed:** a long omp session slowed Sublime down. The omp tab drew every entry of the transcript on every spinner tick; with 650 to 800 panels one drawing took about 220 ms on the main thread, 2.4 times a second, so keystrokes queued behind it while the session sat idle. An entry is now drawn again only when its content or the environment (width, palette, stylesheets, local state, image count, toast) changed, and one old tool call still marked running no longer makes every tick take down and rebuild every panel after it. The theme is built once per drawing instead of once per panel.
+
+**Fixed:** opening a menu was slow. Sublime asks every entry for `is_enabled`, `is_visible` and the caption each time a menu opens, and GhostShell answered for each of the ~50 launch profiles by searching the whole PATH for its program, about 150 searches on the main thread per open. An answer is now kept for 15 seconds.
+
+**Fixed:** `ai_terminal_send_string` and `ai_terminal_send_string_window` left text of about 120 characters or more in Claude Code's prompt box instead of submitting it, because the text and its Enter went out as one write and Claude Code reads that as a paste. A trailing Enter is now written on its own, `submit_enter_delay_ms` (new setting, default 150) after the text.
+
+- Tested on Windows 11, build 4215 (Python 3.14), on the live omp tab with 650 to 800 panels: one drawing 220 ms before, median 45 ms after; main thread busy while idle about 53 % before, 8 % after; output equal to the uncached drawing for all 825 entries, cold and warm cache. Menu open: 514 ms before, 96 ms the first time after, 4 ms on a repeat open.
+- Tested with `send_string` on the Claude Code prompt (build 4200, Claude Code 2.1.302): long text plus CR, LF and CRLF, 1500 characters, two sends in a row (both submitted, in order), and a plugin reload with live sessions (they reattach).
+- After the change, a PowerShell tab and a Claude Code tab were opened on both portables (builds 4200, Python 3.8, and 4215, Python 3.14) with the package linked to the repo: text and colors rendered correctly. The omp redraw and menu timing were not measured on build 4200.
+
+
 ## 0.2.12
 
 **Changed:** Respawn (the Tune Profile settings that need a fresh tab, such as font face and size) no longer starts a worker thread for a detachable tab. Detaching from the broker is now a handle close on the event loop and does not block, so the thread was left over from before the one-thread rework; Relaunch and tab close already skipped it. The fresh tab still attaches to the same running session. Tabs of a profile with `detachable` off keep the thread. Nothing changes for the user.

@@ -9,7 +9,7 @@ depending on another terminal package.
 
 ## What GhostShell does now
 
-Releases 0.2.0 to 0.2.12 added the following. The full list, with the reason for
+Releases 0.2.0 to 0.2.13 added the following. The full list, with the reason for
 each change, is in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
 - **Tern Surface Protocol (TSP): a native view for omp.** omp 18.4.4 and newer
@@ -27,6 +27,7 @@ each change, is in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 - **One thread.** Since 0.2.7 the broker and the Sublime client run on a single
   asyncio loop instead of reader and writer threads (0.2.8 fixed it on Python 3.8).
   Respawning a broker tab no longer needs a worker thread (0.2.12).
+- **Stays responsive in long sessions.** The omp tab redraws only what changed, so a transcript of hundreds of entries no longer keeps the main thread busy, and menus open without searching PATH for every profile (0.2.13).
 - **Detachable sessions that survive.** Closing a tab with Ctrl+W detaches the
   session and keeps it running (0.2.10); use **End Session** to stop it. Each
   Sublime keeps its own session registry (0.2.9), so a portable and an installed
