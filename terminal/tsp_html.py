@@ -948,14 +948,62 @@ def _draw_in_region(region, children, ctx):
         ctx.current = None
 
 
+def _draw_main_entries(region, children, ctx, cache, env):
+    """Draw the entries of ``main``, reusing the html of an entry that has not changed and does not move with time.
+
+    Drawing every entry on every spinner tick took about 220 ms for a 650-panel transcript, all on Sublime's
+    main thread, so keys were handled late.  An entry is reused only when its whole subtree is equal to the one
+    drawn last time (compared by repr) and the environment it was drawn in (width, palette, stylesheets, local
+    state, images, toast) is unchanged.  An entry that drew anything animated (ctx.animated, set by every drawer
+    whose output depends on time) is never kept, so spinners and running-time counters still move.
+
+    Returns (html list, outline list, indices of the entries that move with time), in the order of ``children``.
+    ``cache`` is a dict the caller keeps.
+    """
+    if cache.get("env") != env:
+        cache["env"] = env
+        cache["entries"] = {}
+    old = cache["entries"]
+    kept = {}
+    drawn, outlines, moving = [], [], []
+    ctx.current = region
+    try:
+        for index, child in enumerate(children):
+            key = child.get("id") or index
+            signature = repr(child)
+            hit = old.get(key)
+            if hit is not None and hit[0] == signature:
+                kept[key] = hit
+                drawn.append(hit[1])
+                outlines.append(hit[2])
+                continue
+            outer_animated = ctx.animated
+            ctx.animated = False
+            html_text = draw(child, ctx)
+            outline = entry_outline(child)
+            moves = ctx.animated
+            ctx.animated = outer_animated or moves
+            drawn.append(html_text)
+            outlines.append(outline)
+            if moves:
+                moving.append(index)
+            else:
+                kept[key] = (signature, html_text, outline)
+    finally:
+        ctx.current = None
+    cache["entries"] = kept         # an entry that left the document is dropped here
+    return drawn, outlines, moving
+
+
 def render_regions(document_snapshot, palette_message, cols=100, clock=None, blobs=None, local=None, aside=None,
-                   reduce_motion=False, toast_region=False):
+                   reduce_motion=False, toast_region=False, entry_cache=None):
     """HTML for each top-level region of a surface.
 
     Returns a dict:
 
     * ``main`` -- a list, one html string per entry, so a viewer can update only the entries that changed;
-      ``main_outline`` holds the ``entry_outline`` of each, in the same order.
+      ``main_outline`` holds the ``entry_outline`` of each, in the same order; ``main_moving`` lists the indices of
+      the entries that change with time (only filled when an ``entry_cache`` is given).
     * ``dock`` -- html of the dock (an ``omp.editor`` composer always comes last), wrapped in ``div.sf-region.sf-dock``.
     * ``layer`` -- a list of html strings, the overlays to show.  omp's layer is a stack of whole screens: only the
       topmost is listed.  A layer made only of ``overlay`` nodes that are not omp's lists all of them, in order.
@@ -968,6 +1016,8 @@ def render_regions(document_snapshot, palette_message, cols=100, clock=None, blo
       leaves ``layer``; without ``aside`` they stay overlays.  ``cols`` is the width of main and dock.
     * ``toast`` -- with ``toast_region`` the toast to show at the bottom of the window (html, "" when none); the
       toast node itself then draws nothing.  Without it a toast is drawn where its node is.
+    * ``entry_cache`` -- a dict the caller keeps between calls; with it, an unchanged, non-animated entry of ``main``
+      is not drawn again (see ``_draw_main_entries``).  None draws everything every time.
     * ``roles`` -- the ``role`` prop of each region root ({"main": ..., "dock": ..., "layer": ...}), for data-role.
     * ``animated`` -- True while something on screen changes with time (the viewer keeps redrawing).
     """
@@ -980,7 +1030,7 @@ def render_regions(document_snapshot, palette_message, cols=100, clock=None, blo
     ctx.toast_sink = [] if toast_region else None
     ctx.toast_winner = None
     tsp_draw_layout.scan_toasts(document_snapshot.get("c") or [], ctx)
-    regions = {"main": [], "main_outline": [], "layer": [], "under": 0, "dock": "", "animated": False,
+    regions = {"main": [], "main_outline": [], "main_moving": [], "layer": [], "under": 0, "dock": "", "animated": False,
                "overlays": [], "covered": False, "aside": "", "aside_id": None, "toast": "", "roles": {}}
     for region in document_snapshot.get("c") or []:
         region_id = region.get("id")
@@ -989,8 +1039,15 @@ def render_regions(document_snapshot, palette_message, cols=100, clock=None, blo
         regions["roles"][region_id] = _region_role(region)
         children = region.get("c") or []
         if region_id == "main":
-            regions["main"] = _draw_in_region(region, children, ctx)
-            regions["main_outline"] = [entry_outline(child) for child in children]
+            if entry_cache is None:
+                regions["main"] = _draw_in_region(region, children, ctx)
+                regions["main_outline"] = [entry_outline(child) for child in children]
+            else:
+                env = (cols, repr(palette_message), ctx.reduce_motion, repr(document_snapshot.get("sheets")),
+                       ctx.surface_role, ctx.surface_app, ctx.cwd, repr(local), len(blobs) if blobs else 0,
+                       ctx.toast_winner, bool(toast_region))
+                regions["main"], regions["main_outline"], regions["main_moving"] = _draw_main_entries(
+                    region, children, ctx, entry_cache, env)
         elif region_id == "layer":
             regions["overlays"] = [{"id": o.get("id"), "k": o.get("k"), "prefs": o.get("k") == "prefs",
                                     "covers": tsp_draw_layout.overlay_covers(o)} for o in children]
@@ -1040,8 +1097,13 @@ def overlay_note(count, palette_message=None):
             'Esc closes this one first.</div>' % (theme.color("dim"), count, "" if count == 1 else "s"))
 
 
+_PAGE_THEME = [None, None]     # [palette message, its Theme]: page() runs once per panel on every drawing
+
+
 def page(parts, palette_message=None):
     """Wrap region HTML in a body with a base style, for one phantom."""
-    theme = Theme(palette_message)
+    if _PAGE_THEME[1] is None or _PAGE_THEME[0] is not palette_message:
+        _PAGE_THEME[:] = [palette_message, Theme(palette_message)]
+    theme = _PAGE_THEME[1]
     return ('<body id="tsp-native"><style>body { color: %s; } tt { font-family: monospace }</style>'
             '<div style="padding: 0 12px">%s</div></body>' % (theme.color("text"), parts))

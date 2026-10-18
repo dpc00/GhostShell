@@ -464,10 +464,13 @@ class TspView:
         the hello reply announces it) is taken out of the overlays and drawn narrower beside the pane: the
         rest is laid out at the narrower ``cols``."""
         blobs = getattr(host, "blobs", None)
+        if getattr(self, "_entry_cache", None) is None:
+            self._entry_cache = {}      # html of the entries that did not change (see tsp_html._draw_main_entries)
 
         def draw(width, aside):
             return tsp_html.render_regions(snapshot, palette, width, self._clock, blobs, self._local, aside=aside,
-                                           reduce_motion=self._animation_ms <= 0, toast_region=True)
+                                           reduce_motion=self._animation_ms <= 0, toast_region=True,
+                                           entry_cache=self._entry_cache)
 
         if not self._aside_enabled:
             # The sheet stays an overlay inside this tab: the window's groups and layout are never touched.
@@ -554,6 +557,7 @@ class TspView:
         self._part_ids = {"main%d" % i: child.get("id") for i, child in enumerate(main.get("c") or [])}
         layers = [html for html in regions["layer"] if html]
         toast = regions.get("toast") or ""
+        self._moving = set()        # keys of the panels that change with time (an overlay is drawn whole, nothing is kept)
         if layers:
             # An overlay is open: it is the whole screen.  omp's stack shows only the topmost one; a layer of
             # plain overlays lists them all, in order.
@@ -569,6 +573,7 @@ class TspView:
                 parts.append(("toast", toast))
                 outline.append(("", ""))
             return parts, palette, regions["animated"], True, outline
+        self._moving = {"main%d" % i for i in regions.get("main_moving") or ()}
         parts = [("main%d" % i, html) for i, html in enumerate(regions["main"]) if html]
         outline = [item for item, html in zip(regions["main_outline"], regions["main"]) if html]
         if regions["dock"]:
@@ -638,9 +643,15 @@ class TspView:
         # Each panel hangs under its own caption line, so a re-drawn panel keeps its place without help.  The
         # take-down below is kept only for a view at the bottom, where it was proven; for a reader scrolled up it
         # shortens the layout, Sublime throws the view to the bottom and the drawing that follows pins it there.
+        # A panel that moved with time in this drawing and in the last one (a spinner, a running-time counter)
+        # is the same size as before, so it does not count as a change here: without that, one old tool call
+        # still marked running made every tick take down and rebuild every panel after it.
         old = self._shown or []
+        still_moving = self._moving & getattr(self, "_moving_shown", set())
         first_changed = 0
-        while first_changed < min(len(old), len(parts)) and old[first_changed] == parts[first_changed]:
+        while first_changed < min(len(old), len(parts)) and (
+                old[first_changed] == parts[first_changed]
+                or (old[first_changed][0] == parts[first_changed][0] and parts[first_changed][0] in still_moving)):
             first_changed += 1
         scrolled_to = None if at_bottom else view.viewport_position()
         if at_bottom and first_changed < len(old):
@@ -653,6 +664,7 @@ class TspView:
             # view back where it was, after the layout has settled.
             self._hold_position(scrolled_to)
         self._shown = parts
+        self._moving_shown = set(self._moving)
         self._outline = outline
         view.set_status(STATUS_KEY, "omp native view: live " + time.strftime("%H:%M:%S"))
         surface_id = host.active_surface()
