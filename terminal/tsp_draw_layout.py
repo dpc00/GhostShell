@@ -195,6 +195,12 @@ def _draw_col(node, ctx):
                           ("js-%s" % props["justify"]) if props.get("justify") in ("between", "end") else None,
                           "wrap" if props.get("wrap") else None)
     style = ' style="text-align: %s"' % _TEXT_ALIGN[align] if align in _TEXT_ALIGN else ""
+    if props.get("role") == "omp.editor.ask.approval":
+        # omp's permission prompt: a card with an accent edge, like its other panels
+        theme = ctx.theme
+        style = (' style="background-color: %s; border: 1px solid %s; border-left: 3px solid %s; '
+                 'border-radius: 8px; padding: 8px 12px; margin: 5px 0"'
+                 % (theme.color("cardBg"), theme.color("borderMuted"), theme.color("accent")))
     return "<div%s%s>%s</div>" % (classes, style, tsp_html.stack_blocks(parts, GAP_PX.get(gap, 0)))
 
 
@@ -302,7 +308,13 @@ def _draw_row(node, ctx):
                           ("js-%s" % justify) if justify in ("between", "end") else None,
                           "wrap" if props.get("wrap") else None)
     if only_inline:
-        return "<div%s>%s</div>" % (classes, parts[0])
+        style = ""
+        if props.get("role") == "omp.btn":
+            # omp's buttons (Details, Deny, Approve): a small bordered chip in the button's tone
+            tone = _tone_color(ctx, props.get("tone"), "accent")
+            style = (' style="background-color: %s; color: %s; border: 1px solid %s; border-radius: 6px; '
+                     'padding: 2px 10px"' % (ctx.theme.color("selectedBg"), tone, tone))
+        return "<div%s%s>%s</div>" % (classes, style, parts[0])
     blocks = []
     for index, piece in enumerate(parts):
         blocks.append(piece if tsp_html.starts_block(piece.lstrip()) else "<div>%s</div>" % piece)
