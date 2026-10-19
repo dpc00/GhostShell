@@ -13,9 +13,11 @@ metadata:
 **How (worked live 2026-09-29):**
 1. `mcp__sublime-mcp__batch` (allow-listed in .claude/settings.json) with `run_command` `ai_terminal_open_here` args `{"paths": ["<dir>"], "profile": "Bash"}` (profiles in GhostShell/ai_terminal.sublime-settings: `Bash` = Git Bash, `PowerShell`, `Dos Console`, `WSL Bash`).
 2. eval_python: list `w.views()`; the new terminal is the view with `v.settings().get('ai_terminal_view')` true and a name like `MINGW64:/c/...`. Note its id. Donald's own Claude session tab is also an ai_terminal view (was id 13): NEVER send to it, and never use `ai_terminal_send_string_window` (it picks the active/first terminal, possibly his Claude tab). Refocus his Claude tab right after spawning (`w.focus_view(...)`) so his typing is not stolen.
-3. Run a command: eval_python `sublime.View(<id>).run_command('ai_terminal_send_string', {'string': '\x15<command>\r'})` (the `\x15` = Ctrl-U clears any stray characters on the line; a stray "NG" once prefixed my first command).
+3. Run a command: OBSOLETE (2026-10-19): `ai_terminal_send_string` was removed from GhostShell on Donald's order. Use the skill `type-into-terminal-tab` (`focus_sheet`, check the active tab, `ui_type_text`, focus back, `get_sheet_content`). The old line was `sublime.View(<id>).run_command('ai_terminal_send_string', {'string': '\x15<command>\r'})`.
 4. Read output later with another eval_python: `v.substr(sublime.Region(0, v.size()))`, show the last lines. Wait a moment between send and read (separate calls).
 Long-running or output-heavy commands: redirect to a file and read it.
+
+**Re-verified 2026-10-19:** step 3 works (`sublime.View(id).run_command('ai_terminal_send_string', ...)`, output read back) with one correction: do NOT prefix `\x15` in a cmd.exe tab (taken literally; `echo` not recognized); only for bash. The `run_command ai_terminal_send_string` + `name=` form does NOT work (no `name` parameter, writes to the active tab, still returns ok). Full procedure with the read-back proof: skill type-into-terminal-tab.
 
 **Status check (2026-10-05):** this describes what he asked for on 2026-09-29. Since then the working practice has been Claude Code's PowerShell tool with a plain-English description and the code kept in a script file (see [[feedback_permission_prompt_plain_english]] and [[feedback_never_use_bash_tool]]); the ai_terminal route was not used during 2026-10-04/05, and I have not re-verified that the steps above still work.
 

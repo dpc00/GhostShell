@@ -1,5 +1,14 @@
 # Release notes
 
+## 0.2.15
+
+**Removed:** the four commands that sent text into a terminal tab: `ai_terminal_send_string`, `ai_terminal_send_string_window`, `ai_terminal_queue_input` and `ai_terminal_queue_input_to`. A terminal package should not offer a way to send a command into a tab; a program that wants to type into a tab does it as a person does, by selecting the tab and typing. `ai_terminal_send_string` also had no tab argument and wrote to the active tab, so a call meant for another tab could land in the caller's own tab while still reporting success. The keys you type still reach the program as before (`ai_terminal_keypress`). The difference from Terminus (which has `terminus_send_string`) is deliberate and written down in section 17 of `docs/DEVIATIONS_FROM_TERMINUS.md`.
+
+- Seen live on Windows 11, build 4200, after a Sublime restart: the four classes are gone from the loaded plugin, `ai_terminal_keypress` and `ai_terminal_render` are still there, and text typed into a cmd.exe tab with sublime-mcp's `ui_type_text` ran and appeared in the tab.
+- Not seen live: typing into a Claude Code or omp tab by that route.
+- `queue_input`, its idle drain and `send_text_submit` are still in the code with no command left that calls them.
+
+
 ## 0.2.14
 
 **Fixed:** the session text log (`log_tab_text`) was empty for omp. An omp tab has no screen text to scrape, only panels, so nothing was logged. The log now writes the conversation from omp's native document: messages, tool calls and results as text. Folded thinking is written open (omp folds it on screen), so the log keeps what the tab hides. The new setting `tsp_log_unfold` (default `["omp.thinking"]`; a role name, a list, or `"all"`) chooses which folded panels are written open.
