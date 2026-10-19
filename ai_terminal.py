@@ -8339,16 +8339,43 @@ class AiTerminalSendStringWindowCommand(sublime_plugin.WindowCommand):
     the terminal view to be focused.
 
     Resolves the target terminal view in this order:
+      0. if `name` or `index` is given, ONLY that tab: `index` is a position in
+         window.views(); `name` is a case-insensitive part of the tab name and
+         must match exactly one ai_terminal tab. No match, or more than one,
+         sends nothing and says so in the status bar. It never falls back to
+         the active tab, because the agent's own hosting tab is an ai_terminal
+         view too and silently receiving the text there is the bug this fixes;
       1. the active view in the window, if it is an ai_terminal view;
       2. otherwise the first ai_terminal view found in the window.
 
     Lets external callers (agents, other plugins, key bindings scoped to a
     non-terminal context) inject input into the terminal from anywhere.
+    The status bar names the tab that received the text.
 
     No key/menu/palette binding; invoked programmatically.
     """
 
-    def run(self, string=""):
+    def run(self, string="", name="", index=-1):
+        if name or index >= 0:
+            views = self.window.views()
+            if index >= 0:
+                found = [views[index]] if index < len(views) else []
+            else:
+                needle = name.lower()
+                found = [v for v in views
+                         if v.settings().get(_VIEW_SETTING, False)
+                         and needle in (v.name() or "").lower()]
+            if len(found) != 1 or not found[0].settings().get(_VIEW_SETTING, False):
+                sublime.status_message(
+                    "Ai terminal: send_string_window sent nothing, %d ai_terminal tabs match %r"
+                    % (len(found), name or index))
+                return
+            term = _Terminal.from_id(found[0].id())
+            if term:
+                term.send_text_submit(string)
+                sublime.status_message(
+                    "Ai terminal: sent %d characters to %r" % (len(string), found[0].name()))
+            return
         view = self.window.active_view()
         if view is None or not view.settings().get(_VIEW_SETTING, False):
             for v in self.window.views():
