@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.2.16
+
+**Removed:** the code that only the four send-text commands used (they went in 0.2.15). `queue_input` and its idle-drain polling, `send_text_submit` (which wrote a trailing Enter on its own after a gap), the `delay_s` option of `send_string` with the writer's wait for it, and the setting `submit_enter_delay_ms`. A search of the repo found nothing else calling any of it; 130 lines of code and six lines of settings are gone. Your own typing is unchanged: keys still go through `ai_terminal_keypress` to `send_string` and the writer.
+
+- Seen live on Windows 11, build 4200, in the running Sublime: after the reload `send_string` has its new signature, `queue_input` and `send_text_submit` are gone from the class, and text typed into a cmd.exe tab with sublime-mcp's `ui_type_text` ran and printed its output.
+- Not seen live: typing into a Claude Code or omp tab (an old setting `submit_enter_delay_ms` in a user's own settings file is now ignored).
+
+
 ## 0.2.15
 
 **Removed:** the four commands that sent text into a terminal tab: `ai_terminal_send_string`, `ai_terminal_send_string_window`, `ai_terminal_queue_input` and `ai_terminal_queue_input_to`. A terminal package should not offer a way to send a command into a tab; a program that wants to type into a tab does it as a person does, by selecting the tab and typing. `ai_terminal_send_string` also had no tab argument and wrote to the active tab, so a call meant for another tab could land in the caller's own tab while still reporting success. The keys you type still reach the program as before (`ai_terminal_keypress`). The difference from Terminus (which has `terminus_send_string`) is deliberate and written down in section 17 of `docs/DEVIATIONS_FROM_TERMINUS.md`.

@@ -1062,7 +1062,7 @@ simpler or sends `rows` (pre-rendered ANSI lines, "migration fallback only"). Te
 tab fed by the TUI's own ANSI rows, and draw natively only kinds that text cannot show. UNVERIFIED: whether omp falls back cleanly for every kind (an earlier test saw it send kinds that were not advertised).
 Revert path for the owner: `git revert` of the TSP commits, or `git checkout c603cc4 -- ai_terminal.py Default.sublime-mousemap tools/agent_broker.py terminal/profile_schema.py`; classic tabs do not need any of it.
 
-## 17. No command that sends text into a tab (decided by the owner 2026-10-19; released in 0.2.15)
+## 17. No command that sends text into a tab (decided by the owner 2026-10-19; commands removed in 0.2.15, internals in 0.2.16)
 
 Terminus has `terminus_send_string` (a WindowCommand with `string`, `tag`, `visible_only`, `bracketed`; read from `randy3k/Terminus` `terminus/commands.py`, 2026-10-19), and finds its target by a `tag` given to `terminus_open`. GhostShell had its own versions
 (`ai_terminal_send_string`, `ai_terminal_send_string_window`, plus `ai_terminal_queue_input` and `ai_terminal_queue_input_to`, which Terminus does not have) and never had tags. All four are removed.
@@ -1073,4 +1073,4 @@ Terminus has `terminus_send_string` (a WindowCommand with `string`, `tag`, `visi
   while the call still returned ok.
 - **What stays:** `ai_terminal_keypress` (the keymap forwards every key of a focused terminal tab to the program, which is how typing works) and `ai_terminal_render` (draws the program's screen into the tab). `ui_type_text` of sublime-mcp reaches
   the program through the same key bindings (UNVERIFIED: traced by reading, not by a keystroke trace).
-- **Left behind (UNVERIFIED as unused):** `_Terminal.queue_input`, its idle-drain code and `send_text_submit` have no command that calls them any more; the setting `submit_enter_delay_ms` is used only by `send_text_submit`.
+- **Removed with them in 0.2.16 (VERIFIED by search: nothing else called them):** `_Terminal.queue_input`, its idle-drain code (`_arm_pending_input_poll`, `_check_pending_input`, `_QUEUED_INPUT_IDLE_S`, `_PENDING_INPUT_POLL_MS`), `send_text_submit`, the `delay_s` option of `send_string` and the writer's wait for it, and the setting `submit_enter_delay_ms`.

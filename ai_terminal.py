@@ -3866,14 +3866,6 @@ class _Terminal:
         self._writer = None
         self._input_cast_queue = queue.Queue()
         self._input_cast_writer = None
-        # Text queued via queue_input(), drained into the PTY only once the
-        # session has been quiet (no PTY output) for _QUEUED_INPUT_IDLE_S --
-        # unlike send_string, which writes immediately regardless of
-        # activity. Lets a caller hand off a follow-up prompt that lands
-        # like real typing once the current output/thinking settles, instead
-        # of racing live output or a busy agent. See queue_input().
-        self._pending_input = []
-        self._pending_input_poll_armed = False
         self._last_cols = screen.cols
         self._last_rows = screen.rows
         # Copy mode (ctrl+alt+c / AiTerminalToggleCopyModeCommand): while
@@ -4184,10 +4176,6 @@ class _Terminal:
             if item is None:
                 return
             text, record = item[0], item[1]
-            if len(item) > 2 and item[2] > 0:
-                # A delayed item (see send_string delay_s): wait after the PREVIOUS write, so
-                # this one reaches the program as its own read, not glued to the last chunk.
-                await asyncio.sleep(item[2])
             try:
                 await self.pty.awrite(text.encode("utf-8", errors="replace"))
             except Exception as e:
@@ -4209,8 +4197,6 @@ class _Terminal:
             if item is None:
                 return
             text, record = item[0], item[1]
-            if len(item) > 2 and item[2] > 0:
-                time.sleep(item[2])     # see send_string delay_s; this is the writer thread, not Sublime's
             try:
                 # Deliver input before touching the optional recorder.  A slow
                 # file flush or contention with the output recorder must never
@@ -4439,82 +4425,15 @@ class _Terminal:
                 print("[ai_terminal] TSP resync request failed:\n%s" % traceback.format_exc())
         _schedule_render(self)
 
-    def send_string(self, s, record=True, delay_s=0.0):
+    def send_string(self, s, record=True):
         # A key command must do no I/O and acquire no recording locks on
         # Sublime's main plugin thread.  The ordered writer records and writes
         # this text in sequence. record=False for text nobody actually typed
         # (see _on_parser_write_pty) -- it still gets written to the pty, just
         # not logged as an input event.
-        # delay_s > 0: the writer waits that long after the previous write before writing
-        # this one, so it arrives as its own read (see send_text_submit).
         if record:
             self._last_typed = time.monotonic()  # auto approve waits for a pause in typing
-        self._write_queue.put((s, record, delay_s) if delay_s > 0 else (s, record))
-
-    def send_text_submit(self, text):
-        """Send text the way a person types it: a trailing Enter (CR, LF or CRLF) is
-        written separately, after a short gap, never in the same write as the text.
-
-        Why (found 2026-10-17, reproduced on the Claude Code prompt): Claude Code treats
-        a burst of text as a paste, and an Enter that arrives in the same read, or within
-        about 100 ms after it, is taken as part of the paste (a line break), not as
-        "submit". Text of 60 characters or fewer still submitted; 120 or more stayed in
-        the input box unless the Enter was a separate write at least 20 ms later
-        (tested at 20, 50, 100, 150 and 200 ms with 250 and 1500 characters).
-        The gap is the setting submit_enter_delay_ms.
-
-        Only a trailing Enter is split off; Enters inside the text are sent as written.
-        """
-        for tail in ("\r\n", "\r", "\n"):
-            if text.endswith(tail):
-                body = text[:-len(tail)]
-                break
-        else:
-            self.send_string(text)
-            return
-        if not body:
-            self.send_string("\r")
-            return
-        self.send_string(body)
-        gap_ms = _setting_number("submit_enter_delay_ms", _SUBMIT_ENTER_DELAY_MS)
-        self.send_string("\r", delay_s=max(0, gap_ms) / 1000.0)
-
-    def queue_input(self, text, add_newline=True):
-        """Queue text to be written via send_string once this session has
-        been idle (no PTY output) for _QUEUED_INPUT_IDLE_S, so it lands
-        indistinguishable from a real typed-and-submitted line instead of
-        landing mid-output or while a busy agent is still thinking.
-
-        add_newline sends a trailing Enter as its own separate write after
-        text, if text doesn't already end with one. Two real findings from
-        live testing on 2026-09-09, not assumed:
-        - The PTY wants "\r" for Enter, not "\n" (see the keypress path's
-          "\r" if chars == "\n" else chars translation) -- a bare "\n" left
-          PowerShell sitting at a ">>" continuation prompt instead of
-          executing.
-        - Enter must be a SEPARATE send_string call from the text, not
-          appended to the same string. A CLI's multi-line input box (tested
-          against this file's own hosting Claude Code session) accepted a
-          combined "text\r" write as text-plus-a-soft-newline and did not
-          submit; a second, standalone "\r" write immediately after did.
-          Real keystrokes arrive as separate PTY writes even when fast, and
-          apparently some apps' input handling depends on that separation,
-          not just the bytes.
-
-        Defensive getattr/setattr below: a plugin reload replaces class
-        code but does not re-run __init__ on already-live _Terminal
-        instances, so any session spawned before this method existed has
-        neither attribute -- confirmed live via a real AttributeError on
-        this file's own pre-reload hosting-tab instance, 2026-09-09.
-        """
-        if text.endswith("\n") or text.endswith("\r"):
-            text = text[:-1]
-            add_newline = True
-        with self._lock:
-            if not hasattr(self, "_pending_input"):
-                self._pending_input = []
-            self._pending_input.append((text, add_newline))
-        _arm_pending_input_poll(self)
+        self._write_queue.put((s, record))
 
     def _tsp_send(self, text):
         # TSP replies and acknowledgements go out through the same ordered writer
@@ -5515,63 +5434,6 @@ def _measure(view, profile_name=None):
 # paint loop; 100ms cuts main-thread churn on bursty TUIs.
 _RENDER_MS = 100
 _RENDER_MIN_INTERVAL_MS = 30
-
-# How long a session must produce no PTY output before queue_input() will
-# drain a queued line into it. Long enough that a brief pause mid-output
-# (e.g. between two lines of a streaming response) doesn't look like "done
-# and waiting"; short enough that a real return-to-prompt is not felt as a
-# delay by whatever queued the input.
-_QUEUED_INPUT_IDLE_S = 3.0
-_PENDING_INPUT_POLL_MS = 250
-
-# Gap between a text write and its trailing Enter (send_text_submit; also used by
-# queue_input). Must be real wall-clock separation, so the two reach the child as
-# separate reads, not two Python calls glued together by the pipe. The Claude Code side
-# is usePasteHandler.ts: a paste and an Enter in the same read, or within its own
-# PASTE_COMPLETION_TIMEOUT_MS (100 ms), are taken as one paste. 150 ms clears that. The
-# setting submit_enter_delay_ms overrides this default.
-_SUBMIT_ENTER_DELAY_MS = 150
-
-
-def _arm_pending_input_poll(term):
-    """Start (if not already running) a self-rescheduling poll that drains
-    term._pending_input once the session goes idle. Only runs while there is
-    something queued -- queue_input() re-arms it each time it appends, and
-    the poll disarms itself once the queue is empty so idle sessions with
-    nothing queued cost nothing.
-
-    getattr, not term._pending_input_poll_armed directly: a session spawned
-    before queue_input existed has neither attribute (reload replaces class
-    code, not already-live instance state) -- confirmed live on this file's
-    own hosting-tab instance, 2026-09-09.
-    """
-    if getattr(term, "_pending_input_poll_armed", False):
-        return
-    term._pending_input_poll_armed = True
-    sublime.set_timeout(lambda: _check_pending_input(term), _PENDING_INPUT_POLL_MS)
-
-
-def _check_pending_input(term):
-    view = getattr(term, "view", None)
-    if not view or not view.is_valid():
-        term._pending_input_poll_armed = False
-        return
-    item = None
-    with term._lock:
-        if not getattr(term, "_pending_input", None):
-            term._pending_input_poll_armed = False
-            return
-        if time.time() - term._last_output_at >= _QUEUED_INPUT_IDLE_S:
-            item = term._pending_input.pop(0)
-    if item is not None:
-        text, add_newline = item
-        if add_newline:
-            # Text and Enter as two writes with a gap: a same-read text+Enter is the
-            # documented Claude Code race (see send_text_submit and _SUBMIT_ENTER_DELAY_MS).
-            term.send_text_submit(text + "\r")
-        else:
-            term.send_string(text)
-    sublime.set_timeout(lambda: _check_pending_input(term), _PENDING_INPUT_POLL_MS)
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
 # A level, not a stack: some apps (Grok --minimal and its full TUI both,
