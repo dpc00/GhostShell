@@ -2,6 +2,7 @@
 
 Notes from long sessions working on GhostShell. Each is a dated record, so check that it still matches.
 
+- [tern-sdk: no daily update](feedback_tern_sdk_no_daily_update_2026_10_18.md) - 2026-10-18 he wants no schedule; check on request, act only on monumental changes; clone is 1 small commit behind
 - [GhostShell secrets hardening](project_ghostshell_secrets_hardening.md) - user wants LLM package's secret-handling design ported into.
 - [GhostShell session_text_log freeze](project_ghostshell_session_text_log_bug.md) - SessionTextLog.observe() does synchronous full-buffer disk rewrite.
 - [GhostShell usage-scan omp port](project_ghostshell_usage_scan_omp_port.md) - Copilot fetcher shipped; Devin needs no fetcher (text tier already.
