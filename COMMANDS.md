@@ -46,14 +46,11 @@ so the "why isn't this in a menu" question has one place to be answered.
 
 | Class | ST command | Type | Invoked from |
 |---|---|---|---|
-| `AiTerminalSendStringCommand` | `ai_terminal_send_string` | TextCommand | Programmatic API (terminus_send_string equivalent) for other plugins/scripts to inject text into a terminal view. A trailing Enter (`\r`, `\n` or `\r\n`) is written on its own `submit_enter_delay_ms` after the text, so Claude Code submits it instead of taking text plus Enter as a paste |
-| `AiTerminalSendStringWindowCommand` | `ai_terminal_send_string_window` | WindowCommand | Same, but resolves the target terminal view within the window without it needing focus; same trailing-Enter handling |
 | `AiTerminalRenderCommand` | `ai_terminal_render` | TextCommand | `ai_terminal.py`'s own PTY-output loop (`view.run_command("ai_terminal_render", ...)`) on every screen update |
 | `AiTerminalNoopCommand` | `ai_terminal_noop` | TextCommand | `AiTerminalKeyInterceptor.on_text_command` returns this to swallow a command it intercepted (e.g. blocking a default ST binding while a terminal view is focused) |
 | `AiTerminalTrackpadScrollCommand` | `ai_terminal_trackpad_scroll` | TextCommand | `Default.sublime-mousemap`: mouse wheel up/down in terminal views (see "Mouse" below) |
 | `AiTerminalNativeClickCommand` | `ai_terminal_native_click` | TextCommand | `Default.sublime-mousemap`: left press (single, double, triple) on a Tern Surface Protocol native view (`setting.ai_tsp_native`); it does nothing, so Sublime's own press handler cannot move the caret and scroll the view (the panels are phantoms with their own links) |
 | `AiTerminalToggleTuneProfilePanelCommand` / `AiTerminalTuneProfileSetCommand` | `ai_terminal_toggle_tune_profile_panel` / `ai_terminal_tune_profile_set` | TextCommand | The settings toolbar's links in the tab, and **Tune Profile** |
-| `AiTerminalQueueInputCommand` / `AiTerminalQueueInputToCommand` | `ai_terminal_queue_input` / `ai_terminal_queue_input_to` | WindowCommand | Programmatic: queue a string to land in the terminal once the session has been idle for a few seconds (the second form addresses a tab by name or index) |
 | `AiTerminalNoopWindowCommand` | `ai_terminal_noop_window` | WindowCommand | Sink used when a terminal consumes the native tab-close command |
 | `AiTerminalDumpScreenCommand` | `ai_terminal_dump_screen` | TextCommand | Manual invocation from the console (`view.run_command("ai_terminal_dump_screen")`) for debugging; prints the screen grid/cursor to the ST console |
 

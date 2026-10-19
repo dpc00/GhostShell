@@ -15,7 +15,7 @@ Architecture:
 
 Commands (ST names):
   ai_terminal_open_here / ai_terminal_open_in_editor
-  ai_terminal_send_string / ai_terminal_keypress / ai_terminal_render
+  ai_terminal_keypress / ai_terminal_render
   ai_terminal_nuke / ai_terminal_noop / ai_terminal_dump_screen
 
 Note on input: ST does not fire on_text_command for unbound printable keys, so
@@ -8316,117 +8316,6 @@ class AiTerminalOpenInEditorCommand(sublime_plugin.WindowCommand):
 
     def description(self, profile=None, group=-1, index=-1):
         return _profile_menu_caption(profile)
-
-
-class AiTerminalSendStringCommand(sublime_plugin.TextCommand):
-    """Send an arbitrary string to the PTY (terminus_send_string equivalent).
-
-    A trailing Enter (CR, LF or CRLF) is written separately, after the setting
-    submit_enter_delay_ms, because Claude Code takes text plus Enter in one write
-    as a paste and does not submit it. See _Terminal.send_text_submit.
-
-    No key/menu/palette binding; invoked programmatically.
-    """
-
-    def run(self, edit, string=""):
-        term = _Terminal.from_id(self.view.id())
-        if term:
-            term.send_text_submit(string)
-
-
-class AiTerminalSendStringWindowCommand(sublime_plugin.WindowCommand):
-    """Window-level variant: send a string to the terminal PTY without needing
-    the terminal view to be focused.
-
-    Resolves the target terminal view in this order:
-      1. the active view in the window, if it is an ai_terminal view;
-      2. otherwise the first ai_terminal view found in the window.
-
-    Lets external callers (agents, other plugins, key bindings scoped to a
-    non-terminal context) inject input into the terminal from anywhere.
-
-    No key/menu/palette binding; invoked programmatically.
-    """
-
-    def run(self, string=""):
-        view = self.window.active_view()
-        if view is None or not view.settings().get(_VIEW_SETTING, False):
-            for v in self.window.views():
-                if v.settings().get(_VIEW_SETTING, False):
-                    view = v
-                    break
-        if view is None:
-            return
-        term = _Terminal.from_id(view.id())
-        if term:
-            term.send_text_submit(string)
-
-
-class AiTerminalQueueInputCommand(sublime_plugin.WindowCommand):
-    """Queue a string to land in the terminal PTY once the session goes
-    idle (no PTY output for a few seconds) -- as if it had been typed and
-    submitted live, rather than racing current output or a busy agent the
-    way send_string's immediate write can.
-
-    Same view-resolution as AiTerminalSendStringWindowCommand: active view
-    if it's an ai_terminal view, else the first one found in the window.
-
-    No key/menu/palette binding; invoked programmatically.
-    """
-
-    def run(self, string=""):
-        view = self.window.active_view()
-        if view is None or not view.settings().get(_VIEW_SETTING, False):
-            for v in self.window.views():
-                if v.settings().get(_VIEW_SETTING, False):
-                    view = v
-                    break
-        if view is None:
-            return
-        term = _Terminal.from_id(view.id())
-        if term:
-            term.queue_input(string)
-
-
-class AiTerminalQueueInputToCommand(sublime_plugin.WindowCommand):
-    """Queue a string into a SPECIFIC ai_terminal tab, addressed explicitly
-    by name (partial, case-insensitive) or index into window.views() --
-    unlike AiTerminalQueueInputCommand above, which only ever guesses
-    "active view, else the first ai_terminal view found."
-
-    Exists because that guess is genuinely ambiguous with more than one
-    ai_terminal tab open in the same window (a coordinating agent's own
-    hosting tab is itself an ai_terminal view, so it can be the "active"
-    one and wrongly swallow input meant for a different tab) -- confirmed
-    live 2026-09-14, resolved only by hand-walking the internal terminal
-    registry instead of anything callable directly. This is that
-    resolution, made a real, reusable, one-call primitive: any external
-    caller (another agent, a script, `run_command` via sublime-mcp) can
-    now target a tab by name/index with no risk of hitting the wrong one.
-
-    No key/menu/palette binding; invoked programmatically.
-    """
-
-    def run(self, string="", name="", index=-1):
-        view = None
-        views = self.window.views()
-        if index >= 0:
-            if 0 <= index < len(views):
-                view = views[index]
-        elif name:
-            needle = name.lower()
-            for v in views:
-                if v.settings().get(_VIEW_SETTING, False) and needle in (v.name() or "").lower():
-                    view = v
-                    break
-        if view is None or not view.settings().get(_VIEW_SETTING, False):
-            sublime.status_message(
-                "Ai terminal: no matching tab found for queue_input_to target"
-            )
-            return
-        term = _Terminal.from_id(view.id())
-        if term:
-            term.queue_input(string)
 
 
 # Host-only blank lines above AND below the TUI (not sent to the PTY).

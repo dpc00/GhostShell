@@ -77,8 +77,8 @@
     //           (Grok trust dialog / buttons). Wheel still works. Live-read each drag.
     //           Default false = copy-first.
     "drag_forwards_by_default": false,
-    // submit_enter_delay_ms: when ai_terminal_send_string (and the queued-input
-    // commands) get text that ends in Enter, the text is written first and the
+    // submit_enter_delay_ms: when text that ends in Enter is written to the
+    // terminal in one go (send_text_submit), the text is written first and the
     // Enter is written by itself this many milliseconds later. Claude Code reads
     // text plus Enter in one read, or an Enter within about 100 ms of text, as a
     // paste and does not submit it. 0 writes them together again.
