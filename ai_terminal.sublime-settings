@@ -826,6 +826,9 @@
             "spawn_env": {}
         },
         "omp": {
+            "steady_screen_height_enabled": false,
+            "wheel_to_pty": false,
+            "mouse_handling": false,
             "scroll_manipulation_enabled": false,
             // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
             // -- a from-scratch coding-first fork/rewrite of Pi by Mario
