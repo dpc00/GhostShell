@@ -840,6 +840,39 @@ def _chart_heatmap(props, ctx):
     return "".join(lines)
 
 
+def _chart_domain(props, values, marks):
+    """The (low, high) value domain of a bars or spark chart: ``min`` (default 0) to ``max`` (default the
+    largest series or mark value). High is kept above low."""
+    low = props.get("min")
+    low = low if isinstance(low, (int, float)) and not isinstance(low, bool) else 0
+    high = props.get("max")
+    if not isinstance(high, (int, float)) or isinstance(high, bool):
+        high = max(values + [m[0] for m in marks] + [0])
+    return low, (high if high > low else low + 1)
+
+
+def _chart_marks(props):
+    """The chart's dashed reference lines as (value, tone, title)."""
+    return [(mark["value"], mark.get("tone"), mark.get("title")) for mark in props.get("marks") or []
+            if isinstance(mark, dict) and isinstance(mark.get("value"), (int, float))
+            and not isinstance(mark.get("value"), bool)]
+
+
+@functools.lru_cache(maxsize=512)
+def _chart_column_png(width, height, bar, fill, lines, phase):
+    """One chart column ``height`` tall: a bar ``bar`` pixels high from the bottom, with a dashed reference
+    line (row from the bottom, colour) across it; ``phase`` staggers the dashes from column to column."""
+    rows = {height - 1 - row: rgb for row, rgb in lines}
+
+    def pixel(x, y):
+        if y in rows and (x + phase) % 4 < 2:
+            return tuple(rows[y]) + (255,)
+        if y >= height - bar:
+            return tuple(fill) + (255,)
+        return (0, 0, 0, 0)
+    return tsp_html._png_from_pixels(width, height, pixel)
+
+
 def _chart_bars(props, ctx, spark):
     series = [s for s in props.get("series") or [] if isinstance(s, dict)]
     if not series:
@@ -848,16 +881,32 @@ def _chart_bars(props, ctx, spark):
     height = _LINE_PX if spark else _CHART_LINES.get(props.get("size"), 4) * _LINE_PX
     available = min(_avail(ctx) * getattr(ctx, "cell_px", 7), 300 if spark else 480)
     width = max(1, min(4, available // len(series) - 1)) if spark else max(2, min(24, available // len(series) - 3))
-    peak = max([_num(s.get("value"), 0) for s in series] or [0])
+    marks = _chart_marks(props)
+    low, high = _chart_domain(props, [_num(s.get("value"), 0) for s in series], marks)
+
+    def fraction(value):
+        return (_clamp(value, low, high) - low) / (high - low)
+    lines = tuple((min(height - 1, int(round(height * fraction(value)))), _rgb(_tone_color(tone, ctx, "text")))
+                  for value, tone, _title in marks)
     out = []
-    for entry in series:
-        value = _num(entry.get("value"), 0)
-        bar_height = max(1, int(round(height * value / peak))) if value > 0 and peak > 0 else 1
-        piece = _block_img(color, 1.0, width, bar_height)
+    for index, entry in enumerate(series):
+        frac = fraction(_num(entry.get("value"), 0))
+        bar_height = max(1, int(round(height * frac))) if frac > 0 else 1
+        tone = entry.get("tone")
+        fill = _rgb(_tone_color(tone, ctx)) if isinstance(tone, str) and tone not in ("", "neutral") else color
+        if lines:
+            piece = _img(_chart_column_png(width, height, bar_height, fill, lines, index * width % 4), width, height)
+        else:
+            piece = _block_img(fill, 1.0, width, bar_height)
         tip = entry.get("title") or entry.get("label")
         out.append(_tip(piece, str(tip), ctx) if tip else piece)
         out.append("&#8201;")
-    return '<div style="font-size: 0.5rem">%s</div>' % "".join(out)
+    body = '<div style="font-size: 0.5rem">%s</div>' % "".join(out)
+    notes = [str(title) for _value, _tone, title in marks if title]
+    if notes:
+        body += '<div style="color: %s; font-size: 0.7rem">%s</div>' % (
+            _color(ctx, "dim"), tsp_html.esc(" · ".join(notes)))
+    return body
 
 
 def _draw_chart(node, ctx):

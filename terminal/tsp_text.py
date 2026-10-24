@@ -2121,14 +2121,25 @@ def _draw_chart(node, width):
     if kind in ("bars", "spark"):
         series = _list(props.get("series"))
         values = _chart_values(series)
-        top = max([v for v in values if v is not None and v > 0] + [0])
+        marks = [(_num(m.get("value")), m.get("title")) for m in _list(props.get("marks"))
+                 if isinstance(m, dict) and _num(m.get("value")) is not None]
+        # The value domain: min (default 0) to max (default the largest value or mark); values clamp into it.
+        low = _num(props.get("min"))
+        low = 0 if low is None else low
+        high = _num(props.get("max"))
+        if high is None:
+            high = max([v for v in values if v is not None] + [m[0] for m in marks] + [0])
+        high = high if high > low else low + 1
+
+        def fraction(value):
+            return (max(low, min(high, value)) - low) / (high - low)
         if not values:
             pass
         elif kind == "spark":
             row = ""
             for value in values:
-                row += _SPARK[0] if value is None or value <= 0 or top <= 0 else _SPARK[
-                    max(0, min(7, int(round(value / top * 7))))]
+                row += _SPARK[0] if value is None or fraction(value) <= 0 else _SPARK[
+                    max(0, min(7, int(round(fraction(value) * 7))))]
             lines.append(row)
         else:
             height = _get({"sm": 2, "lg": 8}, props.get("size"), 4)
@@ -2136,17 +2147,23 @@ def _draw_chart(node, width):
             column = max(2, max([_w(label) for label in labels] + [0]) + 1)
             if column * len(values) > width:
                 column, labels = 2, []
-            eighths = [1 if (v is None or v <= 0 or top <= 0) else max(1, int(round(v / top * height * 8)))
+            eighths = [1 if (v is None or fraction(v) <= 0) else max(1, int(round(fraction(v) * height * 8)))
                        for v in values]
+            # A reference line is a row of dashes across the cells above the bars at its height.
+            mark_rows = {max(0, min(height - 1, int(fraction(value) * height - 1e-9))) for value, _title in marks}
             for level in range(height - 1, -1, -1):
                 row = ""
                 for eighth in eighths:
                     rest = eighth - level * 8
                     glyph = " " if rest <= 0 else "█" if rest >= 8 else _SPARK[rest - 1]
-                    row += glyph * (column - 1) + " "
+                    if glyph == " " and level in mark_rows:
+                        glyph = "┄"
+                    row += glyph * (column - 1) + (" " if glyph != "┄" else "┄")
                 lines.append(row.rstrip())
             if any(labels):
                 lines.append("".join(_pad(label, column) for label in labels).rstrip())
+        for value, title in marks:
+            lines.append("┄ %s%g" % (_one(_t(title)) + " " if title else "", value))
     else:
         cells = [row for row in _list(props.get("cells")) if isinstance(row, (list, tuple))]
         row_labels = [_one(_t(label)) for label in _list(props.get("rows"))]
