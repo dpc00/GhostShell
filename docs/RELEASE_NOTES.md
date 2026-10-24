@@ -5,7 +5,8 @@
 **Changed:** TSP bars and spark charts follow the tern-sdk of 2026-10-19. The value domain (`min`, `max`) now sets the bar heights, so a chart with a fixed range such as 0 to 100 no longer scales to its largest bar; `marks` draw as dashed reference lines (pixel view: in the mark's tone, with its title under the chart; text view: a `┄` row and a legend line); a bar's `tone` colours that bar in the pixel view. Charts without these fields draw as before.
 
 - Seen: both drawers run on sample charts (text output read, pixel view produced its images and the legend).
-- Not seen: in a running omp session. `hovercard` (a floating card on any node) is not drawn yet; it is ignored.
+- A node's `hovercard` (a floating card in the protocol) shows as that node's tooltip text, up to 600 characters, replacing `title`. Sublime sends no hover event for content inside a phantom, so a real floating card cannot be drawn; seen on sample nodes only.
+- Not seen: in a running omp session.
 
 
 ## 0.2.16

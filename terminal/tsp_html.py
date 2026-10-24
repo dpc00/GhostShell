@@ -582,8 +582,23 @@ _TITLE_IS_OWN = ("tool", "picker", "prefs")     # these kinds use `title` for so
 _TONES = ("neutral", "accent", "info", "success", "warning", "error", "pending", "muted", "user")
 
 
+_HOVERCARD_LIMIT = 600      # characters of a hovercard's text a tooltip carries
+
+
 def _tooltip(node):
-    title = (node.get("p") or {}).get("title")
+    """The node's tooltip: the text of its ``hovercard`` (a floating card in a terminal that can draw one; Sublime
+    has no hover event for content inside a phantom, so the card's text is shown as the tooltip, which the protocol
+    says replaces ``title`` while the card is open), else its ``title``."""
+    props = node.get("p") or {}
+    card = props.get("hovercard")
+    if isinstance(card, dict):
+        try:
+            text = node_text(card).strip()
+        except (AttributeError, TypeError):
+            text = ""
+        if text:
+            return text if len(text) <= _HOVERCARD_LIMIT else text[:_HOVERCARD_LIMIT - 1] + "…"
+    title = props.get("title")
     return title if isinstance(title, str) and title and node.get("k") not in _TITLE_IS_OWN else None
 
 
