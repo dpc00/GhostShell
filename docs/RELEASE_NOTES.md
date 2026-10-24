@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased
+
+**Changed:** TSP bars and spark charts follow the tern-sdk of 2026-10-19. The value domain (`min`, `max`) now sets the bar heights, so a chart with a fixed range such as 0 to 100 no longer scales to its largest bar; `marks` draw as dashed reference lines (pixel view: in the mark's tone, with its title under the chart; text view: a `┄` row and a legend line); a bar's `tone` colours that bar in the pixel view. Charts without these fields draw as before.
+
+- Seen: both drawers run on sample charts (text output read, pixel view produced its images and the legend).
+- Not seen: in a running omp session. `hovercard` (a floating card on any node) is not drawn yet; it is ignored.
+
+
 ## 0.2.16
 
 **Removed:** the code that only the four send-text commands used (they went in 0.2.15). `queue_input` and its idle-drain polling, `send_text_submit` (which wrote a trailing Enter on its own after a gap), the `delay_s` option of `send_string` with the writer's wait for it, and the setting `submit_enter_delay_ms`. A search of the repo found nothing else calling any of it; 130 lines of code and six lines of settings are gone. Your own typing is unchanged: keys still go through `ai_terminal_keypress` to `send_string` and the writer.
