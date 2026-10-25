@@ -8376,6 +8376,17 @@ def _compensate_trim_scroll(view, term, vp):
     if view.settings().get("ai_tsp_native"):
         return vp   # the native TSP view owns scrolling
     lh = view.line_height() or 20
+    # 2026-10-25 (Donald: output flowing, the view creeps up into scrollback
+    # one line per trim and he has to scroll down to find the command line):
+    # a view that is at the tail stays at the tail. This holds even when
+    # _auto_follow is already False, because the compensation itself is what
+    # moves it away from the tail (each trim shifts it up one line).
+    try:
+        ve = view.viewport_extent()
+        if (vp[1] + ve[1]) >= (_host_rest_y(view) + _real_content_height(view) - lh * 2):
+            return vp
+    except (TypeError, IndexError, AttributeError, ValueError):
+        pass
     new_y = max(0.0, vp[1] - evicted * lh)
     if new_y != vp[1]:
         _gs_trace("direct_set_viewport_evict", view, to=_gs_pos((vp[0], new_y)), evicted=evicted)
