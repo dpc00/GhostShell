@@ -2,6 +2,7 @@
 
 Notes from long sessions working on GhostShell. Each is a dated record, so check that it still matches.
 
+- [cast-handles-leak-2026-10-28](project_cast_handles_leak_2026_10_28.md) - broker seems to keep cast files of ended sessions open (5 locked, one broker); handle owner not proven; recycle them after the next broker restart
 - [tern-sdk: no daily update](feedback_tern_sdk_no_daily_update_2026_10_18.md) - 2026-10-18 he wants no schedule; check on request, act only on monumental changes; clone is 1 small commit behind
 - [GhostShell secrets hardening](project_ghostshell_secrets_hardening.md) - user wants LLM package's secret-handling design ported into.
 - [GhostShell session_text_log freeze](project_ghostshell_session_text_log_bug.md) - SessionTextLog.observe() does synchronous full-buffer disk rewrite.

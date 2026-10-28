@@ -4698,6 +4698,15 @@ class _Terminal:
             rows, _cy, _cx = self.screen.render_cells()
         return "\n".join("".join(ch for ch, _ in row) for row in rows)
 
+    def end_recording(self):
+        """Close the .cast and the text log. Every path that drops a terminal
+        from the registry without calling kill() (Recover, Relaunch) must call
+        this, or the files stay open until Sublime's plugin host exits."""
+        rec = getattr(self, "_cast_recorder", None)
+        if rec is not None:
+            rec.close()
+        self._close_text_log()
+
     def kill(self):
         # Drop any in-flight mouse hold so a restart doesn't inherit it.
         vid = self.view.id()
@@ -4719,10 +4728,7 @@ class _Terminal:
         # already captured everything Claude emitted, so there's no need
         # for a [final screen] dump -- the visible grid's content is in
         # the stream.
-        rec = getattr(self, "_cast_recorder", None)
-        if rec is not None:
-            rec.close()
-        self._close_text_log()
+        self.end_recording()
         try:
             self.pty.kill()
         except Exception as e:
@@ -9588,7 +9594,9 @@ def _revive_terminal_client(term, window):
                 _term_registry().pop(vid, None)
 
     # BrokerPty.kill is detach-only. It closes this plugin's pipe handles but
-    # leaves the broker and its child process untouched.
+    # leaves the broker and its child process untouched. The term is no longer
+    # in the registry, so on_close will not end its recording either.
+    term.end_recording()
     pty.kill()
 
     if view_is_usable:
@@ -9940,6 +9948,7 @@ class AiTerminalRelaunchCommand(sublime_plugin.WindowCommand):
                 return
             with _term_lock():
                 _term_registry().pop(view.id(), None)
+            term.end_recording()    # on_close never sees this term again
             if term._watcher is not None:
                 term._watcher.dispose()
                 term._watcher = None
