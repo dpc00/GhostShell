@@ -1081,8 +1081,9 @@ class _BrokerPtyBase:
             creationflags=0x08000000,
         )
         try:
+            # 3 minutes: the PowerShell/WMI launcher is slow while the disk is busy (a 15 s limit failed an omp launch on 2026-10-28)
             raw_out, raw_err = await asyncio.wait_for(
-                helper.communicate(payload.encode("utf-8")), timeout=15.0)
+                helper.communicate(payload.encode("utf-8")), timeout=180.0)
         except (asyncio.TimeoutError, OSError):
             try:
                 helper.kill()
