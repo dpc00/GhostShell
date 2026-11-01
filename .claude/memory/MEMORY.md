@@ -1,4 +1,6 @@
-﻿# Memory index (GhostShell notes)
+﻿STATUS 2026-10-31: current state of everything is in sublime-package-audit\notes\project_session_baton_2026_10_31_state_of_play.md (relative to projects\); the notes below are dated records, and open or parked lists in them are history. Entries marked HISTORY were superseded that day.
+
+# Memory index (GhostShell notes)
 
 Notes from long sessions working on GhostShell. Each is a dated record, so check that it still matches.
 
