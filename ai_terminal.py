@@ -5169,6 +5169,42 @@ def _next_ai_panel_name(window, prefix=None):
     return f"{pfx} {n}"
 
 
+def _apply_proportional_leading(v, profile_name=None):
+    """Dynamic line_padding_top/bottom for regular (non-TSP/omp) ai_terminal tabs.
+
+    Proportional to current line length in chars (using em_width / viewport_extent).
+    Base 55 chars (Bringhurst optimal range). Linear ramp.
+    Total extra approaches ~1.0 * font height on wide tabs (split top/bottom).
+    Only for non-native-TSP views. TSP/omp uses its own phantom HTML leading.
+
+    Gated by profile/global "proportional_leading" (default false) so the
+    automatic adjustment is opt-in and does not surprise users.
+    """
+    if not v or v.settings().get("ai_tsp_native"):
+        return
+    if not _setting_bool("proportional_leading", False, profile_name=profile_name):
+        return
+    try:
+        em = v.em_width() or 7.5
+        w = v.viewport_extent()[0]
+        chars = w / em if em > 0 else 0.0
+        font = float(v.settings().get("font_size") or 12.0)
+        if chars <= 55.0:
+            top = bottom = 0.0
+        else:
+            excess = chars - 55.0
+            # Steeper linear ramp (≈1.8% of font per extra char) to produce
+            # more noticeable extra leading in the practical wide-tab range
+            # (70-110 chars). Cap at 1.0 * font total extra. Still simple and
+            # closer to Bringhurst-style increase for long measure without
+            # jumping to full double-space too early.
+            total = min(font * 1.0, excess * (font * 0.018))
+            top = round(total * 0.5, 2)
+            bottom = top
+        v.settings().set("line_padding_top", top)
+        v.settings().set("line_padding_bottom", bottom)
+    except Exception:
+        pass
 def _apply_terminal_view_settings(v, profile_name=None):
     """Settings/scheme shared by both the tab (new_file) and panel
     (get_output_panel) terminal views. Caller sets the name/scratch flag,
@@ -5255,6 +5291,7 @@ def _apply_terminal_view_settings(v, profile_name=None):
         v.settings().set("font_size", font_size)
     else:
         v.settings().erase("font_size")
+    _apply_proportional_leading(v, profile_name)
     # NOT read-only: on_text_command swallows insert/left_delete/right_delete/
     # move and forwards them to the PTY. Making the view read-only suppresses
     # keyboard `insert` before the listener fires, so real typing would do
@@ -5358,6 +5395,7 @@ def _measure(view, profile_name=None):
     ex = view.viewport_extent()
     cw = view.em_width() or 7.0
     lh = view.line_height() or 18.0
+    _apply_proportional_leading(view, profile_name)
     # Width math: three things eat horizontal space -- the gutter (line
     # numbers), the fold buttons, and the `margin` setting. viewport_extent
     # already excludes the gutter + fold buttons (they live left of the

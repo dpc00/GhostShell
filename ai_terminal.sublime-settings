@@ -886,6 +886,30 @@
             // omp's startup probes.
             "spawn_env": {}
         },
+        "omp-mitm": {
+            "steady_screen_height_enabled": false,
+            "wheel_to_pty": false,
+            "mouse_handling": false,
+            "scroll_manipulation_enabled": false,
+            "detachable": true,
+            "launch_command": [
+                "omp"
+            ],
+            "page_keys_to_pty": false,
+            "pin_viewport": false,
+            "osc_title_updates_tab": true,
+            "close_tab_on_exit": false,
+            "tsp_enabled": true,
+            "tsp_aside_column": false,
+            "tsp_tab_status": true,
+            "tsp_tab_prefix": "π",
+            "spawn_env": {
+                "HTTP_PROXY": "http://127.0.0.1:8080",
+                "HTTPS_PROXY": "http://127.0.0.1:8080",
+                "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+                "NODE_EXTRA_CA_CERTS": "C:\\Users\\donal\\.mitmproxy\\mitmproxy-ca-cert.pem"
+            }
+        },
         "OpenCode": {
             "detachable": true,
             // Mouse tracking: OpenCode's own output requests ?1000/1002/
@@ -1250,6 +1274,13 @@
     // at once while it was being redesigned rather than patched further.
     // Live: read fresh on every viewport write, no reload needed.
     "scroll_manipulation_enabled": true,
+    // When true, regular (non-TSP/omp) ai_terminal tabs automatically adjust
+    // line_padding_top/bottom based on current tab width (in characters) to
+    // improve readability on wide tabs (linear ramp from ~55 chars, up to ~1.0
+    // font height extra total padding on very wide tabs).
+    // Default false to avoid surprising users who did not ask for it.
+    // Can be set per-profile. Live: read on every measure/apply.
+    "proportional_leading": false,
     // Redraw only the lines that changed (as Terminus does) instead of
     // rewriting the whole tab on every screen update. Rewriting everything
     // makes Sublime move the view by itself, which shows up as the text

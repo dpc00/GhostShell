@@ -32,6 +32,7 @@ BOOLEAN_KEYS = frozenset({
     "tsp_tab_status",
     "user_owns_caret_enabled",
     "wheel_to_pty",
+    "proportional_leading",
 })
 
 NUMBER_KEYS = frozenset({
