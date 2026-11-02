@@ -2,14 +2,16 @@
 
 ## Unreleased
 
+**Added:** `proportional_leading` setting (boolean, default false; per-profile or global). When enabled on regular (non-TSP/omp) ai_terminal tabs, automatically adjusts `line_padding_top` and `line_padding_bottom` proportionally to the tab's current width in characters. Linear ramp starting at 55 characters, reaching up to ~1.0× font height of extra leading on wide tabs. Improves readability for eye-tracking on long lines without affecting TSP views or surprising users who did not opt in. The adjustment is live on layout and view setup.
+
+- The feature is opt-in because automatically changing view padding can surprise users.
+- See `ai_terminal.sublime-settings` (global and profile sections) and the implementation in `_apply_proportional_leading`.
+
 **Changed:** TSP bars and spark charts follow the tern-sdk of 2026-10-19. The value domain (`min`, `max`) now sets the bar heights, so a chart with a fixed range such as 0 to 100 no longer scales to its largest bar; `marks` draw as dashed reference lines (pixel view: in the mark's tone, with its title under the chart; text view: a `┄` row and a legend line); a bar's `tone` colours that bar in the pixel view. Charts without these fields draw as before.
 
 - Seen: both drawers run on sample charts (text output read, pixel view produced its images and the legend).
 - A node's `hovercard` (a floating card in the protocol) shows as that node's tooltip text, up to 600 characters, replacing `title`. Sublime sends no hover event for content inside a phantom, so a real floating card cannot be drawn; seen on sample nodes only.
 - Not seen: in a running omp session.
-
-
-## 0.2.16
 
 **Removed:** the code that only the four send-text commands used (they went in 0.2.15). `queue_input` and its idle-drain polling, `send_text_submit` (which wrote a trailing Enter on its own after a gap), the `delay_s` option of `send_string` with the writer's wait for it, and the setting `submit_enter_delay_ms`. A search of the repo found nothing else calling any of it; 130 lines of code and six lines of settings are gone. Your own typing is unchanged: keys still go through `ai_terminal_keypress` to `send_string` and the writer.
 
