@@ -563,7 +563,6 @@ class TspView:
         self._part_ids = {"main%d" % i: child.get("id") for i, child in enumerate(main.get("c") or [])}
         layers = [html for html in regions["layer"] if html]
         toast = regions.get("toast") or ""
-        self._moving = set()        # keys of the panels that change with time (an overlay is drawn whole, nothing is kept)
         if layers:
             # An overlay is open: it is the whole screen.  omp's stack shows only the topmost one; a layer of
             # plain overlays lists them all, in order.
@@ -579,7 +578,6 @@ class TspView:
                 parts.append(("toast", toast))
                 outline.append(("", ""))
             return parts, palette, regions["animated"], True, outline
-        self._moving = {"main%d" % i for i in regions.get("main_moving") or ()}
         parts = [("main%d" % i, html) for i, html in enumerate(regions["main"]) if html]
         outline = [item for item, html in zip(regions["main_outline"], regions["main"]) if html]
         if regions["dock"]:
@@ -651,22 +649,11 @@ class TspView:
             sublime.Phantom(sublime.Region(start, start), tsp_html.page(html, palette), sublime.LAYOUT_BLOCK, self.navigate)
             for start, (_key, html) in zip(starts, parts)
         ]
-        # Each panel hangs under its own caption line, so a re-drawn panel keeps its place without help.  The
-        # take-down below is kept only for a view at the bottom, where it was proven; for a reader scrolled up it
-        # shortens the layout, Sublime throws the view to the bottom and the drawing that follows pins it there.
-        # A panel that moved with time in this drawing and in the last one (a spinner, a running-time counter)
-        # is the same size as before, so it does not count as a change here: without that, one old tool call
-        # still marked running made every tick take down and rebuild every panel after it.
-        old = self._shown or []
-        still_moving = self._moving & getattr(self, "_moving_shown", set())
-        first_changed = 0
-        while first_changed < min(len(old), len(parts)) and (
-                old[first_changed] == parts[first_changed]
-                or (old[first_changed][0] == parts[first_changed][0] and parts[first_changed][0] in still_moving)):
-            first_changed += 1
+        # One update of the whole set.  PhantomSet replaces only the panels whose HTML differs, so a
+        # repaint costs what changed, not what is on screen.  Never hand it a truncated list: that is an
+        # instruction to delete the tail, and on a long transcript the layout then collapses and is
+        # rebuilt on every tick -- a full-screen flip at the redraw rate (an overlay's meter, a spinner).
         scrolled_to = None if at_bottom else view.viewport_position()
-        if at_bottom and first_changed < len(old):
-            self._phantoms.update(phantoms[:first_changed])
         self._phantoms.update(phantoms)
         if scrolled_to is not None:
             # The reader is looking at older output.  While the later panels were down the layout was
@@ -675,7 +662,6 @@ class TspView:
             # view back where it was, after the layout has settled.
             self._hold_position(scrolled_to)
         self._shown = parts
-        self._moving_shown = set(self._moving)
         self._outline = outline
         view.set_status(STATUS_KEY, "omp native view: live " + time.strftime("%H:%M:%S"))
         surface_id = host.active_surface()
