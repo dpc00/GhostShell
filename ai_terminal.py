@@ -4475,6 +4475,10 @@ class _Terminal:
     # allows (it means all five states and all three kinds).
     _PS_PROBE = re.compile("\x1b\\]7501;\\?[^\x07\x1b]*(?:\x07|\x1b\\\\)")
     _PS_REPLY = "\x1b]7501;?\x1b\\"
+    # The view setting the run state is mirrored to, readable from every tab:
+    # sublime-mcp's get_sheets returns each tab's view settings, so this turns
+    # one agent's announced state into an answer another tab's agent can read.
+    _PS_STATUS_SETTING = "ai_terminal_program_status"
 
     def _ps_reply(self):
         """Our answer, in a form the program can receive. Windows ConPTY
@@ -4626,14 +4630,80 @@ class _Terminal:
                 for old_id in list(records):
                     if old_id == record_id or old_id.startswith(record_id + "/"):
                         del records[old_id]
+            self._mirror_program_status(record_id)
         elif state in self._PS_STATES:
             previous = records.get(record_id, {}).get("state")
             records[record_id] = pairs  # replaces the whole record
+            # Mirror every report, not just a state change: kind, app and the
+            # record count are part of the summary and can change while the
+            # state stays the same (blocked:permission -> blocked:question, a
+            # sub-record appearing). The mirror skips a write nothing can see.
+            self._mirror_program_status(record_id)
             if state != previous:
                 _play_status_tone(state, self.profile_name)
                 if (state == "blocked" and pairs.get("kind") == "permission"
                         and pairs.get("app") == "claude-code"):
                     self._auto_approve_permission(record_id)
+
+    def _mirror_program_status(self, record_id=""):
+        """Mirror the tab's announced run state into a view setting.
+
+        The Program Status Protocol records from _status_handle are kept in
+        memory on the terminal object, and their only consumer was the
+        auto-approve path -- so the state one program announced for the whole
+        world to see was invisible to every other tab.  A view setting flows
+        back out with every get_sheets, which already returns each tab's
+        settings, so the mirror answers, through a tool agents already call,
+        the question about another tab there is otherwise no answer to: is
+        the program there working, done, blocked, or gone.
+
+        The summary is the root record (id "", what omp publishes -- see
+        _tsp_tab_status_hook) when one exists, else the record that just
+        changed, plus how many records exist.  An empty state means no record:
+        the program cleared its status, or never announced one
+
+        Called only from _status_handle, i.e. the PTY reader thread, right
+        after a record was replaced or removed -- so the dict reads below are
+        race-free, and the moment they describe is the report's, not whenever
+        the main thread gets to run.  Both an epoch and a local clock string
+        are recorded: another tab needs the epoch to tell a fresh "idle" from
+        a value left behind by a session that stopped reporting, while the
+        clock string is what a person reads.
+
+        A write is scheduled only when a field another tab can act on changes;
+        the clock is deliberately not part of that comparison, so a repeated
+        same-state report cannot rewrite the setting.  The write itself runs
+        on the main thread (view calls belong there).  A tab whose program
+        never announces (plain shells) never touches the setting.  Never
+        raises."""
+        now = time.time()
+        records = self.__dict__.get("program_status") or {}
+        record = records.get("") or records.get(record_id) or {}
+        summary = {
+            "state": record.get("state", "") or "",
+            "kind": record.get("kind", "") or "",
+            "app": record.get("app", "") or "",
+            "records": len(records),
+            "epoch": int(now),
+            "time": time.strftime("%H:%M:%S", time.localtime(now)),
+        }
+        changed = tuple(summary[key] for key in
+                        ("state", "kind", "app", "records"))
+        if changed == getattr(self, "_ps_mirrored", None):
+            return
+        self._ps_mirrored = changed
+
+        def write():
+            try:
+                view = getattr(self, "view", None)
+                if view is None or not view.is_valid():
+                    return
+                if view.settings().get(self._PS_STATUS_SETTING) != summary:
+                    view.settings().set(self._PS_STATUS_SETTING, summary)
+            except Exception:
+                print("[ai_terminal] program-status mirror failed:\n%s"
+                      % traceback.format_exc())
+        sublime.set_timeout(write, 0)
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which
