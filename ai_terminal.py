@@ -5587,12 +5587,6 @@ def _measure(view, profile_name=None):
 # paint loop; 100ms cuts main-thread churn on bursty TUIs.
 _RENDER_MS = 100
 _RENDER_MIN_INTERVAL_MS = 30
-# Keyboard first: a frame is never painted within this long after a keystroke.
-# A frame that comes due inside the window is put back for the rest of it, so
-# a person typing fast (400 wpm is a key every 25 ms) never competes with the
-# tab for the main thread.  The PTY is still read and the screen kept current,
-# so the frame that lands when typing pauses is the up-to-date one.
-_TYPING_FRAME_S = 0.04
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
 # A level, not a stack: some apps (Grok --minimal and its full TUI both,
@@ -6026,17 +6020,6 @@ def _do_render(term):
     if not view or not view.is_valid():
         term._render_pending = False
         return
-    typed_at = getattr(term, "_last_typed", 0.0) or 0.0
-    if typed_at:
-        since = time.monotonic() - typed_at
-        if since < _TYPING_FRAME_S:
-            # Keyboard first: the key owns the main thread.  Put this frame back
-            # for the rest of the window instead of painting over a keystroke.
-            sublime.set_timeout(
-                lambda: _do_render(term),
-                int((_TYPING_FRAME_S - since) * 1000) + 1,
-            )
-            return  # leave _render_pending True, like the selection/sync defers
     if _tsp_render_native(term):
         # The program is drawing natively (TSP): its document is shown, not screen text rows.
         term._render_pending = False
