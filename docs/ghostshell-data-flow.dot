@@ -69,7 +69,7 @@ digraph GhostShellTerminalHost {
     ViewBuf  [label="SINK: Sublime view buffer\nview.replace / patch"];
     Colors   [label="SINK: color regions"];
     Caret    [label="GATE→SINK: caret path\ncaret_footer_pinning_enabled\nhost_cursor_paint_enabled\nuser_owns_caret_enabled"];
-    Phantom  [label="SINK: LAYOUT_BLOCK phantom\nhost toolbar / Settings / Tab Close\n(_add_close_toolbar)"];
+    Phantom  [label="SINK: LAYOUT_BLOCK phantom\nhost toolbar / Settings / Tab Actions\n(_add_close_toolbar)"];
     Title    [label="GATE→SINK: osc_title_updates_tab\n→ tab name"];
     Status   [label="GATE→SINK: debug_status_bar_enabled"];
     TextLog  [label="GATE→SINK: log_tab_text\nSessionTextLog file"];

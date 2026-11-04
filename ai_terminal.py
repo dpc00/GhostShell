@@ -1600,15 +1600,18 @@ def _tune_profile_panel_html(term):
 
 
 def _close_menu_panel_html():
-    """Minihtml body for the "Tab Close" toolbar link's expanded state --
-    the three differently-destructive session-ending actions, revealed
-    behind one extra click rather than sitting bare in the always-visible
-    toolbar row (see the reasoning above _add_close_toolbar's `items`
-    list). Captions match the existing Tab Context menu / Command Palette
-    entries for these same commands exactly, so there is only one
-    vocabulary to learn regardless of which path a user finds first.
+    """Minihtml body for the "Tab Actions" toolbar link's expanded state --
+    Relaunch Agent plus the three differently-destructive session-ending
+    actions, revealed behind one extra click rather than sitting bare in
+    the always-visible toolbar row (see the reasoning above
+    _add_close_toolbar's `items` list). Captions match the existing Tab
+    Context menu / Command Palette entries for these same commands exactly,
+    so there is only one vocabulary to learn regardless of which path a
+    user finds first.
     """
     rows = [
+        ("relaunch", "Relaunch Agent",
+         "restarts the agent here; the old session's panels are cleared"),
         ("close_keep_alive", "Close Tab (Keep Session Alive)",
          "detaches -- keeps running in the background, recoverable via "
          "'Ai: Recover Session...'"),
@@ -1618,7 +1621,7 @@ def _close_menu_panel_html():
          "ends the process now and closes the tab"),
     ]
     return (
-        "<br>&mdash; end or detach this session &mdash;<br>"
+        "<br>&mdash; tab actions &mdash;<br>"
         + "<br>".join(
             '<a href="%s">%s</a><br>'
             '<span style="padding-left:1.4em; font-style:italic;">%s</span>'
@@ -1629,7 +1632,7 @@ def _close_menu_panel_html():
 
 
 def _add_close_toolbar(term):
-    """(Re-)anchor the persistent Close Tab/Relaunch/Windows-Terminal toolbar
+    """(Re-)anchor the persistent Tab Actions/Windows-Terminal toolbar
     to term's view, at the buffer's current end. See
     _CLOSE_TOOLBAR_PHANTOM_KEY. No-op for non-broker sessions (nothing to
     detach or relaunch) or an already-invalid view.
@@ -1679,6 +1682,9 @@ def _add_close_toolbar(term):
             return
         group, index = w.get_view_index(v)
         if href == "relaunch":
+            t = _Terminal.from_id(v.id())
+            if t is not None:
+                t.close_menu_open = False
             w.run_command("ai_terminal_relaunch", {"group": group, "index": index})
         elif href == "info":
             w.run_command("ai_terminal_session_info", {"group": group, "index": index})
@@ -1750,7 +1756,6 @@ def _add_close_toolbar(term):
     # needs HTML entities again; none of these currently do.
     items = [
         ("edit_mode", edit_mode_label, edit_mode_label),
-        ("relaunch", "Relaunch Agent", "Relaunch Agent"),
         ("wt", "Move to Windows Terminal", "Move to Windows Terminal"),
         ("info", "Session Info", "Session Info"),
     ]
@@ -1760,7 +1765,7 @@ def _add_close_toolbar(term):
             else "Settings ▼"
         )
         items.append(("tune_profile", settings_label, settings_label))
-    # Tab Close reveal: since 2026-09-15 the native window-close commands
+    # Tab Actions reveal: since 2026-09-15 the native window-close commands
     # (Ctrl+W, File > Close File, Ctrl+F4, right-click Close Tab) are
     # blocked outright for ai_terminal tabs -- see
     # AiTerminalTabCloseInterceptor -- so this is the one place left to
@@ -1773,7 +1778,7 @@ def _add_close_toolbar(term):
     # equivalent of the menu's right-click travel distance, just visible
     # and discoverable instead of hidden.
     close_menu_label = (
-        "Tab Close ▲" if getattr(term, "close_menu_open", False) else "Tab Close ▼"
+        "Tab Actions ▲" if getattr(term, "close_menu_open", False) else "Tab Actions ▼"
     )
     items.append(("close_menu", close_menu_label, close_menu_label))
     sep = "   |   "
@@ -4834,7 +4839,7 @@ _VIEW_NAME = "Ai"
 _VIEW_SETTING = "ai_terminal_view"
 _TAG_SETTING = "ai_logger"  # so panic_dialog / ClaudeSendTab still find this view
 
-# Persistent bottom-of-tab Close Tab/Relaunch/Windows-Terminal toolbar for
+# Persistent bottom-of-tab Tab Actions/Windows-Terminal toolbar for
 # detachable sessions -- see _add_close_toolbar. Mouse-driven tab close never
 # dispatches a plugin-visible command (sublimehq/sublime_text#1922), so a
 # close-time confirmation dialog can't be relied on; these are always-
