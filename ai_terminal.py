@@ -4471,7 +4471,20 @@ class _Terminal:
         # (see _on_parser_write_pty) -- it still gets written to the pty, just
         # not logged as an input event.
         if record:
-            self._last_typed = time.monotonic()  # auto approve waits for a pause in typing
+            now = time.monotonic()
+            idle = now - (getattr(self, "_last_typed", 0.0) or 0.0)
+            self._last_typed = now  # auto approve waits for a pause in typing
+            # First key after a pause stops the program: ESC goes out before the
+            # key, in the same ordered queue (stop_agent_on_first_key: false off).
+            if (
+                idle >= _ESC_ON_FIRST_KEY_S
+                and not s.startswith("\x1b")
+                and _setting_bool(
+                    "stop_agent_on_first_key", True,
+                    profile_name=_term_profile_name(self),
+                )
+            ):
+                self._write_queue.put(("\x1b", False))
         self._write_queue.put((s, record))
 
     def _tsp_send(self, text):
@@ -5593,6 +5606,9 @@ _RENDER_MIN_INTERVAL_MS = 30
 # tab for the main thread.  The PTY is still read and the screen kept current,
 # so the frame that lands when typing pauses is the up-to-date one.
 _TYPING_FRAME_S = 0.04
+# A pause this long before a keystroke counts as "the person starts typing":
+# one ESC goes out first so a running agent stops instead of talking over them.
+_ESC_ON_FIRST_KEY_S = 0.3
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
 # A level, not a stack: some apps (Grok --minimal and its full TUI both,
