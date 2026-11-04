@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**Fixed:** key entry in a terminal tab waited for a paint it did not need to wait for. The renderer debounced every PTY update by 100 ms, including the echo of a keystroke. A frame that is that echo — a small amount of output arriving within 0.6 s of input actually typed by a person (`send_string` with `record=True`) — now paints 16 ms after the output lands, while an app's own unprompted redraw and any larger burst keep the 100 ms debounce (`_RENDER_MS_ECHO`, `_RENDER_ECHO_WINDOW_S`, `_RENDER_ECHO_MAX_BYTES`).
+
+**Fixed:** one classic (non-TSP) frame cost 63–114 ms of the main thread on a full tab, so keystrokes queued behind paints. Three costs are gone:
+
+- `_scope_for` looked up the colour scope for every coloured cell of every frame, and the lookup itself imported the pure helper through the package on each call: 30–39 ms of each omp frame (336 rows × 99 columns, ~2.4K colour runs). It is now cached per packed attr (`_SCOPE_CACHE`, bounded at 65536 entries): 5–8 ms.
+- The frame's colour runs (~2.4K of them) were passed through `ai_terminal_render`'s command arguments, so Sublime converted the whole list on every frame: 20–29 ms of `view.run_command` against the command's own 8 ms. The command now reads them from the terminal (`regions_from_term`, `term._frame_regions`); `tsp_view` still passes its own.
+- The "nothing changed, skip the paint" test rebuilt `_plain_cells_signature` — a string of every cell in the tab — purely to compare it with the previous one. The frame's built text and colour runs answer the same question (equal text = equal characters, equal runs = equal attributes, and attr-only changes still repaint), so the signature, its cache and the extra 33K-cell pass per frame are gone.
+
+A frame after these: 19–31 ms, and a typed character 42–80 ms from `send_string` to the painted frame.
+
+- Seen live on Windows 11, build 4215 (Python 3.14), in the running Sublime, with temporary timestamped instrumentation in `_do_render`, `AiTerminalRenderCommand.run` and `send_string` (removed again; the numbers above are from it). Before: a typed character in a cmd.exe tab took 151, 178, 183 ms `send_string` → painted frame; an omp frame was 63–114 ms (lock 8–13 + text 30–39 + paint 20–29). After: 42, 53, 59, 80 ms and 19–31 ms (lock 2.5–4.4 + text 5–8 + paint 8–16). The tab held 336 rows and 18.8–29.6 K characters of buffer.
+- Seen live after the instrumentation was taken out: a cmd.exe tab echoed typed text (`echo SMOKE_OK` ran through the PTY and printed) and the omp tab drew its transcript with all colours, panels and toolbar intact; the console showed no new errors. The one `TypeError: … unexpected keyword argument 'regions_from_term'` in the console is a reload-window artifact (the previous class instance still loaded for one frame), not a repeat.
+- Not seen live: end-to-end key latency in an omp tab measured directly — typing into the tab that hosts the session would have put the keys in its own prompt. Its frames use the same path and were measured, but its own input handling sits on top.
+- Not done: `_build_text_and_regions` still walks every cell of the tab each frame (5–8 ms now). Making it per-row incremental is the next step if a large tab still feels slow.
+
 **Added:** `proportional_leading` setting (boolean, default false; per-profile or global). When enabled on regular (non-TSP/omp) ai_terminal tabs, automatically adjusts `line_padding_top` and `line_padding_bottom` proportionally to the tab's current width in characters. Linear ramp starting at 55 characters, reaching up to ~1.0× font height of extra leading on wide tabs. Improves readability for eye-tracking on long lines without affecting TSP views or surprising users who did not opt in. The adjustment is live on layout and view setup.
 
 - The feature is opt-in because automatically changing view padding can surprise users.

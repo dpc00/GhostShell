@@ -2588,34 +2588,52 @@ def _flush_pending_rules():
     _color_scheme_log(msg)
 
 
+_SCOPE_CACHE = {}
+_SCOPE_MISS = object()
+
+
 def _scope_for(attr):
     """Map a packed cell attr to a precompiled scope, or None for default.
 
     Reverse with default colours must not collapse to (0,0)/None — that made
     Claude's reverse-video block cursor invisible (see terminal.colors).
+
+    Cached per attr: this runs once per coloured cell per frame (a full TUI
+    frame is ~33K cells, ~2.4K of them coloured runs), and the uncached body
+    imports the pure helper through the package on every call. Measured on the
+    omp tab (336 rows x 99 cols, 2394 regions): 30-39 ms of every frame went
+    into this loop; the cache takes it to a dict lookup per cell.
     """
     if attr == 0:
         return None
+    scope = _SCOPE_CACHE.get(attr, _SCOPE_MISS)
+    if scope is not _SCOPE_MISS:
+        return scope
     # Prefer the pure helper (keeps reverse-default logic in one place).
     try:
         from .terminal.colors import scope_name_for as _pure_scope
     except ImportError:
         from terminal.colors import scope_name_for as _pure_scope
     scope = _pure_scope(attr)
-    if scope is None:
-        return None
-    # Register dynamic scheme rule if needed (ai.fb.<fg>.<bg>[.s<style_id>]).
-    try:
-        # "ai.fb.1.16" -> fg=1, bg=16; "ai.fb.1.16.s3" -> style_id=3 (bold+italic)
-        parts = scope.split(".")
-        fg, bg = int(parts[2]), int(parts[3])
-        style_id = int(parts[4][1:]) if len(parts) > 4 else 0
-    except (IndexError, ValueError):
-        print("[ai_terminal] scope name fg/bg parse failed for %r:\n%s"
-              % (scope, traceback.format_exc()))
-        return scope
-    if scope not in _REGISTERED_SCOPES:
-        _register_scope_async(fg, bg, style_id)
+    if scope is not None:
+        # Register dynamic scheme rule if needed (ai.fb.<fg>.<bg>[.s<style_id>]).
+        try:
+            # "ai.fb.1.16" -> fg=1, bg=16; "ai.fb.1.16.s3" -> style_id=3 (bold+italic)
+            parts = scope.split(".")
+            fg, bg = int(parts[2]), int(parts[3])
+            style_id = int(parts[4][1:]) if len(parts) > 4 else 0
+        except (IndexError, ValueError):
+            print("[ai_terminal] scope name fg/bg parse failed for %r:\n%s"
+                  % (scope, traceback.format_exc()))
+            _SCOPE_CACHE[attr] = scope
+            return scope
+        if scope not in _REGISTERED_SCOPES:
+            _register_scope_async(fg, bg, style_id)
+    if len(_SCOPE_CACHE) > 65536:
+        # Bounded: a 24-bit colour TUI could otherwise grow this for a whole
+        # session. Clearing just re-derives names for the next frame.
+        _SCOPE_CACHE.clear()
+    _SCOPE_CACHE[attr] = scope
     return scope
 
 
@@ -4297,6 +4315,7 @@ class _Terminal:
         if _DEBUG:
             _debug_log(data)
         self._last_output_at = time.time()
+        self._bytes_since_paint = getattr(self, "_bytes_since_paint", 0) + len(data)
         text = self._decoder.decode(data)
         if getattr(self, "_resize_desynced", False):
             # Bytes can still drain while pty.kill() closes the handles, but
@@ -5366,12 +5385,12 @@ def _migrate_terminal_view(term, new_view):
     term.view = new_view
     _add_close_toolbar(term)
     term.screen.dirty = True
-    # _do_render's skip_all fast path compares against these caches to avoid
-    # repainting unchanged content -- but they were populated by the paint
-    # into old_view. The new_view has never been painted, so without
-    # invalidating them here, the identical signature makes _do_render skip
-    # the paint entirely and the new view stays blank.
-    term._last_plain_sig = None
+    # _do_render's unchanged-frame fast path compares against these caches to
+    # avoid repainting identical content -- but they were populated by the
+    # paint into old_view. The new_view has never been painted, so without
+    # invalidating them here, identical text/regions make _do_render skip the
+    # paint entirely and the new view stays blank.
+    term._last_frame_regions = None
     term._last_render_text = None
     term._last_caret_off = None
     # AiTerminalRenderCommand's auto-follow heuristic compares the view's
@@ -5477,7 +5496,18 @@ def _measure(view, profile_name=None):
 # replaces starve ST key dispatch on Windows; slower feels laggy vs Terminus.
 # Debounce after PTY output (was 30ms). Still event-armed, not a free-running
 # paint loop; 100ms cuts main-thread churn on bursty TUIs.
+#
+# That debounce is also a flat 100ms of latency on the one frame a person
+# notices: the echo of a keystroke. Measured on this machine 2026-11-04 (live
+# instrumentation, 336-row tab): a typed character took 151-183ms from
+# send_string() to a painted frame, of which the debounce was 100ms. So an
+# update that IS that echo -- small, and arriving right after real typed input
+# (term._last_typed, set by send_string for recorded input only) -- skips the
+# debounce instead of waiting for output that has already arrived.
 _RENDER_MS = 100
+_RENDER_MS_ECHO = 16
+_RENDER_ECHO_WINDOW_S = 0.6     # a frame this soon after typed input is its echo
+_RENDER_ECHO_MAX_BYTES = 4096   # ...and a burst bigger than this is not one
 _RENDER_MIN_INTERVAL_MS = 30
 
 # CSI ?2026h / CSI ?2026l -- DECSET/DECRST "synchronized output" (mode 2026).
@@ -5491,6 +5521,20 @@ _RENDER_MIN_INTERVAL_MS = 30
 # GhosttyParser._sync); _do_render defers while it's set.
 
 
+def _is_echo_frame(term):
+    """True when the dirty screen is the echo of something a person typed.
+
+    Both halves are needed: recently typed input, and a small amount of PTY
+    output since the last frame (an echo is a few bytes; an app's own
+    unprompted redraw -- a spinner, a stream -- is not, and keeps the slower
+    burst cadence).
+    """
+    last_typed = getattr(term, "_last_typed", 0.0)
+    if not last_typed or (time.monotonic() - last_typed) > _RENDER_ECHO_WINDOW_S:
+        return False
+    return getattr(term, "_bytes_since_paint", 1 << 30) <= _RENDER_ECHO_MAX_BYTES
+
+
 def _schedule_render(term, delay_ms=None):
     """Arm a paint from PTY/screen dirty (Terminus-style: no pre-PTY caret)."""
     if term._render_pending:
@@ -5499,7 +5543,10 @@ def _schedule_render(term, delay_ms=None):
         return
     term._render_pending = True
     term._render_coalesce = False
-    delay = _RENDER_MS if delay_ms is None else max(0, int(delay_ms))
+    if delay_ms is None:
+        delay = _RENDER_MS_ECHO if _is_echo_frame(term) else _RENDER_MS
+    else:
+        delay = max(0, int(delay_ms))
     last = getattr(term, "_last_render_mono", 0.0) or 0.0
     if last:
         # Cap paint rate so burst typing cannot schedule a full replace every
@@ -5522,23 +5569,6 @@ def _rearm_if_dirty(term):
         term._render_coalesce = False
         if dirty:
             _schedule_render(term)
-
-
-def _plain_cells_signature(rows):
-    """Stable content fingerprint before host-cursor paint (no ST deps)."""
-    if not rows:
-        return ""
-    # Join chars only — attrs changes still need a full colour rebuild, so
-    # include a coarse attr token per cell. Cheap string, not a hash object.
-    parts = []
-    for row in rows:
-        for ch, attr in row:
-            parts.append(ch)
-            if attr:
-                parts.append("\x00")
-                parts.append(str(int(attr)))
-        parts.append("\n")
-    return "".join(parts)
 
 
 def _clear_view_selection(view, term=None):
@@ -5998,7 +6028,6 @@ def _do_render(term):
         # Clear under the lock so a concurrent parser feed cannot set dirty
         # then have us wipe it without painting that feed.
         term.screen.dirty = False
-    plain_sig = _plain_cells_signature(rows)
     # Bisection gate (ai_terminal.sublime-settings): when disabled, rely
     # solely on the real ST caret + whatever reverse-video the app itself
     # already sends, Terminus-style -- see settings comment.
@@ -6028,30 +6057,36 @@ def _do_render(term):
     # Drop any leftover HTML host-cursor phantoms from the prior experiment.
     _clear_host_cursor_phantom(view)
 
-    prev_plain = getattr(term, "_last_plain_sig", None)
     prev_text = getattr(term, "_last_render_text", None)
+    prev_regions = getattr(term, "_last_frame_regions", None)
     prev_caret = getattr(term, "_last_caret_off", None)
     caret_now = caret_off if caret_off is not None else -1
-    # Burst typing / L-R cursor: PTY cells unchanged (plain_sig stable); only
+    # "Nothing changed" used to be decided from _plain_cells_signature, a
+    # string rebuilt from every cell of the frame (33K cells on a full tab)
+    # purely to be compared against the previous one. The built text and the
+    # colour runs ARE that comparison: equal text means equal characters, and
+    # equal runs mean equal attributes, which is exactly what the signature
+    # encoded -- so compare those instead and skip the extra pass. Attr-only
+    # changes still repaint (regions differ), which the signature was there
+    # to catch.
+    unchanged = (
+        prev_text is not None
+        and prev_text == text
+        and prev_regions == regions
+        and prev_caret == caret_now
+    )
+    # Burst typing / L-R cursor: PTY cells unchanged (text stable); only
     # host █ / reverse highlight + ST selection move. Mid-line reverse moves
     # keep the *text* identical — still a fast frame (regions + selection).
     # Bisection gate (ai_terminal.sublime-settings): off = always full-buffer
     # replace, no partial diff-patching -- see settings comment.
     fast_caret = (
         _setting_bool("fast_caret_patch_enabled", False, profile_name=_term_profile_name(term))
-        and prev_plain is not None
-        and prev_plain == plain_sig
-        and prev_text is not None
-        and (prev_text != text or prev_caret != caret_now)
-    )
-    skip_all = (
-        prev_plain is not None
-        and prev_plain == plain_sig
         and prev_text is not None
         and prev_text == text
-        and prev_caret == caret_now
+        and prev_caret != caret_now
     )
-    if skip_all:
+    if unchanged:
         term._last_render_mono = time.monotonic()
         _rearm_if_dirty(term)
         return
@@ -6060,19 +6095,28 @@ def _do_render(term):
     # Do not pass prev_text through command args (ST JSON-serializes them;
     # duplicating a full TUI buffer per key would reintroduce main-thread lag).
     # AiTerminalRenderCommand diffs against the live view when fast_caret.
+    #
+    # Same reason, for `regions`: a full TUI frame is ~2.4K colour runs, and
+    # converting that list to an ST value on every frame cost 10-20 ms of
+    # main thread (measured on the omp tab: paint_ms 20-29 ms against the
+    # command's own 8 ms). The command runs in this process, so it takes the
+    # list straight off the terminal instead -- see _frame_regions there.
+    term._frame_regions = regions
     view.run_command(
         "ai_terminal_render",
         {
             "text": text,
             "cursor": [cy, cx],
             "cursor_offset": caret_off if caret_off is not None else -1,
-            "regions": regions,
+            "regions": None,
+            "regions_from_term": True,
             "fast_caret": bool(fast_caret),
         },
     )
-    term._last_plain_sig = plain_sig
+    term._last_frame_regions = regions
     term._last_render_text = text
     term._last_caret_off = caret_off if caret_off is not None else -1
+    term._bytes_since_paint = 0     # this frame consumed the output _is_echo_frame measures
     term._last_render_mono = time.monotonic()
     _add_close_toolbar(term)
     _update_debug_status(term)
@@ -9316,6 +9360,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         cursor_offset=-1,
         regions=None,
         fast_caret=False,
+        regions_from_term=False,
     ):
         view = self.view
         view.set_read_only(False)
@@ -9332,6 +9377,13 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # fragile offset comparison.
             term._in_render = True
         try:
+            if regions_from_term and term is not None:
+                # _do_render hands the frame's colour runs over on the terminal
+                # instead of through this command's args: passing ~2.4K of them
+                # made ST convert the whole list on every frame (10-20 ms of
+                # main thread on a full TUI frame, measured 2026-11-04). Other
+                # callers (tsp_view) still pass their regions directly.
+                regions = getattr(term, "_frame_regions", None)
             self._run(view, edit, term, vp, ve, lh, text, cursor, cursor_offset, regions, fast_caret)
         finally:
             if term is not None:
@@ -9345,7 +9397,6 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             # typing must not be possible in this mode.
             if term is not None and term.copy_mode:
                 view.set_read_only(True)
-
     def _run(self, view, edit, term, vp, ve, lh, text, cursor, cursor_offset, regions, fast_caret):
         # Abort buffer mutation while the user is selecting text. Even a
         # single-char patch shifts offsets and kills a drag mid-response.
