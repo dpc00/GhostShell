@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**Fixed:** Sublime Text froze within a second of starting, and did not recover, whenever an `omp`/broker tab was restored. A terminal whose PTY writer is the async task (any broker tab) could be left holding the thread generation's plain `queue.Queue` — `_Terminal.__init__` makes one, and a hot reload can leave one behind. `_aio_write_loop` then ran `await self._write_queue.get()` on the plugin's loop, which shares Sublime's main thread, so an empty queue blocked the plugin host forever and every later editor call waited on it. The queue type now has to match the writer: `_ensure_writer` installs an `_AioQueue` for the async task and a `queue.Queue` for the thread writer, and `_aio_write_loop` refuses a non-async queue with a console message instead of blocking.
+
+- Seen live on Windows 11, build 4200: two cold starts froze (window "Not Responding", plugin host main thread at 5% CPU); `py-spy dump` of `plugin_host-3.14.exe` showed the main thread inside `_aio_write_loop` → `queue.Queue.get` → `threading.wait`. After the fix the same session started with both restored tabs, the `omp` tab reattached and drew live output, and the editor stayed responsive through a plugin reload on save (the path that froze it before).
+- Not seen live: typing into an `omp` tab after the reload; the write path was confirmed for the broker tab only by its own live output and by the writer stack no longer sitting in a blocking `get`.
+
 **Added:** `proportional_leading` setting (boolean, default false; per-profile or global). When enabled on regular (non-TSP/omp) ai_terminal tabs, automatically adjusts `line_padding_top` and `line_padding_bottom` proportionally to the tab's current width in characters. Linear ramp starting at 55 characters, reaching up to ~1.0× font height of extra leading on wide tabs. Improves readability for eye-tracking on long lines without affecting TSP views or surprising users who did not opt in. The adjustment is live on layout and view setup.
 
 - The feature is opt-in because automatically changing view padding can surprise users.

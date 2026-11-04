@@ -4144,14 +4144,42 @@ class _Terminal:
         """Create the ordered PTY writer, including for hot-reloaded terminals."""
         if getattr(self.pty, "aio", False):
             # A task on the plugin's loop, not a thread; _AioQueue.put is safe from any thread.
-            if getattr(self, "_aio_writer_task", None) is None:
-                self._write_queue = _AioQueue()
-                self._aio_writer_task = _aio_loop.run(self._aio_write_loop())
+            #
+            # "is None" is not enough.  After a plugin reload, a relaunch or a
+            # detach/reattach the loop is replaced and the old task is destroyed
+            # ("Task was destroyed but it is pending!", "cannot reuse already
+            # awaited coroutine"), yet the attribute stayed set.  Every later
+            # keystroke then went into an _AioQueue that nobody read: keys were
+            # accepted and silently never written, which looks like a frozen
+            # keyboard until the tab is detached and reattached.
+            task = getattr(self, "_aio_writer_task", None)
+            if task is not None and (task.done() or task.cancelled()):
+                self._aio_writer_task = None
+                task = None
+            if task is None:
+                # The queue must be this generation's async queue.  _Terminal.__init__
+                # makes the thread generation's plain queue.Queue(), and a hot reload
+                # can leave one here too.  _aio_write_loop awaits get() on the plugin's
+                # loop, which runs on Sublime's main thread: queue.Queue.get() blocks
+                # there forever on an empty queue and the whole editor freezes.
+                if not isinstance(getattr(self, "_write_queue", None), _AioQueue):
+                    self._write_queue = _AioQueue()
+                started = _aio_loop.run(self._aio_write_loop())
+                self._aio_writer_task = started
+
+                def _forget(dead, terminal=self, started=started):
+                    if getattr(terminal, "_aio_writer_task", None) is started:
+                        terminal._aio_writer_task = None
+
+                if started is not None:
+                    started.add_done_callback(_forget)
             return
         writer = getattr(self, "_writer", None)
         if writer is not None and writer.is_alive():
             return
-        if not hasattr(self, "_write_queue"):
+        if not isinstance(getattr(self, "_write_queue", None), queue.Queue):
+            # Same rule in reverse: _AioQueue.get() is a coroutine, so the thread
+            # writer would spin on unawaited coroutines instead of blocking on input.
             self._write_queue = queue.Queue()
         self._writer = threading.Thread(target=self._write_loop, daemon=True)
         self._writer.start()
@@ -4177,6 +4205,11 @@ class _Terminal:
 
     async def _aio_write_loop(self):
         """_write_loop as a task: input is delivered in order, then recorded."""
+        if not isinstance(self._write_queue, _AioQueue):
+            # This task runs on Sublime's main thread; one blocking queue.get()
+            # here freezes the whole editor. Refuse instead of freezing.
+            print("[ai_terminal] writer: non-async queue on the plugin loop")
+            return
         while True:
             item = await self._write_queue.get()
             if item is None:
