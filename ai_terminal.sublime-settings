@@ -1297,11 +1297,6 @@
     // 2026-09-22, and as Terminus does).
     // Live: read fresh on every redraw, no reload needed.
     "steady_screen_height_enabled": true,
-    // Keyboard first. After a pause of 0.3 s, the first key you press sends ESC
-    // before the key itself, so a running agent (omp, Claude) stops instead of
-    // talking over you. Set false for profiles where a stray ESC is harmful
-    // (vim and other modal editors). Live: read on every keystroke.
-    "stop_agent_on_first_key": true,
     // When old scrollback lines are dropped while the tab is following new
     // output, move the view up to keep the same text on screen. The follow
     // code then moves it straight back down, which shows as the text jumping
