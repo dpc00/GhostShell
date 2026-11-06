@@ -6102,10 +6102,12 @@ def _do_render(term):
     # command's own 8 ms). The command runs in this process, so it takes the
     # list straight off the terminal instead -- see _frame_regions there.
     term._frame_regions = regions
+    term._frame_text = text
     view.run_command(
         "ai_terminal_render",
         {
-            "text": text,
+            "text": "",
+            "text_from_term": True,
             "cursor": [cy, cx],
             "cursor_offset": caret_off if caret_off is not None else -1,
             "regions": None,
@@ -6148,6 +6150,26 @@ def _clear_host_cursor_phantom(view):
         print("[ai_terminal] clear host-cursor phantom failed:\n%s" % traceback.format_exc())
 
 
+def _same_regions(view, key, rs):
+    """True when the view already holds exactly these spans under `key`.
+
+    Sublime keeps a per-view record of every add_regions call (it is part of
+    what undo restores), so re-adding an unchanged colour run set every frame
+    grows sublime_text.exe without changing the screen. Read the live set and
+    skip the write when it already matches.
+    """
+    try:
+        have = view.get_regions(key)
+    except (RuntimeError, AttributeError):
+        return False
+    if len(have) != len(rs):
+        return False
+    for a, b in zip(have, rs):
+        if a.begin() != b.begin() or a.end() != b.end():
+            return False
+    return True
+
+
 def _apply_color_regions(view, regs):
     """Group regions by scope and add them; erase any scope keys we added last
     frame but did not re-add this frame, so stale colour doesn't linger.
@@ -6174,14 +6196,16 @@ def _apply_color_regions(view, regs):
         # we keep the fill (DRAW_NO_OUTLINE, no DRAW_NO_FILL): the #000001 fill
         # is invisible and the foreground renders on the text. DRAW_NO_OUTLINE:
         # no border around the run.
-        view.add_regions(key, rs, scope=scope, flags=sublime.DRAW_NO_OUTLINE)
+        if not _same_regions(view, key, rs):
+            view.add_regions(key, rs, scope=scope, flags=sublime.DRAW_NO_OUTLINE)
         used.add(key)
     # Permanent grey block last (z-order). Same flags as colour runs.
     if host_rs:
         key = _COLOR_KEY_PREFIX + _HOST_CURSOR_SCOPE
-        view.add_regions(
-            key, host_rs, scope=_HOST_CURSOR_SCOPE, flags=sublime.DRAW_NO_OUTLINE
-        )
+        if not _same_regions(view, key, host_rs):
+            view.add_regions(
+                key, host_rs, scope=_HOST_CURSOR_SCOPE, flags=sublime.DRAW_NO_OUTLINE
+            )
         used.add(key)
     vid = view.id()
     last = _LAST_COLOR_KEYS.get(vid, ())
@@ -9361,6 +9385,7 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         regions=None,
         fast_caret=False,
         regions_from_term=False,
+        text_from_term=False,
     ):
         view = self.view
         view.set_read_only(False)
@@ -9370,6 +9395,12 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
         ve = view.viewport_extent()
         lh = view.line_height() or 20
         term = _Terminal.from_id(view.id())
+        if text_from_term and term is not None:
+            # Same reason as regions_from_term below: Sublime keeps every
+            # command's args (it restores them with undo), so passing a whole
+            # frame through this command leaves a copy of the screen behind on
+            # every paint. The renderer hands the text over on the terminal.
+            text = getattr(term, "_frame_text", "") or text
         if term is not None:
             # Suppresses on_selection_modified's user-gesture detection for
             # the selection churn our own buffer patch/caret placement below
