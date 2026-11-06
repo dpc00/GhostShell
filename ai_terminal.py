@@ -4650,9 +4650,29 @@ class _Terminal:
             records[record_id] = pairs  # replaces the whole record
             if state != previous:
                 _play_status_tone(state, self.profile_name)
-                if (state == "blocked" and pairs.get("kind") == "permission"
-                        and pairs.get("app") == "claude-code"):
+                if state == "blocked" and self._auto_approve_may_answer(pairs):
                     self._auto_approve_permission(record_id)
+
+    def _auto_approve_may_answer(self, pairs):
+        """Whether a blocked report is a permission prompt the auto answer owns.
+
+        Claude Code labels its prompt (`kind=permission`, `app=claude-code`), so
+        only that shape was answered. omp publishes just the root record: the tab
+        title already shows its `blocked` state (see
+        _update_tab_run_state), but the record carries no kind and no app, so the
+        auto approve never fired for an omp tab however the profile was set
+        (Donald, 2026-11-05: "'am waiting for approval' is reaching the tab, but
+        the auto-approve is not triggering"). A report with no app identity, or
+        one that names omp, is treated as a permission prompt too; whether it is
+        answered at all is still decided by the profile's
+        auto_approve_permissions setting inside _auto_approve_permission.
+        """
+        if pairs.get("kind") == "permission" and pairs.get("app") == "claude-code":
+            return True
+        app = pairs.get("app")
+        if app in (None, "", "omp"):
+            return True
+        return False
 
     def _on_parser_write_pty(self, data):
         # Called synchronously from the parser's write_pty callback, which

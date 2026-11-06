@@ -830,6 +830,13 @@
             "wheel_to_pty": false,
             "mouse_handling": false,
             "scroll_manipulation_enabled": false,
+            // omp asks before running a tool exactly like Claude Code does, so it
+            // gets the same automatic answer under the same global switch (Donald,
+            // 2026-11-05: "It already works in Claude ... missing setting in omp
+            // profile"). The answer is Enter: omp's prompt opens with "Approve"
+            // selected, and the setting is read fresh per event, so it applies to
+            // the running tab without a respawn.
+            "auto_approve_permissions": true,
             // Oh-My-Pi (@oh-my-pi/pi-coding-agent, github.com/can1357/oh-my-pi)
             // -- a from-scratch coding-first fork/rewrite of Pi by Mario
             // Zechner, by Can Bolukbasi. Installed 2026-09-11 via
