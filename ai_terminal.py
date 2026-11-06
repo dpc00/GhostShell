@@ -8617,15 +8617,28 @@ def _page_scroll(view, term, forward):
     down instead of up. Computing and setting the target viewport position
     directly sidesteps the caret entirely, so it can never depend on
     caret/viewport having drifted apart.
+
+    Returns True when the viewport was moved, False when this view's scroll
+    manipulation is off (or a native TSP view owns scrolling); the caller then
+    pages with Sublime's own command instead of swallowing the key.
     """
     lh = view.line_height() or 12.0
     ve = view.viewport_extent()
     cur = view.viewport_position()
+    if view.settings().get("ai_tsp_native") or not _scroll_manipulation_enabled(view):
+        # _set_viewport is the single choke point and no-ops for exactly these
+        # two cases, so calling it would swallow the key and move nothing.
+        # Reported live 2026-11-05 on the omp profile (which sets
+        # scroll_manipulation_enabled false): bare PageUp/PageDown and
+        # Ctrl+PageUp/PageDown both did nothing, whatever page_keys_to_pty
+        # said. Return False so the caller runs Sublime's own paging.
+        return False
     page = max(ve[1] - lh, lh)
     top = _host_rest_y(view)
     max_y = top + max(0.0, _real_content_height(view) - ve[1])
     new_y = min(max_y, cur[1] + page) if forward else max(top, cur[1] - page)
     _set_viewport(view, (cur[0], new_y), False)
+    return True
 
 
 def _resync_viewport_after_height_change(view, term, old_height=None,
@@ -9174,7 +9187,10 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # hatch so the toolbar/chrome can still be reached without flipping
         # the profile gate. Combinational on the key event -- no poll loop.
         if not alt and ctrl and not shift and key in ("pageup", "pagedown"):
-            _page_scroll(self.view, term, key == "pagedown")
+            if not _page_scroll(self.view, term, key == "pagedown"):
+                self.view.run_command(
+                    "move", {"by": "pages", "forward": key == "pagedown"}
+                )
             _set_auto_follow(term, False)
             return
         # PageUp/PageDown: scroll ST's real scrollback like an ordinary
@@ -9196,7 +9212,10 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
                     "move", {"by": "pages", "forward": key == "pagedown", "extend": True}
                 )
             else:
-                _page_scroll(self.view, term, key == "pagedown")
+                if not _page_scroll(self.view, term, key == "pagedown"):
+                    self.view.run_command(
+                        "move", {"by": "pages", "forward": key == "pagedown"}
+                    )
             # 2026-08-27: this early return used to skip _set_auto_follow
             # entirely -- the *other* PageUp/PageDown branch below (reached
             # only by page_keys_to_pty profiles like Codex) already disengages
