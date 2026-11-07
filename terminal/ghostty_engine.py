@@ -19,10 +19,22 @@ from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, 
 from .screen import BLANK
 
 
+_COLOR_ID_CACHE = {}
+_WIDTH_CACHE = {}
+
+
 def _color_id(result, rgb):
     if result != gvt.SUCCESS:
         return 0
-    return quantize256(rgb.r, rgb.g, rgb.b) + 1
+    # Every cell asks for its fg and bg id; a TUI uses a handful of distinct colours, so
+    # this is a pure-function memo (693k calls, few keys, in a 2800-line profile).
+    key = (rgb.r, rgb.g, rgb.b)
+    cached = _COLOR_ID_CACHE.get(key)
+    if cached is None:
+        if len(_COLOR_ID_CACHE) > 4096:
+            _COLOR_ID_CACHE.clear()
+        cached = _COLOR_ID_CACHE[key] = quantize256(key[0], key[1], key[2]) + 1
+    return cached
 
 
 _CURSOR_SHAPE_NAMES = {
@@ -196,6 +208,23 @@ class GhosttyParser:
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
         self._last_scrollback_rows = -1
+
+        # Reused cell-read buffers. _cell_from_render_cells runs once per cell of every
+        # dirty row, so allocating its GhosttyStyle/2x GhosttyColorRgb/GhosttyBuffer and
+        # four byref() objects per cell cost more than the FFI calls they feed: 1.3M
+        # byref allocations alone in a 2800-line profile (2026-11-07). They are outputs
+        # (the getters overwrite them) and are read immediately, so one set per parser is
+        # enough -- measured 12.3 s -> see terminal notes.
+        self._c_style = gvt.GhosttyStyle().init()
+        self._c_fg = gvt.GhosttyColorRgb()
+        self._c_bg = gvt.GhosttyColorRgb()
+        self._c_buf = gvt.GhosttyBuffer()
+        self._c_buf.ptr = ctypes.cast(self._utf8_buf, ctypes.POINTER(ctypes.c_uint8))
+        self._c_buf.cap = len(self._utf8_buf)
+        self._r_style = ctypes.byref(self._c_style)
+        self._r_fg = ctypes.byref(self._c_fg)
+        self._r_bg = ctypes.byref(self._c_bg)
+        self._r_buf = ctypes.byref(self._c_buf)
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
@@ -631,7 +660,15 @@ class GhosttyParser:
 
 
     def _grapheme_width(self, text):
-        """Cells occupied by `text`, via ghostty_unicode_grapheme_width."""
+        """Cells occupied by `text`, via ghostty_unicode_grapheme_width.
+
+        Called once per cell of every synced row (through _blank_wide_spacers), and the
+        answer depends only on the text, so it is memoised: a screen reuses a few dozen
+        distinct graphemes and the native call needs a ctypes array per question.
+        """
+        cached = _WIDTH_CACHE.get(text)
+        if cached is not None:
+            return cached
         fn = getattr(self._g, "unicode_grapheme_width", None)
         if not text:
             return 0
@@ -640,30 +677,35 @@ class GhosttyParser:
         cps = (ctypes.c_uint32 * len(text))(*map(ord, text))
         w = ctypes.c_uint8()
         fn(cps, len(text), ctypes.byref(w))
+        if len(_WIDTH_CACHE) > 8192:
+            _WIDTH_CACHE.clear()
+        _WIDTH_CACHE[text] = int(w.value)
         return int(w.value)
 
 
     def _cell_from_render_cells(self):
-        """Active-grid path: render_state_row_cells_* on self._cells (fast, resolves colors)."""
+        """Active-grid path: render_state_row_cells_* on self._cells (fast, resolves colors).
+
+        This runs once per cell of every dirty row, so its FFI output buffers and their
+        byref objects are allocated once per parser (__init__) and the getter is bound to
+        a local: a per-cell lambda plus four byref allocations was close to half the cost
+        of materialising one full-screen TUI repaint (2026-11-07 profile).
+        """
+        get = self._g.render_state_row_cells_get
         cells = self._cells
-        get = lambda data_id, out: self._g.render_state_row_cells_get(cells, data_id, out)
-
-        style = gvt.GhosttyStyle().init()
-        get(gvt.RENDER_STATE_ROW_CELLS_DATA_STYLE, ctypes.byref(style))
-
-        fg_rgb = gvt.GhosttyColorRgb()
-        fg_rc = get(gvt.RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, ctypes.byref(fg_rgb))
-        bg_rgb = gvt.GhosttyColorRgb()
-        bg_rc = get(gvt.RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, ctypes.byref(bg_rgb))
-
-        buf = gvt.GhosttyBuffer()
-        buf.ptr = ctypes.cast(self._utf8_buf, ctypes.POINTER(ctypes.c_uint8))
-        buf.cap = len(self._utf8_buf)
-        rc = get(gvt.RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, ctypes.byref(buf))
+        style = self._c_style
+        fg_rgb = self._c_fg
+        bg_rgb = self._c_bg
+        buf = self._c_buf
+        get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_STYLE, self._r_style)
+        fg_rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, self._r_fg)
+        bg_rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, self._r_bg)
+        rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, self._r_buf)
         text = bytes(self._utf8_buf[: buf.len]).decode("utf-8", "replace") if rc == gvt.SUCCESS and buf.len else ""
 
-        flags = self._style_flags(style)
-        return self._finish_cell(text, _color_id(fg_rc, fg_rgb), _color_id(bg_rc, bg_rgb), flags)
+        return self._finish_cell(
+            text, _color_id(fg_rc, fg_rgb), _color_id(bg_rc, bg_rgb), self._style_flags(style)
+        )
 
     def _resolve_style_color(self, color, palette):
         if color.tag == gvt.STYLE_COLOR_RGB:
