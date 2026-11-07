@@ -13,6 +13,7 @@ buffer swapping and DECSET 2026 (synchronized output) state are both
 queried from the native terminal, not tracked or altered here.
 """
 import ctypes
+import time
 
 from . import ghostty_vt as gvt
 from .colors import pack_attr, quantize256, rstrip_cells, BOLD, REVERSE, FAINT, ITALIC, UNDERLINE, XTERM256_RGB
@@ -104,6 +105,14 @@ def _text_style_if_symbol(text):
 
 class GhosttyParser:
     """__init__(screen), feed(text), resize(cols, rows), reset()."""
+
+    # At most one grid materialisation per this many seconds (see feed()). Below a
+    # frame at 40 fps, above the cost of a full repaint (~34 ms at 12 us/cell), so a
+    # burst coalesces into roughly one sync per frame instead of one per chunk.
+    _SYNC_MIN_INTERVAL = 0.025
+    # Scrollback capture waits for this much quiet before it materialises rows, so a
+    # burst pays one bounded rebuild instead of per-line FFI for rows it will evict.
+    _HISTORY_SETTLE = 0.15
 
     def __init__(self, screen, dll_path=None):
         self.s = screen
@@ -208,6 +217,12 @@ class GhosttyParser:
 
         self._utf8_buf = (ctypes.c_uint8 * 64)()
         self._last_scrollback_rows = -1
+        # Frame-cadence sync gate, see feed(): at most one grid materialisation per
+        # window; minute differences do not matter, so a monotonic clock is enough.
+        self._last_sync_mono = 0.0
+        self._last_feed_mono = 0.0
+        self._sync_pending = False
+        self._history_pending = False
 
         # Reused cell-read buffers. _cell_from_render_cells runs once per cell of every
         # dirty row, so allocating its GhosttyStyle/2x GhosttyColorRgb/GhosttyBuffer and
@@ -216,6 +231,7 @@ class GhosttyParser:
         # (the getters overwrite them) and are read immediately, so one set per parser is
         # enough -- measured 12.3 s -> see terminal notes.
         self._c_style = gvt.GhosttyStyle().init()
+        self._c_styled = ctypes.c_bool()
         self._c_fg = gvt.GhosttyColorRgb()
         self._c_bg = gvt.GhosttyColorRgb()
         self._c_buf = gvt.GhosttyBuffer()
@@ -225,6 +241,20 @@ class GhosttyParser:
         self._r_fg = ctypes.byref(self._c_fg)
         self._r_bg = ctypes.byref(self._c_bg)
         self._r_buf = ctypes.byref(self._c_buf)
+        # One FFI call per cell instead of four (ghostty_render_state_row_cells_get_multi).
+        # It stops at the first key without a value, and FG/BG_COLOR legitimately have
+        # none on unstyled cells, so the pair asked together is the one that is always
+        # present: the cell's text and whether it has any styling at all. An unstyled
+        # cell -- most of a TUI screen -- then costs a single call and no style work.
+        self._cell_keys = (ctypes.c_int * 2)(
+            gvt.RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8,
+            gvt.RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING,
+        )
+        self._cell_vals = (ctypes.c_void_p * 2)(
+            ctypes.addressof(self._c_buf),
+            ctypes.addressof(self._c_styled),
+        )
+        self._cell_written = ctypes.c_size_t()
 
     def close(self):
         """Free every native resource this parser owns: the terminal, its
@@ -264,6 +294,7 @@ class GhosttyParser:
 
     def feed(self, text):
         data = text.encode("utf-8", "surrogateescape")
+        self._last_feed_mono = time.monotonic()
         # ghostty_terminal_vt_write returns void (see its restype in
         # ghostty_vt.py) -- nothing to check here.
         self._g.terminal_vt_write(self._term, data, len(data))
@@ -275,8 +306,39 @@ class GhosttyParser:
             # current and materialize its final grid/history once, when the
             # closing chunk arrives.
             self.s.sync_output = True
-        else:
-            self._sync()
+            return
+        # Materialising the grid costs ~12 us per cell -- 4800 cells for one full-screen
+        # TUI repaint -- so a burst that repaints the whole screen per chunk spends
+        # seconds of UI thread per second of output (measured 2026-11-07: 12.3 s for
+        # 2800 lines before the per-cell work was cut, 3.1 s after). Painting is already
+        # coalesced to _RENDER_MIN_INTERVAL_MS, so the grid only has to be current when
+        # something looks at it: inside the window a chunk only advances the native
+        # terminal (where the byte stream lives) and marks the screen stale for
+        # flush_pending(), which the render path calls before it builds a frame. This is
+        # what makes an intermediate replay frame cost nothing instead of everything.
+        now = time.monotonic()
+        if now - self._last_sync_mono < self._SYNC_MIN_INTERVAL:
+            self._sync_pending = True
+            return
+        self._last_sync_mono = now
+        self._sync()
+
+    def flush_pending(self):
+        """Materialise whatever the coalescing gates held back (grid and/or history).
+
+        The render path calls this before building a frame. Grid work is done whenever it
+        is pending; history capture waits for the stream to settle (see _HISTORY_SETTLE),
+        because a burst's intermediate scrollback is evicted before anyone sees it.
+        """
+        if not self._sync_pending and not self._history_pending:
+            return False
+        now = time.monotonic()
+        if (self._history_pending and not self._sync_pending
+                and now - self._last_feed_mono < self._HISTORY_SETTLE):
+            return False
+        self._last_sync_mono = now
+        self._sync()
+        return True
 
     def feed_bootstrap(self, text):
         """Advance only the native VT during broker replay.
@@ -684,27 +746,34 @@ class GhosttyParser:
 
 
     def _cell_from_render_cells(self):
-        """Active-grid path: render_state_row_cells_* on self._cells (fast, resolves colors).
+        """Active-grid path: one bulk cells call per cell, then plain struct reads.
 
-        This runs once per cell of every dirty row, so its FFI output buffers and their
-        byref objects are allocated once per parser (__init__) and the getter is bound to
-        a local: a per-cell lambda plus four byref allocations was close to half the cost
-        of materialising one full-screen TUI repaint (2026-11-07 profile).
+        This runs once per cell of every dirty row (4800 for a full-screen TUI repaint),
+        so it does as little per-cell work as possible: the four data kinds a cell needs
+        come from a single ghostty_render_state_row_cells_get_multi call into buffers and
+        pointers allocated once per parser, and the getter/lambda/allocation-per-cell
+        shape this replaced measured 12.3 s for 2800 lines (2026-11-07).
         """
+        rc = self._g.render_state_row_cells_get_multi(
+            self._cells, 2, self._cell_keys, self._cell_vals, self._cell_written
+        )
+        buf = self._c_buf
+        text = ""
+        if rc == gvt.SUCCESS or self._cell_written.value > 0:
+            if buf.len:
+                text = bytes(self._utf8_buf[: buf.len]).decode("utf-8", "replace")
+        if rc != gvt.SUCCESS or not self._c_styled.value:
+            # No explicit styling: the resolved fg/bg are the renderer's defaults and no
+            # flags are set, which is exactly what _finish_cell does with zeros.
+            return self._finish_cell(text, 0, 0, 0)
         get = self._g.render_state_row_cells_get
         cells = self._cells
-        style = self._c_style
-        fg_rgb = self._c_fg
-        bg_rgb = self._c_bg
-        buf = self._c_buf
         get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_STYLE, self._r_style)
         fg_rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, self._r_fg)
         bg_rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, self._r_bg)
-        rc = get(cells, gvt.RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, self._r_buf)
-        text = bytes(self._utf8_buf[: buf.len]).decode("utf-8", "replace") if rc == gvt.SUCCESS and buf.len else ""
-
         return self._finish_cell(
-            text, _color_id(fg_rc, fg_rgb), _color_id(bg_rc, bg_rgb), self._style_flags(style)
+            text, _color_id(fg_rc, self._c_fg), _color_id(bg_rc, self._c_bg),
+            self._style_flags(self._c_style),
         )
 
     def _resolve_style_color(self, color, palette):
@@ -877,8 +946,20 @@ class GhosttyParser:
         # resize-triggered reflow/shrink) can't be trusted as a pure
         # append, so fall back to a full rebuild.
         if 0 <= last < scrollback_rows:
-            start = last
-            notify = True
+            # A burst -- a TUI repainting its whole conversation -- scrolls rows faster
+            # than anybody can read them, and Screen.history keeps only history_cap of
+            # them, so materialising every retired line (per-cell FFI, ~8 us per cell)
+            # buys a scrollback nobody sees: 336k cells / 2.7 s for 2800 lines, of which
+            # 300 survived (measured 2026-11-07). While output is still arriving, leave
+            # history alone and let it rebuild once the stream settles.
+            if scrollback_rows - last > 16 and (time.monotonic() - self._last_feed_mono) < self._HISTORY_SETTLE:
+                self._history_pending = True
+                return
+            # Rebuild from the newest rows only: anything above the cap would be evicted
+            # by _retire_line immediately. Rows scrolled past between syncs are skipped,
+            # which is what the cap meant for them anyway.
+            start = max(last, scrollback_rows - max(0, s.history_cap))
+            notify = start == last
         else:
             s.history.clear()
             # Native max_scrollback is a byte budget (scrollback_history_size x cols x
@@ -919,6 +1000,8 @@ class GhosttyParser:
         s.dirty = True
 
     def _sync(self):
+        self._sync_pending = False
+        self._history_pending = False
         self._sync_grid()
         self._sync_scrollback()
         self._sync_title()

@@ -5991,6 +5991,15 @@ def _do_render(term):
             return  # leave _render_pending True, same as the selection case
         term._sync_defer_forced = True  # safety valve: stop waiting, paint
     term._render_pending = False
+    # Feeds inside _SYNC_MIN_INTERVAL only advanced the native terminal (see
+    # GhosttyParser.feed), so Screen.grid/history may be one frame behind: bring them up
+    # to date now, once per frame, before this frame's text is built from them.
+    flush_pending = getattr(getattr(term, "parser", None), "flush_pending", None)
+    if flush_pending is not None:
+        try:
+            flush_pending()
+        except Exception:
+            print("[ai_terminal] grid flush failed:\n%s" % traceback.format_exc())
     _maybe_apply_osc_title(term)
     # Host cursor: ST caret stays invisible when the app paints reverse-video
     # (Claude). When it does not (Grok / shells), paint_host_cursor puts a
@@ -6195,7 +6204,13 @@ def _apply_color_regions(view, regs):
     frame but did not re-add this frame, so stale colour doesn't linger.
 
     Host cursor is applied last so its fill wins ST's undefined region z-order.
+
+    TEMPORARY (2026-11-06): `debug_no_color_regions` skips this entirely. It exists
+    only for the bisect that attributes the documented ~14 KB retained per rendered
+    line between colour regions and the text write; remove the gate once measured.
     """
+    if _setting_bool("debug_no_color_regions", False):
+        return
     by_scope = {}
     host_rs = []
     for begin, end, scope in regs:
@@ -11607,7 +11622,12 @@ def plugin_loaded():
     _report_profile_validation(_settings)
     sublime._gs_trace_hook = _gs_trace
     sublime._gs_trace_gen = getattr(sublime, "_gs_trace_gen", 0) + 1
-    _gs_trace_sampler(sublime._gs_trace_gen)
+    # The every-120-ms sampler is instrumentation for the 2026-10-13 view-jump
+    # hunt. It used to be started in every session and returned early inside each
+    # tick; now the timer is not created unless tracing is switched on
+    # (2026-11-06: get rid of leftover instrumentation).
+    if _setting_bool("debug_view_trace", False):
+        _gs_trace_sampler(sublime._gs_trace_gen)
     # The registry deliberately survives module reloads so active ConPTY
     # sessions are not killed. Upgrade those objects to this generation of the
     # class as well; otherwise an existing tab keeps the old synchronous

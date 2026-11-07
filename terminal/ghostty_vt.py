@@ -532,6 +532,9 @@ RENDER_STATE_ROW_CELLS_DATA_STYLE = 2
 RENDER_STATE_ROW_CELLS_DATA_BG_COLOR = 5
 RENDER_STATE_ROW_CELLS_DATA_FG_COLOR = 6
 RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8 = 9
+# bool: the cell has explicit styling, so a renderer can skip STYLE/FG_COLOR/BG_COLOR
+# (render.h GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING = 8).
+RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING = 8
 
 # ---- key/event.h (GhosttyKeyAction, GhosttyMods, GhosttyKey) ----
 
@@ -955,6 +958,15 @@ class Ghostty:
         self.render_state_row_cells_get = sig(
             "ghostty_render_state_row_cells_get",
             [GhosttyRenderStateRowCells, i, p],
+            GhosttyResult,
+        )
+        # Same data kinds, several per call: render.h documents that this is the way for
+        # a renderer that needs style+colors+graphemes for one cell, which is exactly
+        # what _cell_from_render_cells asks for (four separate FFI calls otherwise).
+        self.render_state_row_cells_get_multi = sig(
+            "ghostty_render_state_row_cells_get_multi",
+            [GhosttyRenderStateRowCells, sz, ctypes.POINTER(i), ctypes.POINTER(p),
+             ctypes.POINTER(sz)],
             GhosttyResult,
         )
 
