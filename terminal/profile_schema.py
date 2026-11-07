@@ -26,6 +26,8 @@ BOOLEAN_KEYS = frozenset({
     "pin_viewport",
     "record_asciicast",
     "scroll_manipulation_enabled",
+    "status_tones",
+    "steady_screen_height_enabled",
     "tsp_aside_column",
     "tsp_enabled",
     "tsp_native_view",
