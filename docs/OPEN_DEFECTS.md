@@ -60,6 +60,24 @@ already plans to stop `_seed_restored_history` on the replay path and import
 native scrollback in `finish_bootstrap`; whether those changes bound this is
 unmeasured.
 
+**Attributed and bounded 2026-11-07.** The replay itself is not the cost; the
+first sync after it is. `_sync_scrollback`'s rebuild branch (the one a replay
+always takes, because the reset leaves `last == -1`) walked native scrollback
+from row 0 at `cols × ~2.5 FFI calls` per row, and trimmed to
+`history_cap` only afterwards. Native `max_scrollback` is a byte budget
+(`scrollback_history_size × cols × 64`), so a 2 MiB TUI conversation is ~17 500
+short rows: ~5.3 M ctypes calls on the UI thread, ~80 s at 15 µs — minutes in
+practice, on every reload, to build 300 lines that survived the trim. The tab
+kept 300 lines while the conversation was unbounded (reported by Donald,
+2026-11-07: "scrollback is limited to 300 lines, but conversation is not
+limited at all", then "conversation replay that takes MINUTES").
+The rebuild now starts at `scrollback_rows - history_cap`: same result, walk
+bounded by the setting (~90 k calls, 1–2 s). The remaining unbounded input is
+the broker tee snapshot itself, which `broker_scrollback_bytes` (1–256 MiB,
+default 2 MiB) caps; parsing it is native. Not yet measured end to end on a
+live long session.
+
+
 ## 3. TSP oscillation on resume
 
 Phantom (`tsp`) rendering oscillates the viewport after a session is resumed,

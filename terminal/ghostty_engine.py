@@ -839,7 +839,14 @@ class GhosttyParser:
             notify = True
         else:
             s.history.clear()
-            start = 0
+            # Native max_scrollback is a byte budget (scrollback_history_size x cols x
+            # 64), not a row count, so after a reattach the replay's scrollback can hold
+            # tens of thousands of short rows. Reading them all costs cols x ~3 FFI calls
+            # per row on the UI thread and every row above history_cap is trimmed away
+            # immediately below -- on 2026-11-07 that made the first paint after a plugin
+            # reload take minutes. Only the tail that can survive the cap is readable, so
+            # start there: the result is identical, the walk is bounded by the setting.
+            start = max(0, scrollback_rows - max(0, s.history_cap))
             notify = False
 
         for y in range(start, scrollback_rows):
