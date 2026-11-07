@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.2.19
+
+**Changed:** nothing in the code — 0.2.19 is 0.2.18's terminal, byte for byte, plus the documentation and the notes that should have shipped with it. 0.2.18 was tagged while its own records were still unwritten: the dated note for the `libghostty-vt` 1.1.0-dev swap (the ABI mapping, the checksums, what was proved live and what was not, the rollback) and the release procedure that exists because ten releases went out with a document left behind. Both are in the repo now, and this tag contains them.
+
+- What a reader of 0.2.18 missed, and gets here: `.claude/memory/project_libghostty_vt_1_1_0_2026_11_07.md` (what changed in the ABI, what a future session must not do — porting the binding ahead of the published DLL cost the owner his editor twice — and how to roll back) and `.claude/skills/release/SKILL.md` (the invariant that a tagged commit contains everything the release claims, the sequence, and the two commands that prove it: `git status --short` and `git log --oneline <tag>..HEAD`, both empty).
+- Nothing to re-verify at runtime: the switcher, the encoder, the renderer and the replay path are the same files as 0.2.18, whose live checks are listed below (spawn, typed echo, console resize, End Session, two restarts reattaching the agent tab).
+- Rollback: the previous binary is still kept as `terminal/bin/ghostty-vt-0.1.0-dev.dll`; swap the two filenames and restart Sublime.
+
 ## 0.2.18
 
 **Changed:** `libghostty-vt` moves from `0.1.0-dev` (ghostty `634957c8`) to `1.1.0-dev+8265e74`, built from that commit with Zig 0.17.1 and published as [release `ghostty-vt-8265e74`](https://github.com/dpc00/GhostShell/releases/tag/ghostty-vt-8265e74) (2 252 288 bytes, sha256 `C511C906…`). The upgrade is an ABI change, not a rebuild: `terminal_new` takes cols/rows instead of an options struct, the scrollback cap is a line count set afterwards (its byte limit defaults to 10 000 bytes and must be lifted with `SIZE_MAX`; the line limit trims whole pages and overshoots, so native keeps a `max(cap*4, 1200)` backlog while `Screen.history` still enforces exactly `history_cap`), `GhosttyStyle` is a 16-byte flags bitmask with a one-byte-tag colour, `GhosttyGridRef` dropped its leading size, `terminal_mode_get` is gone, the key/mouse encoders renamed their setters and shifted every option id by one, and `key_event_set_utf8` takes its text as a `GhosttyString` by value.
