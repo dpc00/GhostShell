@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.18
+
 **Changed:** `libghostty-vt` moves from `0.1.0-dev` (ghostty `634957c8`) to `1.1.0-dev+8265e74`, built from that commit with Zig 0.17.1 and published as [release `ghostty-vt-8265e74`](https://github.com/dpc00/GhostShell/releases/tag/ghostty-vt-8265e74) (2 252 288 bytes, sha256 `C511C906…`). The upgrade is an ABI change, not a rebuild: `terminal_new` takes cols/rows instead of an options struct, the scrollback cap is a line count set afterwards (its byte limit defaults to 10 000 bytes and must be lifted with `SIZE_MAX`; the line limit trims whole pages and overshoots, so native keeps a `max(cap*4, 1200)` backlog while `Screen.history` still enforces exactly `history_cap`), `GhosttyStyle` is a 16-byte flags bitmask with a one-byte-tag colour, `GhosttyGridRef` dropped its leading size, `terminal_mode_get` is gone, the key/mouse encoders renamed their setters and shifted every option id by one, and `key_event_set_utf8` takes its text as a `GhosttyString` by value.
 
 - Seen: `tools/verify_libghostty_vt.py` — 10 checks, 0 failed on the new DLL, including the exact bytes for a, enter, backspace, up, tab and ctrl+c and a mouse press as `\x1b[<0;4;5M`; a full-screen materialisation of 2.4 µs/cell; a 1200-line burst in 0.72 s; history ending on exactly 300 rows that abut the visible screen. Live: the tab reattached immediately on the new library and typed input ran (owner-observed).
