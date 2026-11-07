@@ -1,18 +1,18 @@
 # libghostty-vt provenance
 
-## 1.1.0-dev build (branch `libghostty-vt-1.1.0-port`, 2026-11-07)
+## 1.1.0-dev build (2026-11-07)
 
 - libghostty-vt version: `1.1.0-dev+8265e74`
 - SHA-256: `C511C906FE57E36B36E2FD1248556C5127C1D889B64A20B47272AF7989C4BD88`
 - Size: `2,252,288` bytes
-- Built locally, not published: `zig build -Demit-lib-vt=true -Doptimize=ReleaseFast`
-  with Zig `0.17.1` from a shallow clone of `https://github.com/ghostty-org/ghostty`
-  at commit `8265e74` (2026-11-07), artifact `zig-out-rel/bin/ghostty-vt.dll`.
+- Distribution: [GitHub Release `ghostty-vt-8265e74`](https://github.com/dpc00/GhostShell/releases/tag/ghostty-vt-8265e74)
+- Built with Zig `0.17.1` from a shallow clone of `https://github.com/ghostty-org/ghostty`
+  at commit `8265e74` (2026-11-07): `zig build -Demit-lib-vt=true -Doptimize=ReleaseFast`,
+  artifact `zig-out-rel/bin/ghostty-vt.dll`.
 - The Debug build of the same source is 9,346,560 bytes plus a 12 MB `.pdb`; the
   shipped artifact must be the optimised one.
-- `RELEASE_DLL_URL` still points at the 0.1.0-dev release so `ensure_dll()` fails
-  closed on the hash rather than replacing this DLL. Publish a release for this
-  binary before merging the branch.
+- The previous binary (`0.1.0-dev`, sha `BAB4D9AC…`) is kept beside it as
+  `terminal/bin/ghostty-vt-0.1.0-dev.dll` for a one-rename rollback.
 
 ### What the upgrade changed in this repo's binding
 

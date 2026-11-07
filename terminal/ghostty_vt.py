@@ -29,15 +29,9 @@ DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dl
 
 # Pinned to the audited build recorded in GHOSTTY_VT_PROVENANCE.md. Update
 # both together when replacing the DLL.
-#
-# 1.1.0-dev (branch libghostty-vt-1.1.0-port): this build is compiled locally, not
-# published as a release yet, so RELEASE_DLL_URL below is still the old 0.1.0-dev
-# artifact on purpose -- ensure_dll() then fails closed on the hash instead of
-# silently replacing a current DLL with the previous ABI. Publish a release and point
-# RELEASE_DLL_URL at it before this branch is merged.
 RELEASE_DLL_URL = (
     "https://github.com/dpc00/GhostShell/releases/download/"
-    "ghostty-vt-634957c8/ghostty-vt.dll"
+    "ghostty-vt-8265e74/ghostty-vt.dll"
 )
 EXPECTED_SHA256 = (
     "c511c906fe57e36b36e2fd1248556c5127c1d889b64a20b47272af7989c4bd88"
