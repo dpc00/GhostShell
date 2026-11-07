@@ -61,7 +61,6 @@ class Screen:
         # dropped at that point (see _retire_line) so the owner can report the
         # broken logging instead of the failure vanishing line after line.
         self.retire_line_error = None
-        self.saved = (0, 0)
         self.alt_screen = False
         # DEC mode 2026 (synchronized output): true while the app is mid
         # batch-update. Native-backed (GhosttyParser queries
@@ -199,9 +198,8 @@ class Screen:
         """Choke point for pushing a genuinely new line into scrollback.
 
         rstrips, appends to history, and fires on_retire_line with the
-        plain text exactly once. Both VT engines' scroll paths (this
-        module's own _scroll_up, and ghostty_engine's _sync_scrollback)
-        must call this instead of self.history.append() directly.
+        plain text exactly once. ghostty_engine's _sync_scrollback is the
+        one scroll path that must call this instead of self.history.append().
 
         Does not evict the oldest line to enforce history_cap while
         trim_paused -- see trim_paused on __init__. on_retire_line still
@@ -254,112 +252,6 @@ class Screen:
             cells = rstrip_cells([(srow[c], arow[c]) for c in range(self.cols)])
             out.append("".join(ch for ch, _attr in cells))
         return out
-
-    def _scroll_up(self):
-        popped = [(self.grid[0][c], self.attrs[0][c]) for c in range(self.cols)]
-        self._retire_line(popped)
-        self.grid.pop(0)
-        self.attrs.pop(0)
-        self.grid.append([BLANK] * self.cols)
-        self.attrs.append([0] * self.cols)
-
-    def _scroll_down(self):
-        self.grid.pop()
-        self.attrs.pop()
-        self.grid.insert(0, [BLANK] * self.cols)
-        self.attrs.insert(0, [0] * self.cols)
-
-    def put_char(self, ch, attr=0):
-        if self.x >= self.cols:
-            self.x = 0
-            self._line_feed()
-        self.grid[self.y][self.x] = ch
-        self.attrs[self.y][self.x] = attr
-        self.x += 1
-        self.dirty = True
-
-    def _line_feed(self):
-        self.y += 1
-        if self.y >= self.rows:
-            self._scroll_up()
-            self.y = self.rows - 1
-
-    def lf(self):
-        self._line_feed()
-        self.dirty = True
-
-    def cr(self):
-        self.x = 0
-        self.dirty = True
-
-    def bs(self):
-        if self.x > 0:
-            self.x -= 1
-        self.dirty = True
-
-    def tab(self):
-        self.x = min(((self.x // 8) + 1) * 8, self.cols - 1)
-        self.dirty = True
-
-    def move_abs(self, r, c):
-        self.y = max(0, min(r, self.rows - 1))
-        self.x = max(0, min(c, self.cols - 1))
-        self.dirty = True
-
-    def move_rel(self, dy, dx):
-        self.y = max(0, min(self.y + dy, self.rows - 1))
-        self.x = max(0, min(self.x + dx, self.cols - 1))
-        self.dirty = True
-
-    def erase_display(self, n):
-        if n == 2 or n == 3:
-            self.grid = [[BLANK] * self.cols for _ in range(self.rows)]
-            self.attrs = [[0] * self.cols for _ in range(self.rows)]
-            if n == 3:
-                # CSI 3J = erase scrollback (and screen); 2J leaves scrollback.
-                self.history.clear()
-        elif n == 0:
-            for c in range(self.x, self.cols):
-                self.grid[self.y][c] = BLANK
-                self.attrs[self.y][c] = 0
-            for r in range(self.y + 1, self.rows):
-                self.grid[r] = [BLANK] * self.cols
-                self.attrs[r] = [0] * self.cols
-        elif n == 1:
-            for r in range(0, self.y):
-                self.grid[r] = [BLANK] * self.cols
-                self.attrs[r] = [0] * self.cols
-            for c in range(0, self.x + 1):
-                self.grid[self.y][c] = BLANK
-                self.attrs[self.y][c] = 0
-        self.dirty = True
-
-    def erase_line(self, n):
-        row = self.grid[self.y]
-        arow = self.attrs[self.y]
-        if n == 0:
-            for c in range(self.x, self.cols):
-                row[c] = BLANK
-                arow[c] = 0
-        elif n == 1:
-            for c in range(0, self.x + 1):
-                row[c] = BLANK
-                arow[c] = 0
-        elif n == 2:
-            for c in range(self.cols):
-                row[c] = BLANK
-                arow[c] = 0
-        self.dirty = True
-
-    def save_cursor(self):
-        self.saved = (self.x, self.y)
-        self.dirty = True
-
-    def restore_cursor(self):
-        self.x, self.y = self.saved
-        self.x = min(self.x, self.cols - 1)
-        self.y = min(self.y, self.rows - 1)
-        self.dirty = True
 
     def render_cells(self):
         """Return (rows, cy, cx) for rendering.
