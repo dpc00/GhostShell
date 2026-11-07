@@ -29,12 +29,18 @@ DEFAULT_DLL_PATH = os.path.join(os.path.dirname(__file__), "bin", "ghostty-vt.dl
 
 # Pinned to the audited build recorded in GHOSTTY_VT_PROVENANCE.md. Update
 # both together when replacing the DLL.
+#
+# 1.1.0-dev (branch libghostty-vt-1.1.0-port): this build is compiled locally, not
+# published as a release yet, so RELEASE_DLL_URL below is still the old 0.1.0-dev
+# artifact on purpose -- ensure_dll() then fails closed on the hash instead of
+# silently replacing a current DLL with the previous ABI. Publish a release and point
+# RELEASE_DLL_URL at it before this branch is merged.
 RELEASE_DLL_URL = (
     "https://github.com/dpc00/GhostShell/releases/download/"
     "ghostty-vt-634957c8/ghostty-vt.dll"
 )
 EXPECTED_SHA256 = (
-    "bab4d9aca5c96b0bdb97fdc30a7c04630166d4f9585fba4501a4e5dae1243c20"
+    "c511c906fe57e36b36e2fd1248556c5127c1d889b64a20b47272af7989c4bd88"
 )
 
 _fingerprint_logged = False
@@ -292,50 +298,55 @@ STYLE_COLOR_NONE = 0
 STYLE_COLOR_PALETTE = 1
 STYLE_COLOR_RGB = 2
 
+# GhosttyStyleFlags (style.h): bits 0-7 are on/off attributes, bits 8-10 the underline
+# style. 1.1.0-dev exposes them through one 16-bit mask instead of a bool per attribute.
+STYLE_FLAG_BOLD = 1 << 0
+STYLE_FLAG_ITALIC = 1 << 1
+STYLE_FLAG_FAINT = 1 << 2
+STYLE_FLAG_BLINK = 1 << 3
+STYLE_FLAG_INVERSE = 1 << 4
+STYLE_FLAG_INVISIBLE = 1 << 5
+STYLE_FLAG_STRIKETHROUGH = 1 << 6
+STYLE_FLAG_OVERLINE = 1 << 7
+STYLE_UNDERLINE_SHIFT = 8
+STYLE_UNDERLINE_MASK = 0x7 << STYLE_UNDERLINE_SHIFT
+
 
 class _GhosttyStyleColorValue(ctypes.Union):
-    """Mirrors GhosttyStyleColorValue (style.h): the tagged union inside
-    GhosttyStyleColor. Only one field is live at a time, selected by the
-    sibling GhosttyStyleColor.tag (STYLE_COLOR_PALETTE -> palette index,
-    STYLE_COLOR_RGB -> rgb, STYLE_COLOR_NONE -> neither, read _padding as an
-    opaque 8-byte union size match with the C struct only)."""
+    """Mirrors GhosttyStyleColorValue (style.h): three bytes, either a palette index or
+    an RGB triple -- the sibling tag says which."""
     _fields_ = [
         ("palette", ctypes.c_uint8),
         ("rgb", GhosttyColorRgb),
-        ("_padding", ctypes.c_uint64),
     ]
 
 
 class GhosttyStyleColor(ctypes.Structure):
-    """Mirrors GhosttyStyleColor (style.h): a tagged union color -- unset
-    (STYLE_COLOR_NONE), a 256-palette index, or a direct RGB value. Used for
-    GhosttyStyle's fg_color/bg_color/underline_color below."""
-    _fields_ = [("tag", ctypes.c_int), ("value", _GhosttyStyleColorValue)]
+    """Mirrors GhosttyStyleColor (style.h): unset (STYLE_COLOR_NONE), a 256-palette
+    index, or a direct RGB value. 1.1.0-dev made it four bytes -- a ONE-BYTE tag and a
+    three-byte value; the int-tag/8-byte-union layout this file carried was 0.1.0-dev
+    and misreads every color from a current DLL."""
+    _fields_ = [("tag", ctypes.c_uint8), ("value", _GhosttyStyleColorValue)]
 
 
 class GhosttyStyle(ctypes.Structure):
-    """Mirrors GhosttyStyle (style.h): the full visual style of one terminal
-    cell -- colors plus bold/italic/underline/etc. flags. A "sized struct"
-    per the C API (GHOSTTY_INIT_SIZED convention): ``size`` must be set to
-    sizeof(GhosttyStyle) before passing it in, which .init() below does."""
+    """Mirrors GhosttyStyle (style.h): 16 bytes, fixed layout, no size field.
+
+    Colors plus a 16-bit flags bitmask -- style.h: "The layout of this struct is fixed.
+    It is 16 bytes on every platform and will not change in future versions, so it does
+    not have a size field". Bits 0-7 are the on/off attributes, bits 8-10 the underline
+    style.
+    """
     _fields_ = [
-        ("size", ctypes.c_size_t),
         ("fg_color", GhosttyStyleColor),
         ("bg_color", GhosttyStyleColor),
         ("underline_color", GhosttyStyleColor),
-        ("bold", ctypes.c_bool),
-        ("italic", ctypes.c_bool),
-        ("faint", ctypes.c_bool),
-        ("blink", ctypes.c_bool),
-        ("inverse", ctypes.c_bool),
-        ("invisible", ctypes.c_bool),
-        ("strikethrough", ctypes.c_bool),
-        ("overline", ctypes.c_bool),
-        ("underline", ctypes.c_int),
+        ("flags", ctypes.c_uint16),
+        ("reserved", ctypes.c_uint16),
     ]
 
     def init(self):
-        self.size = ctypes.sizeof(GhosttyStyle)
+        ctypes.memset(ctypes.byref(self), 0, ctypes.sizeof(self))
         return self
 
 
@@ -387,39 +398,38 @@ def point(tag, x, y):
 # ---- grid_ref.h ----
 
 class GhosttyGridRef(ctypes.Structure):
-    """Mirrors GhosttyGridRef (grid_ref.h): a resolved reference to one
-    terminal cell, obtained from ghostty_terminal_grid_ref (ghostty_engine.py
-    _sync_scrollback). ``node`` is an opaque pointer into libghostty-vt's own
+    """Mirrors GhosttyGridRef (grid_ref.h): a resolved reference to one terminal cell,
+    from ghostty_terminal_grid_ref. ``node`` is an opaque pointer into libghostty-vt's
     grid storage -- never read directly, only passed back into
-    ghostty_grid_ref_cell/graphemes. Only valid until the next mutation of
-    the terminal (untracked reference, per grid_ref.h's "Untracked vs
-    Tracked" note); this file only ever uses the untracked form. A "sized
-    struct" like GhosttyStyle above: .init() sets ``size`` to
-    sizeof(GhosttyGridRef) as GHOSTTY_INIT_SIZED() requires."""
+    ghostty_grid_ref_cell/graphemes, and only valid until the terminal mutates.
+
+    1.1.0-dev froze this at 16 bytes with no size field ("The layout of this struct is
+    frozen... If it ever needs to hold more, that will be a new type"); 0.1.0-dev carried
+    a leading size_t.
+    """
     _fields_ = [
-        ("size", ctypes.c_size_t),
         ("node", ctypes.c_void_p),
         ("x", ctypes.c_uint16),
         ("y", ctypes.c_uint16),
     ]
 
     def init(self):
-        self.size = ctypes.sizeof(GhosttyGridRef)
+        ctypes.memset(ctypes.byref(self), 0, ctypes.sizeof(self))
         return self
 
 
 # ---- terminal.h ----
 
-class GhosttyTerminalOptions(ctypes.Structure):
-    """Mirrors GhosttyTerminalOptions (terminal.h): the arguments to
-    ghostty_terminal_new. cols/rows must both be > 0; max_scrollback is the
-    line cap ghostty_engine converts scrollback_history_size into at
-    terminal creation (see terminal/screen.py's history_cap docstring)."""
-    _fields_ = [
-        ("cols", ctypes.c_uint16),
-        ("rows", ctypes.c_uint16),
-        ("max_scrollback", ctypes.c_size_t),
-    ]
+class GhosttyTerminalModeConfig(ctypes.Structure):
+    """Mirrors GhosttyTerminalModeConfig (terminal.h): frozen layout, the mode to query
+    plus the value returned for it by ghostty_terminal_get(GHOSTTY_TERMINAL_DATA_MODE)."""
+    _fields_ = [("mode", ctypes.c_uint16), ("value", ctypes.c_bool)]
+
+
+# GhosttyTerminalOptions is gone in 1.1.0-dev: ghostty_terminal_new takes cols/rows and
+# the scrollback cap is TERMINAL_OPT_SCROLLBACK_MAX_LINES (size_t*, in lines). The struct
+# (and the bytes-per-cell conversion that fed it) is deleted rather than kept unused, so
+# nothing here can quietly mirror an ABI the DLL no longer has.
 
 
 TERMINAL_DATA_COLS = 1
@@ -435,12 +445,24 @@ TERMINAL_DATA_MOUSE_TRACKING = 11
 TERMINAL_DATA_TITLE = 12  # OSC 0/2 window title (GhosttyString)
 TERMINAL_DATA_COLOR_PALETTE = 21
 TERMINAL_DATA_VIEWPORT_ACTIVE = 32
+# terminal.h GHOSTTY_TERMINAL_DATA_MODE: pass a GhosttyTerminalModeConfig with `mode`
+# set; it returns the current value. Replaced ghostty_terminal_mode_get in 1.1.0-dev.
+TERMINAL_DATA_MODE = 37
 
-TERMINAL_OPT_WRITE_PTY = 1
-TERMINAL_OPT_ENQUIRY = 3
-TERMINAL_OPT_SIZE = 6
-TERMINAL_OPT_COLOR_SCHEME = 7
-TERMINAL_OPT_COLOR_PALETTE = 14
+# libghostty-vt 1.1.0-dev renumbered this enum (USERDATA, BELL, XTVERSION, the title/pwd
+# callbacks and the kitty-image options were inserted). Every value below is the new
+# numbering; the old ones (1, 3, 6, 7, 14) would configure the wrong option silently.
+TERMINAL_OPT_WRITE_PTY = 2
+TERMINAL_OPT_ENQUIRY = 4
+TERMINAL_OPT_SIZE = 7
+TERMINAL_OPT_COLOR_SCHEME = 8
+TERMINAL_OPT_COLOR_PALETTE = 15
+# terminal.h GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES (input: size_t*; NULL = no limit).
+# 1.1.0-dev only: the scrollback cap was a terminal_new option before, in bytes.
+TERMINAL_OPT_SCROLLBACK_MAX_LINES = 29
+# The byte limit defaults to 10 000 bytes in 1.1.0-dev and wins over the line limit when
+# it is reached first, so GhostShell removes it (NULL) and relies on the line count.
+TERMINAL_OPT_SCROLLBACK_MAX_BYTES = 28
 
 SCREEN_PRIMARY = 0
 SCREEN_ALTERNATE = 1
@@ -678,15 +700,16 @@ KEY_PAUSE        = 150
 GhosttyKeyEncoder = ctypes.c_void_p
 GhosttyKeyEvent   = ctypes.c_void_p
 
-# KEY_ENCODER_OPT_* (GhosttyKeyEncoderOption enum values from encoder.h)
-KEY_ENCODER_OPT_CURSOR_KEY_APPLICATION   = 0
-KEY_ENCODER_OPT_KEYPAD_KEY_APPLICATION   = 1
-KEY_ENCODER_OPT_IGNORE_KEYPAD_WITH_NUMLOCK = 2
-KEY_ENCODER_OPT_ALT_ESC_PREFIX          = 3
-KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2 = 4
-KEY_ENCODER_OPT_KITTY_FLAGS              = 5
-KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT      = 6
-KEY_ENCODER_OPT_BACKARROW_KEY_MODE       = 7
+# KEY_ENCODER_OPT_* (GhosttyKeyEncoderOption, encoder.h). 1.1.0-dev put INVALID at 0, so
+# every real option is one higher than the values this file carried.
+KEY_ENCODER_OPT_CURSOR_KEY_APPLICATION   = 1
+KEY_ENCODER_OPT_KEYPAD_KEY_APPLICATION   = 2
+KEY_ENCODER_OPT_IGNORE_KEYPAD_WITH_NUMLOCK = 3
+KEY_ENCODER_OPT_ALT_ESC_PREFIX          = 4
+KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2 = 5
+KEY_ENCODER_OPT_KITTY_FLAGS              = 6
+KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT      = 7
+KEY_ENCODER_OPT_BACKARROW_KEY_MODE       = 8
 
 # ---- mouse/event.h / mouse/encoder.h ----
 
@@ -722,11 +745,12 @@ MOUSE_FORMAT_SGR = 2
 MOUSE_FORMAT_URXVT = 3
 MOUSE_FORMAT_SGR_PIXELS = 4
 
-MOUSE_ENCODER_OPT_EVENT = 0
-MOUSE_ENCODER_OPT_FORMAT = 1
-MOUSE_ENCODER_OPT_SIZE = 2
-MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED = 3
-MOUSE_ENCODER_OPT_TRACK_LAST_CELL = 4
+# Same +1 shift as the key encoder (INVALID took 0 in 1.1.0-dev).
+MOUSE_ENCODER_OPT_EVENT = 1
+MOUSE_ENCODER_OPT_FORMAT = 2
+MOUSE_ENCODER_OPT_SIZE = 3
+MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED = 4
+MOUSE_ENCODER_OPT_TRACK_LAST_CELL = 5
 
 
 class GhosttyMousePosition(ctypes.Structure):
@@ -873,7 +897,7 @@ class Ghostty:
 
         self.terminal_new = sig(
             "ghostty_terminal_new",
-            [p, ctypes.POINTER(GhosttyTerminal), GhosttyTerminalOptions],
+            [p, ctypes.POINTER(GhosttyTerminal), u16, u16],
             GhosttyResult,
         )
         self.terminal_free = sig("ghostty_terminal_free", [GhosttyTerminal], None)
@@ -884,11 +908,8 @@ class Ghostty:
         self.terminal_vt_write = sig(
             "ghostty_terminal_vt_write", [GhosttyTerminal, ctypes.c_char_p, sz], None
         )
-        self.terminal_mode_get = sig(
-            "ghostty_terminal_mode_get",
-            [GhosttyTerminal, u16, ctypes.POINTER(ctypes.c_bool)],
-            GhosttyResult,
-        )
+        # ghostty_terminal_mode_get does not exist in 1.1.0-dev; modes are read through
+        # terminal_get with GHOSTTY_TERMINAL_DATA_MODE (see GhosttyParser._mode).
         self.terminal_get = sig(
             "ghostty_terminal_get", [GhosttyTerminal, i, p], GhosttyResult
         )
@@ -1011,13 +1032,16 @@ class Ghostty:
         self.key_encoder_free = sig(
             "ghostty_key_encoder_free", [GhosttyKeyEncoder], None
         )
+        # 1.1.0-dev renamed these C functions (setopt -> set); the Python attribute names
+        # stay so call sites do not churn, and the option ids themselves moved (INVALID is
+        # now 0, so every real option is one higher).
         self.key_encoder_setopt = sig(
-            "ghostty_key_encoder_setopt",
+            "ghostty_key_encoder_set",
             [GhosttyKeyEncoder, i, p],
             None,
         )
         self.key_encoder_setopt_from_terminal = sig(
-            "ghostty_key_encoder_setopt_from_terminal",
+            "ghostty_key_encoder_set_from_terminal",
             [GhosttyKeyEncoder, GhosttyTerminal],
             None,
         )
@@ -1070,13 +1094,14 @@ class Ghostty:
         self.mouse_encoder_free = sig(
             "ghostty_mouse_encoder_free", [GhosttyMouseEncoder], None
         )
+        # Same setopt -> set rename as the key encoder, and the option ids shifted by one.
         self.mouse_encoder_setopt = sig(
-            "ghostty_mouse_encoder_setopt",
+            "ghostty_mouse_encoder_set",
             [GhosttyMouseEncoder, i, p],
             None,
         )
         self.mouse_encoder_setopt_from_terminal = sig(
-            "ghostty_mouse_encoder_setopt_from_terminal",
+            "ghostty_mouse_encoder_set_from_terminal",
             [GhosttyMouseEncoder, GhosttyTerminal],
             None,
         )

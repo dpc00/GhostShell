@@ -45,15 +45,8 @@ _CURSOR_SHAPE_NAMES = {
     gvt.RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: "hollow",
 }
 
-# libghostty-vt max_scrollback is a byte budget, not a line count
-# (ghostty-org/ghostty#12769). scrollback_history_size is lines; convert
-# so native never trims before Python's history_cap. 64 bytes/cell is
-# well above the ~1.5 bytes/col seen empirically on sparse filler.
-_SCROLLBACK_BYTES_PER_CELL = 64
-
-
-def _scrollback_bytes(line_cap, cols):
-    return max(1, int(line_cap)) * max(1, int(cols)) * _SCROLLBACK_BYTES_PER_CELL
+# Scrollback depth is a line count in 1.1.0-dev (TERMINAL_OPT_SCROLLBACK_MAX_LINES), so
+# the bytes-per-cell conversion that existed to emulate a line cap is gone with it.
 
 
 def _blank_wide_spacers(cells, width_of):
@@ -120,14 +113,40 @@ class GhosttyParser:
 
         cap = screen.history_cap or 300
         self._term = gvt.GhosttyTerminal()
-        opts = gvt.GhosttyTerminalOptions(
-            cols=screen.cols,
-            rows=screen.rows,
-            max_scrollback=_scrollback_bytes(cap, screen.cols),
-        )
+        # 1.1.0-dev: terminal_new takes cols/rows directly (no options struct) and the
+        # scrollback cap is set afterwards, in lines. Both limits exist and the first one
+        # reached wins -- the byte limit defaults to only 10 000 bytes, which trimmed a
+        # 300-line cap down to 12 rows (measured), so it is removed with NULL here and the
+        # line count governs. Native then trims at exactly the configured depth, which is
+        # what the old bytes-per-cell conversion was emulating.
         gvt.check(
-            self._g.terminal_new(None, ctypes.byref(self._term), opts),
+            self._g.terminal_new(None, ctypes.byref(self._term), screen.cols, screen.rows),
             "ghostty_terminal_new",
+        )
+        # The byte limit defaults to only 10 000 bytes and wins when reached first, which
+        # trimmed a 300-line cap down to 12 rows (measured). Passing NULL does not remove
+        # that default -- terminal.h's "pass SIZE_MAX or NULL" only clears a limit you set
+        # yourself; SIZE_MAX reports as NO_VALUE and really lifts it.
+        unlimited_bytes = ctypes.c_size_t((1 << 64) - 1)
+        gvt.check(
+            self._g.terminal_set(
+                self._term, gvt.TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                ctypes.byref(unlimited_bytes),
+            ),
+            "ghostty_terminal_set(SCROLLBACK_MAX_BYTES=SIZE_MAX)",
+        )
+        # The line limit trims in whole pages in 1.1.0-dev, and each trim overshoots by
+        # about a page: asking for 300 kept 52 rows, asking for 1000 kept 818 (measured
+        # 2026-11-07, both with the byte limit lifted). Native therefore gets a backlog
+        # well above the line cap -- Screen.history still enforces exactly `cap` rows --
+        # and nothing is delegated to a limit that cannot honour the number it was given.
+        scrollback_lines = ctypes.c_size_t(max(cap * 4, 1200))
+        gvt.check(
+            self._g.terminal_set(
+                self._term, gvt.TERMINAL_OPT_SCROLLBACK_MAX_LINES,
+                ctypes.byref(scrollback_lines),
+            ),
+            "ghostty_terminal_set(SCROLLBACK_MAX_LINES)",
         )
 
         # Ghostty's built-in default 0-15 palette doesn't match colors.py's
@@ -232,6 +251,7 @@ class GhosttyParser:
         # enough -- measured 12.3 s -> see terminal notes.
         self._c_style = gvt.GhosttyStyle().init()
         self._c_styled = ctypes.c_bool()
+        self._c_mode_cfg = gvt.GhosttyTerminalModeConfig()
         self._c_fg = gvt.GhosttyColorRgb()
         self._c_bg = gvt.GhosttyColorRgb()
         self._c_buf = gvt.GhosttyBuffer()
@@ -690,23 +710,35 @@ class GhosttyParser:
         return self._get(data_id, ctypes.c_bool())
 
     def _mode(self, mode_value):
-        v = ctypes.c_bool()
-        rc = self._g.terminal_mode_get(self._term, mode_value, ctypes.byref(v))
-        return bool(rc == gvt.SUCCESS and v.value)
+        # 1.1.0-dev dropped ghostty_terminal_mode_get: a mode is read through
+        # ghostty_terminal_get(GHOSTTY_TERMINAL_DATA_MODE) with a GhosttyTerminalModeConfig
+        # carrying the mode to query. GhosttyMode packs the mode number in bits 0-14 and
+        # "is ANSI" in bit 15, so the raw DEC private numbers this file passes are already
+        # the right encoding (ghostty_mode_new(n, false) == n).
+        cfg = self._c_mode_cfg
+        cfg.mode = mode_value
+        cfg.value = False
+        rc = self._g.terminal_get(self._term, gvt.TERMINAL_DATA_MODE, ctypes.byref(cfg))
+        return bool(rc == gvt.SUCCESS and cfg.value)
 
     def _style_flags(self, style):
+        """GhosttyStyleFlags (style.h) -> GhostShell's cell attribute flags.
+
+        1.1.0-dev packs the attributes into one 16-bit mask: bits 0-7 are the on/off
+        flags, bits 8-10 the underline style (any non-zero means "draw some underline"),
+        instead of the bool-per-attribute struct of 0.1.0-dev.
+        """
+        f = style.flags
         flags = 0
-        if style.bold:
+        if f & gvt.STYLE_FLAG_BOLD:
             flags |= BOLD
-        if style.inverse:
-            flags |= REVERSE
-        if style.faint:
-            flags |= FAINT
-        if style.italic:
+        if f & gvt.STYLE_FLAG_ITALIC:
             flags |= ITALIC
-        if style.underline:
-            # underline is a style enum (none/single/double/curly/...), not a
-            # bool; any non-zero value means "draw some underline".
+        if f & gvt.STYLE_FLAG_FAINT:
+            flags |= FAINT
+        if f & gvt.STYLE_FLAG_INVERSE:
+            flags |= REVERSE
+        if f & gvt.STYLE_UNDERLINE_MASK:
             flags |= UNDERLINE
         return flags
 

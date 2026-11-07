@@ -1,5 +1,46 @@
 # libghostty-vt provenance
 
+## 1.1.0-dev build (branch `libghostty-vt-1.1.0-port`, 2026-11-07)
+
+- libghostty-vt version: `1.1.0-dev+8265e74`
+- SHA-256: `C511C906FE57E36B36E2FD1248556C5127C1D889B64A20B47272AF7989C4BD88`
+- Size: `2,252,288` bytes
+- Built locally, not published: `zig build -Demit-lib-vt=true -Doptimize=ReleaseFast`
+  with Zig `0.17.1` from a shallow clone of `https://github.com/ghostty-org/ghostty`
+  at commit `8265e74` (2026-11-07), artifact `zig-out-rel/bin/ghostty-vt.dll`.
+- The Debug build of the same source is 9,346,560 bytes plus a 12 MB `.pdb`; the
+  shipped artifact must be the optimised one.
+- `RELEASE_DLL_URL` still points at the 0.1.0-dev release so `ensure_dll()` fails
+  closed on the hash rather than replacing this DLL. Publish a release for this
+  binary before merging the branch.
+
+### What the upgrade changed in this repo's binding
+
+`tests: tools/verify_libghostty_vt.py` gates it (8 checks, 0 failed on this build):
+
+- `ghostty_terminal_new(allocator, &term, cols, rows)` -- no options struct.
+- Scrollback is `TERMINAL_OPT_SCROLLBACK_MAX_LINES` (`size_t*`) plus
+  `TERMINAL_OPT_SCROLLBACK_MAX_BYTES`. The byte limit defaults to only 10,000 and
+  wins when reached first, so it is lifted with `SIZE_MAX` (`NULL` removes only a
+  limit you set). The line limit trims in whole pages and overshoots by about a
+  page -- 300 lines kept 52 rows, 1000 kept 818 -- so native gets a 4x backlog
+  (`max(cap*4, 1200)`) and `Screen.history` still enforces exactly `cap`.
+- `GhosttyStyle` is 16 bytes with no size field and a 16-bit `flags` bitmask;
+  `GhosttyStyleColor` is a one-byte tag plus a three-byte value; `GhosttyGridRef`
+  drops its leading `size_t`.
+- `ghostty_terminal_mode_get` is gone: modes read through
+  `GHOSTTY_TERMINAL_DATA_MODE` (37) with a `GhosttyTerminalModeConfig`.
+- `ghostty_{key,mouse}_encoder_setopt*` are now `..._set*`, and every
+  `*_ENCODER_OPT_*` id is one higher (INVALID took 0).
+- Terminal data ids, `GhosttyBuffer`/`GhosttyString`, `row_cells_get_multi` and
+  `HAS_STYLING` are unchanged, so the 2026-11-07 replay work carries over.
+
+Not covered by the harness and therefore unproven on this build: key encoding,
+mouse encoding (both renamed and renumbered), and anything that depends on
+`TERMINAL_OPT_ENQUIRY` / `TERMINAL_OPT_WRITE_PTY` behaviour in a live tab.
+
+## 0.1.0-dev build (audited 2026-08-30)
+
 The runtime binary `terminal/bin/ghostty-vt.dll` is intentionally ignored by
 Git. The binary audited on 2026-08-30 has:
 
