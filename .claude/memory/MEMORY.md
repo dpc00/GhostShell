@@ -6,6 +6,7 @@ STATUS 2026-10-31: current state of everything is in sublime-package-audit\notes
 
 Notes from long sessions working on GhostShell. Each is a dated record, so check that it still matches.
 
+- [complete releases: his order](feedback_complete_release_2026_11_07.md) - "this is the 10th time an agent has done an incomplete release"; nothing the release claims may be left out of the tagged commit, no checker scripts, the rule lives in /.claude/skills/release/SKILL.md; prove with `git status --short` and `git log --oneline <tag>..HEAD` both empty
 - [libghostty-vt 1.1.0-dev in 0.2.18](project_libghostty_vt_1_1_0_2026_11_07.md) - DLL release ghostty-vt-8265e74, the ABI differences (terminal_new cols/rows, scrollback line cap + SIZE_MAX byte limit, 16-byte GhosttyStyle, encoder option ids shifted), 13.9 s -> 0.82 s burst, verified live (spawn/type/resize/end session, two restarts) and not verified (keep-alive, Recover Session, 3.8 portable gone); never port the binding ahead of the DLL
 - [cast-handles-leak-2026-10-28](project_cast_handles_leak_2026_10_28.md) - broker seems to keep cast files of ended sessions open (5 locked, one broker); handle owner not proven; recycle them after the next broker restart
 - [tern-sdk: no daily update](feedback_tern_sdk_no_daily_update_2026_10_18.md) - 2026-10-18 he wants no schedule; check on request, act only on monumental changes; clone is 1 small commit behind
