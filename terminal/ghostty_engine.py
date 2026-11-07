@@ -530,11 +530,17 @@ class GhosttyParser:
             # press; a logical key with no text yields empty bytes for any
             # key that isn't itself a special escape sequence.
             ch = key if not shift else key.lower()
-            self._g.key_event_set_utf8(evt, ch.encode("utf-8"), len(ch.encode("utf-8")))
+            # 1.1.0-dev takes the text as a GhosttyString BY VALUE (see the binding); the
+            # buffer must outlive the call, so it is kept in this scope.
+            _raw = ctypes.create_string_buffer(ch.encode("utf-8"), len(ch.encode("utf-8")))
+            _text = gvt.GhosttyString(
+                ctypes.cast(_raw, ctypes.POINTER(ctypes.c_uint8)), len(_raw.raw)
+            )
+            self._g.key_event_set_utf8(evt, _text)
             self._g.key_event_set_unshifted_codepoint(evt, ord(ch.lower()))
         else:
             # Named key: no utf8 text, encoder works from the logical key.
-            self._g.key_event_set_utf8(evt, None, 0)
+            self._g.key_event_set_utf8(evt, gvt.GhosttyString(None, 0))
             self._g.key_event_set_unshifted_codepoint(evt, 0)
 
         # Encode into a fixed 128-byte buffer (sufficient for all standard

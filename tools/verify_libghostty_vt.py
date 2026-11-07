@@ -103,6 +103,38 @@ def main(dll_path):
 
     check("burst did not take seconds per chunk", burst < 5.0, "%.2f s for %d lines" % (burst, CAP * 4))
 
+    # Key encoding: this is the path a 1.1.0-dev swap silently broke (named keys faulted
+    # because the text setter takes a GhosttyString by value now). Typing is the thing the
+    # editor cannot do without, so the gate checks the bytes a terminal must receive.
+    key_expectations = [
+        ("a", {}, b"a"),
+        ("enter", {}, b"\r"),
+        ("backspace", {}, b"\x7f"),
+        ("up", {}, b"\x1b[A"),
+        ("tab", {}, b"\t"),
+        ("c", {"ctrl": True}, b"\x03"),
+    ]
+    bad = []
+    for key, mods, want in key_expectations:
+        try:
+            got = p.encode_key(key, **mods)
+        except Exception as exc:                                   # noqa: BLE001
+            got = "raised %s" % exc
+        if got != want:
+            bad.append("%s%s -> %r (want %r)" % (key, mods or "", got, want))
+    check("key encoding produces the expected bytes", not bad, "; ".join(bad))
+
+    # Mouse encoding: same class of change (renamed setters, renumbered option ids).
+    try:
+        p.feed("\x1b[?1000h\x1b[?1006h")        # normal tracking + SGR format
+        p._sync()
+        report = p.encode_mouse(0, 4, 5)         # left button press, column 4, row 5
+        check("mouse encoding produces an SGR report",
+              isinstance(report, str) and report.startswith("\x1b[<0;") and report.endswith("M"),
+              repr(report))
+    except Exception as exc:                                       # noqa: BLE001
+        check("mouse encoding produces an SGR report", False, "raised %s" % exc)
+
     failed = [r for r in results if not r[1]]
     print("\n%d checks, %d failed" % (len(results), len(failed)))
     return 1 if failed else 0

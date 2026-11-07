@@ -1071,10 +1071,14 @@ class Ghostty:
             [GhosttyKeyEvent, ctypes.c_uint16],
             None,
         )
+        # 1.1.0-dev: ghostty_key_event_set_utf8(event, GhosttyString utf8) takes the string
+        # BY VALUE (a ptr+len struct) and returns a result. Passing (ptr, len) as two
+        # arguments -- the 0.1.0-dev shape -- hands the length to the ABI as a pointer and
+        # faults on any named key: this is what broke Enter on the first swap attempt.
         self.key_event_set_utf8 = sig(
             "ghostty_key_event_set_utf8",
-            [GhosttyKeyEvent, ctypes.c_char_p, sz],
-            None,
+            [GhosttyKeyEvent, GhosttyString],
+            GhosttyResult,
         )
         self.key_event_set_unshifted_codepoint = sig(
             "ghostty_key_event_set_unshifted_codepoint",
