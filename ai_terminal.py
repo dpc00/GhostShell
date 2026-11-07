@@ -4262,7 +4262,12 @@ class _Terminal:
 
     def _reader_finished(self, error):
         """The output stream has ended (thread reader returned, or the async client's pipe closed)."""
-        self._close_text_log()
+        # end_recording(), not _close_text_log(): the .cast handle must be closed too.
+        # A session that ends by itself never reaches kill(), and with
+        # close_tab_on_exit off the tab outlives it, so the handle used to stay
+        # open until the plugin host exited. end_recording() is idempotent and
+        # closes the text log as well.
+        self.end_recording()
         # A reader that died must not be reported as an ordinary exit, and
         # the tab must stay open so the reason remains readable. A
         # deliberate termination (self._expected_termination_reason) makes
@@ -11721,6 +11726,14 @@ def plugin_unloaded():
                 registry.pop(vid, None)
         for _vid, term in async_terms:
             term._expected_termination_reason = "closed"
+            # A reload drops every async terminal, and ai_terminal.py reloads on
+            # every save, so without this each save leaked every open .cast and
+            # text-log handle until the plugin host exited.
+            try:
+                term.end_recording()
+            except Exception:
+                print("[ai_terminal] plugin_unloaded: end_recording failed:\n%s"
+                      % traceback.format_exc())
             term.pty.kill()
             term._write_queue.put(None)
     except Exception:
