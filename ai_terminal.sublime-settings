@@ -826,6 +826,7 @@
             "spawn_env": {}
         },
         "omp": {
+            "status_tones": true,
             "steady_screen_height_enabled": false,
             "wheel_to_pty": false,
             "mouse_handling": false,
