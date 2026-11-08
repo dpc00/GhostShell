@@ -120,3 +120,31 @@ where search, Go To Line and scrolling are the right tools.
 deliberate no-op in exactly that state — so both page-key branches swallowed
 the key regardless of `page_keys_to_pty`. `_page_scroll()` now reports whether
 it acted and the caller falls back to Sublime's own `move by pages`.
+
+# Fixed along the way: PageUp/PageDown in a native TSP tab (2026-11-08)
+
+In a native tab the view's text is one caption line per panel and each panel
+hangs under it as a block phantom, so `_page_scroll()` returned False there
+(it must not move the viewport through `_set_viewport`, which refuses
+`ai_tsp_native`) and the caller fell back to `move by pages`. That moves the
+hidden caret a line or two, and the drawing after it scrolls back to the
+caret: the key looks dead whatever `page_keys_to_pty` says (reported live
+2026-11-08 with the setting tried both ways — with it true the key reached
+omp, which repainted its own screen and gave one step).
+
+`TspView.page_view(forward)` now pages the viewport the way the mouse wheel
+moves it, `_page_scroll()` delegates to it for native views, and the bare
+PageUp/PageDown branch checks for a native view *before* the
+`page_keys_to_pty` gate, because that setting is about a program with a screen
+to page and here GhostShell scrolls the panels. The text auto-follow machinery
+is deliberately not touched: `_set_viewport` and the follow helpers already
+return early for `ai_tsp_native`, the view holds a scrolled-up position itself
+(`at_bottom` / `_hold_position`), and the mouse-wheel path does not engage
+follow for these views either.
+
+Loaded into the live session when the file was saved (Sublime reloads the plugin on a package-file
+change, which detaches and reattaches the running terminals and cost the reader one scrollback
+rebuild), and `TspView.page_view` binds once the module is imported. It has not been exercised: the
+owner's configuration overrides `tsp_enabled` to false for omp, so no native tab exists there and
+the text fallback pages as before. The live proof is still one PageUp in an omp native tab, on a
+machine whose profile leaves `tsp_enabled` at its shipped true.

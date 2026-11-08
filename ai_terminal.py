@@ -8659,15 +8659,23 @@ def _page_scroll(view, term, forward):
     caret/viewport having drifted apart.
 
     Returns True when the viewport was moved, False when this view's scroll
-    manipulation is off (or a native TSP view owns scrolling); the caller then
-    pages with Sublime's own command instead of swallowing the key.
+    manipulation is off; the caller then pages with Sublime's own command
+    instead of swallowing the key. A native TSP view pages through its own
+    view (tsp_view.page_view), which is True whenever that view exists.
     """
     lh = view.line_height() or 12.0
     ve = view.viewport_extent()
     cur = view.viewport_position()
-    if view.settings().get("ai_tsp_native") or not _scroll_manipulation_enabled(view):
-        # _set_viewport is the single choke point and no-ops for exactly these
-        # two cases, so calling it would swallow the key and move nothing.
+    if view.settings().get("ai_tsp_native"):
+        # A native TSP tab (omp) has no text rows to page: one caption line per panel, the panel
+        # itself a block phantom under it. ST's "move by pages" moves the hidden caret a line or
+        # two and the next drawing scrolls back to it, so the key reads as doing nothing (found
+        # 2026-11-08 on the shipped omp profile). Its own view owns the scroll, so ask it to page.
+        native = getattr(term, "_tsp_view", None)
+        return bool(native is not None and native.page_view(forward))
+    if not _scroll_manipulation_enabled(view):
+        # _set_viewport is the single choke point and no-ops while this view's scroll
+        # manipulation is off, so calling it would swallow the key and move nothing.
         # Reported live 2026-11-05 on the omp profile (which sets
         # scroll_manipulation_enabled false): bare PageUp/PageDown and
         # Ctrl+PageUp/PageDown both did nothing, whatever page_keys_to_pty
@@ -9240,6 +9248,22 @@ class AiTerminalKeypressCommand(sublime_plugin.TextCommand):
         # default behavior, not an opt-in. Exceptions: a real alt-screen app
         # (vim, less, htop) via `_tui_like`, or a profile that paints in
         # place with no ST history (Grok) via `page_keys_to_pty`.
+        #
+        # A native TSP tab (omp) pages its own viewport first, before the page_keys_to_pty gate:
+        # that setting is for a program with a screen to page, and there omp draws the panels while
+        # GhostShell scrolls them, so sending the key to the PTY cannot move the transcript (both
+        # settings were tried live on 2026-11-08 and neither paged). The view's own scrolling holds
+        # the position it was moved to; the text auto-follow machinery never acts on these views
+        # (_set_viewport and the follow helpers all return early for ai_tsp_native), which is also
+        # why the mouse wheel path does not touch _set_auto_follow for them.
+        if (not alt and not shift and key in ("pageup", "pagedown")
+                and self.view.settings().get("ai_tsp_native")):
+            if _page_scroll(self.view, term, key == "pagedown"):
+                if _DEBUG:
+                    print(
+                        f"[ai_terminal][debug] {key} -> native TSP page (view={self.view.id()})"
+                    )
+                return
         if not alt and key in ("pageup", "pagedown") and not _page_keys_to_pty(term):
             if shift:
                 # Shift+PageUp/Down extends a selection -- that has to move

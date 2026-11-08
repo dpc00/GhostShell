@@ -855,6 +855,20 @@ class TspView:
         self._hold_id += 1
         view.set_viewport_position((0, min(max(moves[step], 0), bottom)), False)
 
+    def page_view(self, forward):
+        """Page the pane by one screen, the move the mouse wheel makes (PageUp/PageDown in a native tab).
+
+        The view's text is one caption line per panel and each panel hangs under it as a block
+        phantom, so Sublime's own "move by pages" moves the hidden caret forward a line or two and
+        the next drawing scrolls back to it: the key reads as doing nothing.  The caret cannot be
+        used for paging here, and the panels' layout is what the reader wants to move through, so
+        move the viewport itself.  Returns False when the view is gone.
+        """
+        if not self.view.is_valid():
+            return False
+        self._scroll_view("page-down" if forward else "page-up")
+        return True
+
     def _start_reveal(self, document, node_id, where):
         """Scroll the containers the node sits in; remember the main entry to bring into view."""
         self._reveal_entry = None
