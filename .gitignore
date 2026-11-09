@@ -49,3 +49,12 @@ terminal/bin/conpty/
 .augmentignore
 .ori/
 *.sublime-project
+
+# --- omp .gitignore basics (2026-11-09) ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+*.py[cod]
