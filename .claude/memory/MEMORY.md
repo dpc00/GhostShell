@@ -1,4 +1,6 @@
-﻿STATUS 2026-11-07: GhostShell 0.2.18 is released and tagged, carrying libghostty-vt 1.1.0-dev+8265e74; the library swap, its ABI mapping, the measurements, what was and was not verified live, and the rollback are in project_libghostty_vt_1_1_0_2026_11_07.md. Everything older below is a dated record.
+﻿STATUS 2026-11-10: GhostShell 0.2.20 is released and tagged. It carries the fix for the status line selecting itself (view.replace on the caret's line leaves the replacement selected), with the probe table, the live check and the one remaining viewport symptom in project_ghostshell_phantom_footer_selection_2026_11_10.md. Everything older below is a dated record.
+
+STATUS 2026-11-07: GhostShell 0.2.18 is released and tagged, carrying libghostty-vt 1.1.0-dev+8265e74; the library swap, its ABI mapping, the measurements, what was and was not verified live, and the rollback are in project_libghostty_vt_1_1_0_2026_11_07.md. Everything older below is a dated record.
 
 STATUS 2026-10-31: current state of everything is in sublime-package-audit\notes\project_session_baton_2026_10_31_state_of_play.md (relative to projects\); the notes below are dated records, and open or parked lists in them are history. Entries marked HISTORY were superseded that day.
 

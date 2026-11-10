@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.2.20
+
+**Fixed:** a terminal tab's status line used to select itself while output streamed, the picture stopped updating, and typing did nothing until the tab was clicked. The cause was an edit, not a selection call: `view.replace(edit, Region(line_start, line_end), new_text)` **on the line that holds the caret** leaves the replacement selected.
+
+- Measured on build 4215 with a standalone three-case probe in one view of the same size: replacing the whole buffer with the caret at the end leaves `Region(15,15)` empty; replacing **the caret's own line** leaves `Region(15,20)` non-empty; replacing the whole buffer with the caret at offset 0 leaves `Region(0,0)` empty.
+- The line-diff render path replaces individual lines. The omp status row is the last line and changes every second (spinner and timer), so every frame that rewrote it manufactured a selection in that row. `_selection_paint_blocked` then read it as a person's selection and stopped painting, and `on_selection_modified` latched `_user_owns_caret`, which kept the keyboard from reaching the PTY.
+- The caret the frame intended is now restored after the patch loop, and only when the caret is GhostShell's to place (`not term._user_owns_caret`), so a selection a person makes is never touched.
+- Not shipped: the recorder used to find this (a User plugin that stamped every selection with the OS-wide idle time and a call stack) stays out of the package.
+- Not fixed here: after a click the view can sit above the bottom while output streams, 228 to 737 characters short for as long as the stream lasts (`at_bottom=False`, `follow=True`). The `omp` profile sets `scroll_manipulation_enabled: false`, so `_set_viewport()` returns before moving anything; the viewport trace that would name whoever moves it is described in the memory note.
+
+- Seen live: the owner ran a full turn of streaming output with the fix in place and reported no highlight, at the end of the turn or during it. Cause and fix are in `.claude/memory/project_ghostshell_phantom_footer_selection_2026_11_10.md`.
+- Not seen live: the same freeze on builds other than 4215, and any use of the recorder on a macOS or Linux host.
+
 ## 0.2.19
 
 **Changed:** nothing in the code — 0.2.19 is 0.2.18's terminal, byte for byte, plus the documentation and the notes that should have shipped with it. 0.2.18 was tagged while its own records were still unwritten: the dated note for the `libghostty-vt` 1.1.0-dev swap (the ABI mapping, the checksums, what was proved live and what was not, the rollback) and the release procedure that exists because ten releases went out with a document left behind. Both are in the repo now, and this tag contains them.
