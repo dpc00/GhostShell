@@ -15,5 +15,7 @@ metadata:
 
 **STILL OPEN:** what creates the selection by itself (Donald: he is not touching the laptop, a line gets selected). Not found. Candidates not yet ruled out: my own tools (get_console visible copies via the keyboard and prints 'Copied N characters'; computer-use synthetic input), GhostShell's mouse tap/multi-click fallback, a remote client. To find it: log the stack/time when a non-empty selection appears in the Claude view (on_selection_modified) and correlate with the cast.
 
+**ANSWERED 2026-11-10 (this supersedes the "not found" above):** no external writer exists. GhostShell's own line-diff render calls `view.replace()` on the line holding the caret, and Sublime leaves the replacement **selected**; the status row is that line and changes every second. Proven with a three-case probe on 4215 and fixed in 0.2.20. See [[ghostshell-phantom-footer-selection-2026-11-10]].
+
 
 **Correction, 2026-10-09 (Donald):** the frozen-tab bug was traced to AgentIDE reacting to an instruction from Claude. The GhostShell render-timer fix (0056c45) targeted the wrong cause, so its revert (7d31560) was right, and the sublime_mcp.py console-click guard in 1.12.2 is only a safety guard, not the fix for this freeze.

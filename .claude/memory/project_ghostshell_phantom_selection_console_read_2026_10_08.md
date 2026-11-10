@@ -27,4 +27,6 @@ Donald: "Happens when read console." `get_console` in visible mode (`sublime_mcp
 
 **How to apply:** prefer `get_console mode=captured` when the output is enough; use visible mode only when needed. If the tab freezes again, clear the stray selection with eval_python (`v.sel().clear()`), and read the console input log (`sublime.log_input(True)`, never `log_commands`: the render arguments flood the console with 600 KB).
 
+**Correction, 2026-11-10:** the conclusion in this note — that GhostShell's code never creates a non-empty selection — was true only of explicit `sel()` calls. The selection is a *side effect of an edit*: `view.replace()` on the line holding the caret leaves the replacement selected, and the line-diff render does that to the status row every second. Reproduced with a three-case probe on 4215 and fixed in 0.2.20; see [[ghostshell-phantom-footer-selection-2026-11-10]]. The console-capture guard in `sublime_mcp.py` remains worthwhile, but it was never the cause.
+
 **Correction, 2026-10-09 (Donald):** the frozen-tab bug was traced to AgentIDE reacting to an instruction from Claude. The GhostShell render-timer fix (0056c45) targeted the wrong cause, so its revert (7d31560) was right, and the sublime_mcp.py console-click guard in 1.12.2 is only a safety guard, not the fix for this freeze.

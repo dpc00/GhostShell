@@ -9,7 +9,7 @@ depending on another terminal package.
 
 ## What GhostShell does now
 
-Releases 0.2.0 to 0.2.16 added the following. The full list, with the reason for
+Releases 0.2.0 to 0.2.20 added the following. The full list, with the reason for
 each change, is in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
 - **Tern Surface Protocol (TSP): a native view for omp.** omp 18.4.4 and newer
@@ -24,6 +24,14 @@ each change, is in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
   Tested only with omp 18.11.0. Much fuller support arrived in 0.2.6; the design
   notes are in section 15 of
   [docs/DEVIATIONS_FROM_TERMINUS.md](docs/DEVIATIONS_FROM_TERMINUS.md).
+- **A selection the render makes no longer stops the tab (0.2.20).** The status
+  row is rewritten every second, and replacing the line that holds the caret
+  leaves the new text *selected* in Sublime. That range then looked like a
+  person's selection: painting stopped and keys stayed with the view until a
+  click. The render now restores the caret it placed, and only when the caret
+  is GhostShell's to place, so a selection you make is left alone. Cause and
+  evidence are in
+  [.claude/memory/project_ghostshell_phantom_footer_selection_2026_11_10.md](.claude/memory/project_ghostshell_phantom_footer_selection_2026_11_10.md).
 - **One thread.** Since 0.2.7 the broker and the Sublime client run on a single
   asyncio loop instead of reader and writer threads (0.2.8 fixed it on Python 3.8).
   Respawning a broker tab no longer needs a worker thread (0.2.12).
