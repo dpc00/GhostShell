@@ -9594,6 +9594,20 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
                         new_lines[i],
                     )
             patched = True
+            # view.replace() on the line the caret sits in leaves the new text
+            # SELECTED: measured on build 4215 with a small standalone probe,
+            # caret at end of the last line, replace that line -> Region(start,
+            # start+len(new)) non-empty; a whole-buffer replace, or one with
+            # the caret at offset 0, leaves a plain caret. The status row is
+            # the last line and changes every second, so this path alone
+            # manufactured a selection every frame, which _selection_paint_
+            # blocked then read as a user selection and stopped painting (the
+            # "line 333 highlights, output freezes" report). Restore the caret
+            # this frame intended, and only when the caret is ours to place.
+            if term is not None and not getattr(term, "_user_owns_caret", False):
+                sel_now = view.sel()
+                if len(sel_now) == 1 and not sel_now[0].empty():
+                    _place_auto_caret(view, term, sel_now[0].b)
             _apply_color_regions(view, regions or [])
 
         if not patched:
