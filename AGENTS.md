@@ -63,3 +63,10 @@ Read this before touching anything. These rules come from the owner. They apply 
 15. Every log or generated file has a hard size cap, and the default cap is 32 KB. When it is reached the oldest content is
     dropped (rotate or truncate); a log never grows without limit. The owner is told a file exists before it exists
     (rule 13). A larger cap needs the owner's approval, written next to the file's entry in `docs/LOG_DIRECTORIES.md`.
+
+## Memory notes
+
+Notes from long sessions working on GhostShell are kept as individual files in `.claude/memory/`,
+each with a date; the index is `.claude/memory/MEMORY.md`. Open the note that matches what you are
+about to do, and check a note's date and whether the situation still matches before relying on it.
+(Mirrors `CLAUDE.md`, which some harnesses do not read when an `AGENTS.md` exists.)
