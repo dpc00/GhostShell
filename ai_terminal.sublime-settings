@@ -919,6 +919,7 @@
             }
         },
         "OpenCode": {
+            "page_keys_to_pty": true,
             "detachable": true,
             // Mouse tracking: OpenCode's own output requests ?1000/1002/
             // 1003/1006h (click + drag + any-motion, SGR coords) -- seen
