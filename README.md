@@ -1,5 +1,10 @@
 # GhostShell
 
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue)](https://www.paypal.me/DChitester)
+
+Donate via PayPal: https://www.paypal.me/DChitester
+Contact: donaldchitester@gmail.com
+
 A terminal for Sublime Text, with profiles for shells and AI coding CLIs,
 native editor scrollback, and detachable sessions. GhostShell uses Windows
 ConPTY and [libghostty-vt](https://github.com/ghostty-org/ghostty) rather than
