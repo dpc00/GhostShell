@@ -3777,6 +3777,14 @@ def _on_settings_change():
             _add_close_toolbar(t)   # the toolbar's Settings panel shows the new values
         except Exception:
             print("[ai_terminal] toolbar refresh failed:\n%s" % traceback.format_exc())
+        # Live font retarget: a "font_face"/"font_size" edit must reach tabs
+        # that are already open, not only new ones. The view's on_change
+        # handler (_on_layout_setting_change) then re-measures and repaints.
+        try:
+            if t.view is not None:
+                _apply_terminal_font(t.view, getattr(t, "profile_name", None))
+        except Exception:
+            print("[ai_terminal] font re-apply failed:\n%s" % traceback.format_exc())
     _settings_debug_log("<<< _on_settings_change FINISHED")
 
 
@@ -5249,6 +5257,35 @@ def _apply_proportional_leading(v, profile_name=None):
         v.settings().set("line_padding_bottom", bottom)
     except Exception:
         pass
+
+
+def _apply_terminal_font(v, profile_name=None):
+    """Set (or clear) font_face/font_size on one terminal view.
+
+    Split out of _apply_terminal_view_settings so a settings edit can retarget
+    an ALREADY OPEN tab: _on_settings_change calls this for every live
+    terminal. Before 2026-11-16 the face was only ever written from
+    _apply_terminal_view_settings (view creation and plugin_loaded), so
+    changing "font_face" in ai_terminal.sublime-settings did nothing to a
+    running tab -- it read as a "spawn-fixed" setting by accident, since
+    nothing in the spawn path requires that.
+
+    A profile's "font_face"/"font_size" wins; else the top-level setting of
+    the same name; else erase, so the view inherits Sublime's own font and
+    keeps following a Preferences font change live.
+    """
+    font_face = _setting_string("font_face", None, profile_name=profile_name)
+    if font_face:
+        v.settings().set("font_face", font_face)
+    else:
+        v.settings().erase("font_face")
+    font_size = _setting_number("font_size", None, cast=float, profile_name=profile_name)
+    if font_size:
+        v.settings().set("font_size", font_size)
+    else:
+        v.settings().erase("font_size")
+
+
 def _apply_terminal_view_settings(v, profile_name=None):
     """Settings/scheme shared by both the tab (new_file) and panel
     (get_output_panel) terminal views. Caller sets the name/scratch flag,
@@ -5325,16 +5362,7 @@ def _apply_terminal_view_settings(v, profile_name=None):
     # already using (no override at all) -- this is what lets one profile go
     # untouched (system font) while another opts into something distinct for
     # visual differentiation between agents.
-    font_face = _setting_string("font_face", None, profile_name=profile_name)
-    if font_face:
-        v.settings().set("font_face", font_face)
-    else:
-        v.settings().erase("font_face")
-    font_size = _setting_number("font_size", None, cast=float, profile_name=profile_name)
-    if font_size:
-        v.settings().set("font_size", font_size)
-    else:
-        v.settings().erase("font_size")
+    _apply_terminal_font(v, profile_name=profile_name)
     _apply_proportional_leading(v, profile_name)
     # NOT read-only: on_text_command swallows insert/left_delete/right_delete/
     # move and forwards them to the PTY. Making the view read-only suppresses
@@ -10261,10 +10289,10 @@ _LIVE_TUNABLE_PROFILE_KEYS = (
 # saves the value AND immediately respawns in the same action -- see
 # on_pick's `idx >= n_live` branch. Same (key, description, true_default)
 # shape. Only boolean settings belong here (the panel is toggle-only);
-# font_face/font_size are real spawn-fixed settings too (also refreshed by
-# Respawn's reattach, see _reattach_broker_view / _apply_terminal_view_settings)
-# but need a string/number editor this panel doesn't have yet, so they're
-# not offered here.
+# font_face/font_size need a string/number editor this panel doesn't have,
+# so they're not offered here; unlike the keys above they are NOT spawn-fixed
+# -- _on_settings_change re-applies them to every open terminal through
+# _apply_terminal_font (2026-11-16), so editing them retargets live tabs.
 _REATTACH_TUNABLE_PROFILE_KEYS = (
     ("record_asciicast", "Record this session as an asciicast -- set once when the _Terminal/SessionTextLog is constructed", True),
 )
