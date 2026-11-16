@@ -15,6 +15,12 @@
 	{"keys": ["delete"], "command": "ai_terminal_keypress", "args": {"key": "delete"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
 	{"keys": ["pageup"], "command": "ai_terminal_keypress", "args": {"key": "pageup"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
 	{"keys": ["pagedown"], "command": "ai_terminal_keypress", "args": {"key": "pagedown"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
+	// 2026-11-16: the PageDown press was reaching Sublime natively, never this
+	// command, while End reached it -- same context, different key. The two
+	// spellings are bound so the physical key is caught either way; whichever
+	// fires names the real key name in the view trace.
+	{"keys": ["page_down"], "command": "ai_terminal_keypress", "args": {"key": "pagedown"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
+	{"keys": ["page_up"], "command": "ai_terminal_keypress", "args": {"key": "pageup"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
 	{"keys": ["home"], "command": "ai_terminal_keypress", "args": {"key": "home"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
 	{"keys": ["end"], "command": "ai_terminal_keypress", "args": {"key": "end"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "ai_terminal_copy_mode", "operator": "equal", "operand": false}]},
 	{"keys": ["escape"], "command": "ai_terminal_keypress", "args": {"key": "escape"}, "context": [{"key": "setting.ai_terminal_view", "operator": "equal", "operand": true}, {"key": "overlay_visible", "operator": "equal", "operand": false}, {"key": "panel_visible", "operator": "equal", "operand": false}]},

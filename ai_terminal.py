@@ -3055,6 +3055,13 @@ def _gs_trace_check(v, now):
             dy = y - prev_y
             if dy < -3 * lh and lay >= prev_lay - 1:
                 _gs_trace_dump("viewport moved up %d px (layout %d -> %d)" % (-dy, prev_lay, lay), v)
+            elif abs(dy) > 3 * lh and now - _GS_TRACE_META["last_key"] < 1.5:
+                # A key that sends the view DOWN was never captured: the up
+                # check ignores it and, once the view has scrolled to the
+                # caret, the caret is on screen so that trigger misses it too
+                # (2026-11-16, PageDown from mid-tab landed at the bottom and
+                # left no dump). Movement near a keypress is the signal.
+                _gs_trace_dump("viewport moved %+d px within 1.5 s of a keypress" % dy, v)
         st["key"] = key
         st["y"] = y
         st["lay"] = lay
@@ -8702,13 +8709,22 @@ def _page_scroll(view, term, forward):
         native = getattr(term, "_tsp_view", None)
         return bool(native is not None and native.page_view(forward))
     if not _scroll_manipulation_enabled(view):
-        # _set_viewport is the single choke point and no-ops while this view's scroll
-        # manipulation is off, so calling it would swallow the key and move nothing.
-        # Reported live 2026-11-05 on the omp profile (which sets
-        # scroll_manipulation_enabled false): bare PageUp/PageDown and
-        # Ctrl+PageUp/PageDown both did nothing, whatever page_keys_to_pty
-        # said. Return False so the caller runs Sublime's own paging.
-        return False
+        # The gate exists so the engine never moves this view on its own. A page
+        # key is the reader asking for movement, so page the viewport directly
+        # instead of returning False -- the caller then fell back to Sublime's
+        # caret-relative "move by pages", and with the caret parked at the
+        # buffer end that snapped the view to the tail (2026-11-16: "pgdwn
+        # jerks to bottom from mid-tab"; the same report 2026-11-05).
+        page = max(ve[1] - lh, lh)
+        max_y = max(0.0, view.layout_extent()[1] - ve[1])
+        new_y = min(max_y, cur[1] + page) if forward else max(0.0, cur[1] - page)
+        try:
+            view.set_viewport_position((cur[0], new_y), False)
+            _gs_trace("page_scroll_direct", view, forward=forward,
+                      from_y=cur[1], to_y=new_y)
+            return True
+        except Exception:
+            return False
     page = max(ve[1] - lh, lh)
     top = _host_rest_y(view)
     max_y = top + max(0.0, _real_content_height(view) - ve[1])
@@ -8775,6 +8791,23 @@ def _place_auto_caret(view, term, pos):
     Recorded on the terminal so on_selection_modified can tell this from a
     real user gesture (which then takes caret ownership).
     """
+    # Moving the selection makes Sublime scroll to keep the caret visible. On a
+    # tab with scroll_manipulation_enabled false (the omp profile) the engine
+    # writes no viewport at all, so that caret-driven scroll is the ONLY thing
+    # that moves the view -- which is why a reader several pages back was pulled
+    # to the tail on the next repaint (2026-11-16: "hit page-down, landed on
+    # bottom of tab (I was several pages back)"). Leave the caret alone unless
+    # the reader is at the tail.
+    try:
+        vp = view.viewport_position()
+        ve = view.viewport_extent()
+        lh = view.layout_extent()[1]
+        line_h = view.line_height() or 0.0
+        if (vp[1] + ve[1]) < (lh - line_h * 2):
+            _gs_trace("auto_caret_skipped_scrolled_back", view, pos=pos)
+            return
+    except Exception:
+        pass
     sel = view.sel()
     sel.clear()
     sel.add(sublime.Region(pos, pos))
@@ -9725,6 +9758,22 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             if term is not None
             else near_bottom
         )
+        if tui_owns_scroll and term is not None and do_follow and not near_bottom:
+            # A TUI tab (omp, Claude Code) keeps its own screen, so the drift
+            # check above -- the only place that clears the flag -- never runs
+            # for it. The flag therefore stayed true from startup, and the
+            # first repaint after the reader scrolled back pulled them to the
+            # tail: reported 2026-11-16 as "hit page-down, landed on bottom of
+            # tab (I was several pages back)". Reading position wins: if the
+            # view is not at the tail, stop following and leave it alone.
+            _set_auto_follow(term, False)
+            do_follow = False
+        elif tui_owns_scroll and term is not None and not do_follow and near_bottom:
+            # Back at the tail: resume following. Safe to re-engage on every
+            # frame here because near_bottom means the viewport already shows
+            # the end -- re-engaging moves nothing.
+            _set_auto_follow(term, True)
+            do_follow = True
         # View rows: [top pad][TUI rows…][bottom pad]. Prefer absolute
         # cursor_offset (includes top pad) so mid-line ST selection matches
         # the block highlight and the next keystroke stays in place.
@@ -9810,6 +9859,21 @@ class AiTerminalRenderCommand(sublime_plugin.TextCommand):
             last_real = max(0, view.rowcol(view.size())[0] - pad)
             _place_auto_caret(view, term, view.text_point(last_real, 0))
         _settle_viewport(view, term, rest, tui_owns_scroll, do_follow, content_fits)
+        if tui_owns_scroll and not do_follow and term is not None:
+            # Sublime moves the viewport itself while the buffer is rewritten
+            # (view.replace), and on this profile GhostShell writes no viewport
+            # of its own -- traced 2026-11-16: vp walked 4543 -> 4525 -> 4404 ->
+            # 4365 with lh constant and no viewport call between them, ending
+            # 2752 px away from where the reader was. The frame-start position
+            # is the reader's; put it back unless they are following the tail.
+            try:
+                now_vp = view.viewport_position()
+                if abs(now_vp[1] - vp[1]) > 2:
+                    _gs_trace("viewport_restored_scrolled_back", view,
+                              from_y=now_vp[1], to_y=vp[1])
+                    view.set_viewport_position((now_vp[0], vp[1]), False)
+            except Exception:
+                pass
         # A full-screen app (tui_owns_scroll) was already pinned inside
         # _settle_viewport; a second identical call here (removed 2026-09-22)
         # could never change anything.

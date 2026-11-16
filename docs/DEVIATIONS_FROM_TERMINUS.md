@@ -48,6 +48,30 @@ over `ai_terminal.py`: every call site is now in this table.
 `_resync_viewport_after_height_change` (7388) is not a 9th writer: it only ever calls `_scroll_to_bottom` or
 `_pin_viewport_rest_dip_only`, both already in this table.
 
+**2026-11-16 — page keys paged relative to the caret (FOUND LIVE, FIXED).** From mid-tab, both PageDown and
+Ctrl+PageDown snapped to the bottom of the tab: "hit page-down, landed on bottom of tab (I was several pages
+back)". The view trace (view 14) recorded `sample vp=[0,1757] caret=29682 row=349` — the reader at mid-scroll,
+the caret parked at the buffer end — which is the state that makes any caret-relative motion snap to the tail.
+(An earlier dump in the same file shows `keypress key=end` → `key_native_move`, the Ctrl+End jump-to-end branch;
+that one is by design and is *not* evidence for this defect. The PageDown/Ctrl+PageDown presses themselves left
+no `key_native_move` record.)
+
+- *Root cause:* `_page_scroll` returned False when `_scroll_manipulation_enabled()` is false, which is the `omp`
+  profile, so its caller fell back to Sublime's `move by pages`. That command is relative to the **caret**, not
+  the viewport, and the caret sits at the buffer end, so "one page down" became "go to the end". The function's
+  own docstring predicted the same mechanism for PageUp on 2026-11-05 ("PageUp visibly moves the view the wrong
+  way") without naming the caret at the tail as the invariant that makes it fire both ways.
+- *Terminus comparison:* Terminus pages the **viewport** (`set_viewport_position`), and a terminal has no caret
+  in the buffer to be stranded. Any paging whose origin is the caret is a deviation, not an optimisation.
+- *Fix:* with the gate off, `_page_scroll` now computes the page target itself, clamps it to the layout and calls
+  `view.set_viewport_position((x, new_y), False)`, traced as `page_scroll_direct`. A page key is the reader
+  asking for movement; the gate exists only so the *engine* never moves the view unasked. Verified live
+  2026-11-16: Ctrl+PageDown and PageDown each move exactly one page from mid-tab.
+- *Still open, same family:* the engine may not leave the caret at the tail while the reader is scrolled back
+  (any native navigation then targets it); and a full-buffer rewrite moves the viewport itself — traced
+  `vp` 4543 → 4525 → 4404 → 4365 with `lh` constant and no GhostShell viewport call between them — which the
+  frame-end restore added the same day now undoes.
+
 **Justification (VERIFIED from git history and code comments; search continues for the remaining writers).**
 - `_scroll_to_bottom` (7910) is NOT a deviation any more. Its docstring records that on 2026-09-06 the
   keystroke jiggle was root-caused by comparison with Terminus: with `scroll_past_end` on (Terminus also
