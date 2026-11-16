@@ -860,7 +860,7 @@
             "page_keys_to_pty": false,
             "pin_viewport": false,
             "osc_title_updates_tab": true,
-            "close_tab_on_exit": false,
+            "close_tab_on_exit": true,
             // true = answer omp's Tern Surface Protocol probe and draw its native view in the
             // tab (terminal/tsp_host.py, terminal/tsp_view.py). false = omp gets no answer and
             // draws its classic text screen. Takes effect for tabs spawned after the change.
