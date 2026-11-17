@@ -828,6 +828,8 @@
         "omp": {
             "status_tones": true,
             "steady_screen_height_enabled": false,
+            "record_asciicast": true,
+            "log_tab_text": true,
             "wheel_to_pty": false,
             "mouse_handling": false,
             "scroll_manipulation_enabled": false,
