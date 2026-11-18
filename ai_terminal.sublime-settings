@@ -859,7 +859,7 @@
             "launch_command": [
                 "omp"
             ],
-            "page_keys_to_pty": false,
+            "page_keys_to_pty": true,
             "pin_viewport": false,
             "osc_title_updates_tab": true,
             "close_tab_on_exit": true,
